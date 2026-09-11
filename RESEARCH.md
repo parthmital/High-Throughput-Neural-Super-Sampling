@@ -13,28 +13,28 @@ A lightweight, temporally-recurrent neural architecture consuming engine G-buffe
 | ID  | Hypothesis                                                                                                                                                             | Falsification Criterion                                                               |
 | :-- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------ |
 | H1  | Neural SR with G-buffer conditioning and structural reparameterisation produces higher perceptual quality than FSR 3.1 temporal upscaling at equivalent scale factors. | LPIPS(ours) >= LPIPS(FSR 3.1) on >= 3 of 5 test scenes.                               |
-| H2  | Learned temporal accumulation with variance-guided gating reduces ghosting and flicker below FSR 3.1 levels.                                                           | $E_{\text{warp}}$(ours) >= $E_{\text{warp}}$(FSR 3.1) OR tOF(ours) >= tOF(FSR 3.1).   |
+| H2  | Learned temporal accumulation with variance-guided gating reduces ghosting and flicker below FSR 3.1 levels.                                                           | $E\_{\text{warp}}$(ours) >= $E\_{\text{warp}}$(FSR 3.1) OR tOF(ours) >= tOF(FSR 3.1). |
 | H3  | Neural optical flow estimation plus learned warping produces fewer disocclusion artefacts than FSR 3.1's hierarchical compute-based flow.                              | Human preference rate < 55% vs FSR 3.1 frame generation on the disocclusion test set. |
 | H4  | The full SR + FG pipeline can execute within FSR 3.1's latency envelope (SR: < 2.0 ms, FG: < 3.0 ms at 1080p on RTX 3060 class hardware).                              | End-to-end latency exceeds FSR 3.1 by > 20% on any tested GPU.                        |
 | H5  | Training on diverse synthetic G-buffer data generalises to unseen games and engines without fine-tuning.                                                               | Quality degradation > 15% LPIPS on any of 3 held-out game datasets.                   |
 
 ### 1.3 Measurable Success Criteria (vs FSR 3.1 Quality Mode, 67% Render Scale)
 
-| Metric                               | FSR 3.1 Baseline (estimated) | Target            | Measurement                                      |
-| :----------------------------------- | :--------------------------- | :---------------- | :----------------------------------------------- |
-| PSNR (dB)                            | 33.5                         | >= 35.0 (+1.5 dB) | Y-channel, per-frame average over test sequences |
-| SSIM                                 | 0.935                        | >= 0.950          | Full RGB, per-frame average                      |
-| LPIPS (AlexNet)                      | 0.085                        | <= 0.065 (-23%)   | Per-frame average, lower is better               |
-| tOF ($\times 10^{-3}$)               | 3.8                          | <= 3.0            | RAFT-estimated flow on output vs GT              |
-| $E_{\text{warp}}$ ($\times 10^{-3}$) | 2.4                          | <= 1.8            | GT motion-vector warped consistency              |
-| VMAF                                 | 82                           | >= 87             | Per-sequence average via Netflix/vmaf            |
-| Frame Gen PSNR (dB)                  | 28.5                         | >= 30.5 (+2.0 dB) | Interpolated frame vs GT mid-frame               |
-| Frame Gen LPIPS                      | 0.110                        | <= 0.080          | Interpolated frame quality                       |
-| SR Latency (1080p, RTX 3060)         | 1.2 ms                       | <= 1.5 ms         | D3D12 timestamp queries, P95                     |
-| FG Latency (1080p, RTX 3060)         | 2.0 ms                       | <= 2.5 ms         | D3D12 timestamp queries, P95                     |
-| VRAM (total pipeline)                | ~60 MB                       | <= 80 MB          | PIX/RenderDoc resource inspector                 |
-| Parameters (SR)                      | 0 (heuristic)                | <= 50K            | `sum(p.numel())`                                 |
-| Parameters (FG)                      | 0 (heuristic)                | <= 200K           | `sum(p.numel())`                                 |
+| Metric                                | FSR 3.1 Baseline (estimated) | Target            | Measurement                                      |
+| :------------------------------------ | :--------------------------- | :---------------- | :----------------------------------------------- |
+| PSNR (dB)                             | 33.5                         | >= 35.0 (+1.5 dB) | Y-channel, per-frame average over test sequences |
+| SSIM                                  | 0.935                        | >= 0.950          | Full RGB, per-frame average                      |
+| LPIPS (AlexNet)                       | 0.085                        | <= 0.065 (-23%)   | Per-frame average, lower is better               |
+| tOF ($\times 10^{-3}$)                | 3.8                          | <= 3.0            | RAFT-estimated flow on output vs GT              |
+| $E\_{\text{warp}}$ ($\times 10^{-3}$) | 2.4                          | <= 1.8            | GT motion-vector warped consistency              |
+| VMAF                                  | 82                           | >= 87             | Per-sequence average via Netflix/vmaf            |
+| Frame Gen PSNR (dB)                   | 28.5                         | >= 30.5 (+2.0 dB) | Interpolated frame vs GT mid-frame               |
+| Frame Gen LPIPS                       | 0.110                        | <= 0.080          | Interpolated frame quality                       |
+| SR Latency (1080p, RTX 3060)          | 1.2 ms                       | <= 1.5 ms         | D3D12 timestamp queries, P95                     |
+| FG Latency (1080p, RTX 3060)          | 2.0 ms                       | <= 2.5 ms         | D3D12 timestamp queries, P95                     |
+| VRAM (total pipeline)                 | ~60 MB                       | <= 80 MB          | PIX/RenderDoc resource inspector                 |
+| Parameters (SR)                       | 0 (heuristic)                | <= 50K            | `sum(p.numel())`                                 |
+| Parameters (FG)                       | 0 (heuristic)                | <= 200K           | `sum(p.numel())`                                 |
 
 ### 1.4 FSR 3.1 Baseline Characterisation
 
@@ -57,7 +57,7 @@ FSR 3.1 ([GPUOpen-LibrariesAndSDKs/FidelityFX-SDK](https://github.com/GPUOpen-Li
 - Scene-cut detection: luminance delta threshold bypass.
 - HUD/UI decoupled via separate texture overlay within a custom swapchain proxy.
 
-**Required engine inputs**: LR colour buffer, screen-space motion vectors (R16G16_FLOAT), depth buffer (preferably inverted R32_FLOAT), exposure value, reactive mask (optional), transparency and composition mask (optional), HUD/UI texture with alpha (required for FG).
+**Required engine inputs**: LR colour buffer, screen-space motion vectors (`R16G16_FLOAT`), depth buffer (preferably inverted `R32_FLOAT`), exposure value, reactive mask (optional), transparency and composition mask (optional), HUD/UI texture with alpha (required for FG).
 
 **Performance characteristics** (Quality mode, mid-range GPU):
 
@@ -79,29 +79,39 @@ Reconstructing low-resolution video and render streams from 360p ($640 \times 36
 
 The Turing SM microarchitecture features an independent half-precision datapath supporting dual-issue FP16 operations (FP16x2 packed math). The theoretical upper compute bounds are governed by the core configuration and operational clock rate:
 
-$$\text{Peak}_{\text{FP32}} = 896\,\text{Cores} \times 2\,\frac{\text{FLOP}}{\text{Cycle}} \times 1.515\,\text{GHz} = 2.715\,\text{TFLOPS}$$
+$$
+\text{Peak}_{\text{FP32}} = 896\,\text{Cores} \times 2\,\frac{\text{FLOP}}{\text{Cycle}} \times 1.515\,\text{GHz} = 2.715\,\text{TFLOPS}
+$$
 
-$$\text{Peak}_{\text{FP16}} = 2 \times \text{Peak}_{\text{FP32}} = 5.430\,\text{TFLOPS}$$
+$$
+\text{Peak}_{\text{FP16}} = 2 \times \text{Peak}_{\text{FP32}} = 5.430\,\text{TFLOPS}
+$$
 
 A 60 FPS runtime enforces a total target frame time of 16.67 ms. Allocating a maximum latency budget of 3.00 ms to the super-resolution reconstruction pass leaves approximately 13.67 ms for the host engine's primary graphics and compute pipelines. On real-world Turing SM architectures, when factoring in instruction cache thrashing, register allocation stalls, and thread divergence, standard compute shaders achieve an arithmetic efficiency of 60% to 65% of theoretical peak:
 
-$$\text{Throughput}_{\text{Sustained FP16}} \approx 5.430\,\text{TFLOPS} \times 0.65 = 3.529\,\text{TFLOPS} = 3529\,\text{GFLOPS}$$
+$$
+\text{Throughput}_{\text{Sustained FP16}} \approx 5.430\,\text{TFLOPS} \times 0.65 = 3.529\,\text{TFLOPS} = 3529\,\text{GFLOPS}
+$$
 
-$$\text{FLOP Budget}_{(3.0\,\text{ms})} = 3529\,\text{GFLOPS} \times 0.003\,\text{s} \approx 10.587\,\text{GFLOPS} \equiv 5.293\,\text{GMACs}$$
+$$
+\text{FLOP Budget}_{(3.0\,\text{ms})} = 3529\,\text{GFLOPS} \times 0.003\,\text{s} \approx 10.587\,\text{GFLOPS} \equiv 5.293\,\text{GMACs}
+$$
 
 Memory bandwidth imposes a co-equal boundary condition. The TU117 interfaces with 4 GB of memory across a 128-bit bus, providing $128\text{ GB/s}$ of peak bandwidth with GDDR5 or $192\text{ GB/s}$ with GDDR6. Over a 3.00 ms frame window, the maximum volume of data that can be moved across the GDDR5 physical interface is:
 
-$$\text{Data Transfer Limit}_{(3.0\,\text{ms})} = 128\,\text{GB/s} \times 0.003\,\text{s} = 384\,\text{MB}$$
+$$
+\text{Data Transfer Limit}_{(3.0\,\text{ms})} = 128\,\text{GB/s} \times 0.003\,\text{s} = 384\,\text{MB}
+$$
 
 This constraint prohibits network designs that rely on multi-scale feature pyramids, widespread residual skip concatenations, or attention mechanisms. Such operators require extensive activation caching, generate fragmented global memory access patterns, and induce frequent L2 cache invalidation, which saturates memory bandwidth and increases execution latency.
 
-| Architectural Parameter | Target Mobile GPU (TU117 / GTX 1650 Mobile)                              | Production Constraint (3.0 ms Budget)                                                                 |
-| :---------------------- | :----------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------- |
-| Compute Units           | 896 CUDA Cores, 0 Tensor Cores                                           | Must target generic FP16 vector instructions                                                          |
-| Peak Throughput         | 2.715 TFLOPS FP32 / 5.430 TFLOPS FP16                                    | Maximum inference computation $\le 10.58\text{ GFLOPS}$                                               |
-| VRAM Capacity & Bus     | 4 GB GDDR5/GDDR6, 128-bit bus                                            | Total pass memory footprint $\le 50\text{ MB}$ (< 1.25% VRAM)                                         |
-| Memory Bandwidth        | 128 GB/s (GDDR5) to 192 GB/s (GDDR6)                                     | Total DRAM traffic per pass $\le 150\text{ MB}$ (< 39% interface capacity)                            |
-| Spatial Transform       | $640 \times 360$ ($360\text{p}$) $\to 1920 \times 1080$ ($1080\text{p}$) | Scale factor $s = 3.0$ ($N_{\text{in}} = 230,400\text{ px} \to N_{\text{out}} = 2,073,600\text{ px}$) |
+| Architectural Parameter | Target Mobile GPU (TU117 / GTX 1650 Mobile)                              | Production Constraint (3.0 ms Budget)                                                                   |
+| :---------------------- | :----------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------ |
+| Compute Units           | 896 CUDA Cores, 0 Tensor Cores                                           | Must target generic FP16 vector instructions                                                            |
+| Peak Throughput         | 2.715 TFLOPS FP32 / 5.430 TFLOPS FP16                                    | Maximum inference computation $\le 10.58\text{ GFLOPS}$                                                 |
+| VRAM Capacity & Bus     | 4 GB GDDR5/GDDR6, 128-bit bus                                            | Total pass memory footprint $\le 50\text{ MB}$ (< 1.25% VRAM)                                           |
+| Memory Bandwidth        | 128 GB/s (GDDR5) to 192 GB/s (GDDR6)                                     | Total DRAM traffic per pass $\le 150\text{ MB}$ (< 39% interface capacity)                              |
+| Spatial Transform       | $640 \times 360$ ($360\text{p}$) $\to 1920 \times 1080$ ($1080\text{p}$) | Scale factor $s = 3.0$ ($N\_{\text{in}} = 230,400\text{ px} \to N\_{\text{out}} = 2,073,600\text{ px}$) |
 
 ## 3. Datasets: Training, Validation, and Testing
 
@@ -272,15 +282,23 @@ def preprocess_frame(
 
 **YCoCg colour space transforms (exact definitions):**
 
-$$\begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix} = \begin{bmatrix} 0.25 & 0.50 & 0.25 \\ 0.50 & 0.00 & -0.50 \\ -0.25 & 0.50 & -0.25 \end{bmatrix} \begin{bmatrix} R \\ G \\ B \end{bmatrix}$$
+$$
+\begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix} = \begin{bmatrix} 0.25 & 0.50 & 0.25 \\ 0.50 & 0.00 & -0.50 \\ -0.25 & 0.50 & -0.25 \end{bmatrix} \begin{bmatrix} R \\ G \\ B \end{bmatrix}
+$$
 
-$$\begin{bmatrix} R \\ G \\ B \end{bmatrix} = \begin{bmatrix} 1 & 1 & -1 \\ 1 & 0 & 1 \\ 1 & -1 & -1 \end{bmatrix} \begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix}$$
+$$
+\begin{bmatrix} R \\ G \\ B \end{bmatrix} = \begin{bmatrix} 1 & 1 & -1 \\ 1 & 0 & 1 \\ 1 & -1 & -1 \end{bmatrix} \begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix}
+$$
 
 **Luminance compression and decompression:**
 
-$$Y_{\text{compressed}} = \frac{\ln(1.0 + Y)}{1.0 + \ln(1.0 + Y)}$$
+$$
+Y_{\text{compressed}} = \frac{\ln(1.0 + Y)}{1.0 + \ln(1.0 + Y)}
+$$
 
-$$Y_{\text{decompressed}} = \exp\!\left(\frac{Y_c}{1.0 - Y_c}\right) - 1.0, \quad Y_c \in [0, 1)$$
+$$
+Y_{\text{decompressed}} = \exp\!\left(\frac{Y_c}{1.0 - Y_c}\right) - 1.0, \quad Y_c \in [0, 1)
+$$
 
 ### 5.2 Augmentation (Applied Online During Training)
 
@@ -334,19 +352,27 @@ To circumvent the latency penalties associated with multi-branch residual topolo
 
 During the training phase, the network utilises an expanded multi-branch topology that simultaneously routes intermediate features through standard $3 \times 3$ convolutions, $1 \times 1$ point-wise projections, an identity connection, and a set of fixed, first-order and second-order differential spatial operators (Sobel and Laplacian). Prior to model compilation and engine deployment, every linear branch is collapsed into a single, homogeneous $3 \times 3$ convolution via associative linear transformations.
 
-The feedforward representation of an intermediate feature block during training processes the activation tensor $X \in \mathbb{R}^{C_{\text{in}} \times H \times W}$ through the following parallel operations:
+The feedforward representation of an intermediate feature block during training processes the activation tensor $X \in \mathbb{R}^{C\_{\text{in}} \times H \times W}$ through the following parallel operations:
 
-$$Y = \text{Conv}_{3\times 3}(X) + \text{Conv}_{1\times 1}(X) + X + \text{Conv}_{1\times 1}^{\text{SobelX}}(K_{\text{SobelX}} * X) + \text{Conv}_{1\times 1}^{\text{SobelY}}(K_{\text{SobelY}} * X) + \text{Conv}_{1\times 1}^{\text{Lap}}(K_{\text{Lap}} * X)$$
+$$
+Y = \text{Conv}_{3\times 3}(X) + \text{Conv}_{1\times 1}(X) + X + \text{Conv}_{1\times 1}^{\text{SobelX}}(K_{\text{SobelX}} * X) + \text{Conv}_{1\times 1}^{\text{SobelY}}(K_{\text{SobelY}} * X) + \text{Conv}_{1\times 1}^{\text{Lap}}(K_{\text{Lap}} * X)
+$$
 
-Where $K_{\text{SobelX}}, K_{\text{SobelY}}, K_{\text{Lap}} \in \mathbb{R}^{1 \times 1 \times 3 \times 3}$ define non-trainable, discrete differential filters:
+Where $K\_{\text{SobelX}}, K\_{\text{SobelY}}, K\_{\text{Lap}} \in \mathbb{R}^{1 \times 1 \times 3 \times 3}$ define non-trainable, discrete differential filters:
 
-$$K_{\text{SobelX}} = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix}, \quad K_{\text{SobelY}} = \begin{bmatrix} -1 & -2 & -1 \\ 0 & 0 & 0 \\ 1 & 2 & 1 \end{bmatrix}, \quad K_{\text{Lap}} = \begin{bmatrix} 0 & 1 & 0 \\ 1 & -4 & 1 \\ 0 & 1 & 0 \end{bmatrix}$$
+$$
+K_{\text{SobelX}} = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix}, \quad K_{\text{SobelY}} = \begin{bmatrix} -1 & -2 & -1 \\ 0 & 0 & 0 \\ 1 & 2 & 1 \end{bmatrix}, \quad K_{\text{Lap}} = \begin{bmatrix} 0 & 1 & 0 \\ 1 & -4 & 1 \\ 0 & 1 & 0 \end{bmatrix}
+$$
 
-The unified inference kernel $W_{\text{fused}} \in \mathbb{R}^{C_{\text{out}} \times C_{\text{in}} \times 3 \times 3}$ and its corresponding bias vector $B_{\text{fused}} \in \mathbb{R}^{C_{\text{out}}}$ are synthesised offline:
+The unified inference kernel $W\_{\text{fused}} \in \mathbb{R}^{C\_{\text{out}} \times C\_{\text{in}} \times 3 \times 3}$ and its corresponding bias vector $B\_{\text{fused}} \in \mathbb{R}^{C\_{\text{out}}}$ are synthesised offline:
 
-$$W_{\text{fused}} = W_{3\times 3} + W_{1\times 1 \to 3\times 3} + W_{\text{id}\to 3\times 3} + \sum_{p \in \{\text{SobelX}, \text{SobelY}, \text{Lap}\}} \left( W_{1\times 1}^{p} \otimes K_{p} \right)$$
+$$
+W_{\text{fused}} = W_{3\times 3} + W_{1\times 1 \to 3\times 3} + W_{\text{id}\to 3\times 3} + \sum_{p \in \{\text{SobelX}, \text{SobelY}, \text{Lap}\}} \left( W_{1\times 1}^{p} \otimes K_{p} \right)
+$$
 
-$$B_{\text{fused}} = B_{3\times 3} + B_{1\times 1} + B_{\text{SobelX}} + B_{\text{SobelY}} + B_{\text{Lap}}$$
+$$
+B_{\text{fused}} = B_{3\times 3} + B_{1\times 1} + B_{\text{SobelX}} + B_{\text{SobelY}} + B_{\text{Lap}}
+$$
 
 This conversion eliminates all runtime branching. The final deployed model consists of a strictly linear sequence of plain $3 \times 3$ convolutions, maximising GPU instruction-cache locality and avoiding the memory bandwidth overhead of intermediate skip concatenations.
 
@@ -357,17 +383,17 @@ This conversion eliminates all runtime branching. The final deployed model consi
 
 Three quality tiers are provided for different hardware classes:
 
-| Tier        | Blocks | Channels | Fused Params | GFLOPs (360p$\to$1080p) | Estimated Latency (GTX 1650 Mobile) | Estimated Latency (RTX 3060) | Target GPU Class    |
-| :---------- | :----- | :------- | :----------- | :---------------------- | :---------------------------------- | :--------------------------- | :------------------ |
-| Performance | 4      | 16       | ~11,000      | 4.2                     | ~1.2 ms                             | ~0.4 ms                      | GTX 1650, RX 570    |
-| Quality     | 4      | 20       | ~17,387      | 7.96                    | ~2.3 ms                             | ~0.7 ms                      | RTX 2060, RX 5700   |
-| Ultra       | 6      | 24       | ~34,659      | 15.83                   | ~4.5 ms (over budget)               | ~1.3 ms                      | RTX 3060+, RX 6700+ |
+| Tier        | Blocks | Channels | Fused Params | GFLOPs (360p $\to$ 1080p) | Estimated Latency (GTX 1650 Mobile) | Estimated Latency (RTX 3060) | Target GPU Class    |
+| :---------- | :----- | :------- | :----------- | :------------------------ | :---------------------------------- | :--------------------------- | :------------------ |
+| Performance | 4      | 16       | ~11,000      | 4.2                       | ~1.2 ms                             | ~0.4 ms                      | GTX 1650, RX 570    |
+| Quality     | 4      | 20       | ~17,387      | 7.96                      | ~2.3 ms                             | ~0.7 ms                      | RTX 2060, RX 5700   |
+| Ultra       | 6      | 24       | ~34,659      | 15.83                     | ~4.5 ms (over budget)               | ~1.3 ms                      | RTX 3060+, RX 6700+ |
 
 The Ultra tier exceeds the 3.0 ms budget on GTX 1650 Mobile class hardware. On that class, fall back to Quality or Performance tier. The Ultra tier targets RTX 3060+ class hardware where sustained FP16 throughput is ~12 TFLOPS.
 
 #### 6.2.3 Input Tensor Specification
 
-$X \in \mathbb{R}^{12 \times H_{\text{LR}} \times W_{\text{LR}}}$
+$X \in \mathbb{R}^{12 \times H\_{\text{LR}} \times W\_{\text{LR}}}$
 
 | Channel Index | Content                                                      | Format | Source                |
 | :------------ | :----------------------------------------------------------- | :----- | :-------------------- |
@@ -396,11 +422,13 @@ Input [12, H, W]
   └─ PixelShuffle(s)                            → [3, sH, sW]
 ```
 
-All non-linear feature transformations execute in the low-resolution coordinate space. The final projection layer expands the channel depth to $C_{\text{out}} = 3 \times s^2$ prior to spatial rearrangement via sub-pixel convolution (depth-to-space pixel shuffle):
+All non-linear feature transformations execute in the low-resolution coordinate space. The final projection layer expands the channel depth to $C\_{\text{out}} = 3 \times s^2$ prior to spatial rearrangement via sub-pixel convolution (depth-to-space pixel shuffle):
 
-$$\mathcal{I}_{\text{SR}}(c, y \cdot s + d_y, x \cdot s + d_x) = \mathcal{T}(c \cdot s^2 + d_y \cdot s + d_x, y, x)$$
+$$
+\mathcal{I}_{\text{SR}}(c, y \cdot s + d_y, x \cdot s + d_x) = \mathcal{T}(c \cdot s^2 + d_y \cdot s + d_x, y, x)
+$$
 
-Where $c \in \{0, 1, 2\}$ denotes the target RGB channel, and $d_y, d_x \in \{0, \ldots, s-1\}$ represent the sub-pixel spatial offsets.
+Where $c \in \{0, 1, 2\}$ denotes the target RGB channel, and $d\_y, d\_x \in \{0, \ldots, s-1\}$ represent the sub-pixel spatial offsets.
 
 #### 6.2.5 Parameter Count (Ultra Tier, Fused, s=3)
 
@@ -414,15 +442,25 @@ Where $c \in \{0, 1, 2\}$ denotes the target RGB channel, and $d_y, d_x \in \{0,
 
 #### 6.2.6 FLOP Analysis (Ultra Tier, 640x360 Input, s=3)
 
-$$\text{MACs} = N_{\text{pixels}} \times \sum_l (C_{\text{in}}^l \times C_{\text{out}}^l \times K^2)$$
+$$
+\text{MACs} = N_{\text{pixels}} \times \sum_l (C_{\text{in}}^l \times C_{\text{out}}^l \times K^2)
+$$
 
-$$= 230{,}400 \times (12 \times 24 \times 9 + 5 \times 24 \times 24 \times 9 + 24 \times 27 \times 9)$$
+$$
+= 230{,}400 \times (12 \times 24 \times 9 + 5 \times 24 \times 24 \times 9 + 24 \times 27 \times 9)
+$$
 
-$$= 230{,}400 \times (2{,}592 + 25{,}920 + 5{,}832) = 230{,}400 \times 34{,}344$$
+$$
+= 230{,}400 \times (2{,}592 + 25{,}920 + 5{,}832) = 230{,}400 \times 34{,}344
+$$
 
-$$= 7.914\text{ GMACs} = 15.83\text{ GFLOPs}$$
+$$
+= 7.914\text{ GMACs} = 15.83\text{ GFLOPs}
+$$
 
-$$\text{Estimated Kernel Latency (RTX 3060, ~12 TFLOPS sustained)} = \frac{15.83}{12{,}000} \times 1000 \approx 1.32\text{ ms}$$
+$$
+\text{Estimated Kernel Latency (RTX 3060, ~12 TFLOPS sustained)} = \frac{15.83}{12{,}000} \times 1000 \approx 1.32\text{ ms}
+$$
 
 #### 6.2.7 Reference Implementation
 
@@ -533,7 +571,7 @@ Frame generation interpolates frame $t-0.5$ given upscaled frames $t-1$ and $t$ 
 
 #### 6.3.1 Input Tensor Specification
 
-$X_{\text{FG}} \in \mathbb{R}^{10 \times H_{\text{HR}} \times W_{\text{HR}}}$
+$X\_{\text{FG}} \in \mathbb{R}^{10 \times H\_{\text{HR}} \times W\_{\text{HR}}}$
 
 | Channel Index | Content                                                        |
 | :------------ | :------------------------------------------------------------- |
@@ -580,17 +618,27 @@ Input [10, H, W]
 
 #### 6.3.4 FLOP Analysis (1080p Input, 4x Downsample to 270p Processing)
 
-$$N_{\text{ds}} = 480 \times 270 = 129{,}600$$
+$$
+N_{\text{ds}} = 480 \times 270 = 129{,}600
+$$
 
-$$\text{MACs} = 129{,}600 \times (10 \times 32 \times 9 + 2 \times 32 \times 32 \times 9 + 32 \times 9 \times 9)$$
+$$
+\text{MACs} = 129{,}600 \times (10 \times 32 \times 9 + 2 \times 32 \times 32 \times 9 + 32 \times 9 \times 9)
+$$
 
-$$= 129{,}600 \times (2{,}880 + 18{,}432 + 2{,}592) = 129{,}600 \times 23{,}904$$
+$$
+= 129{,}600 \times (2{,}880 + 18{,}432 + 2{,}592) = 129{,}600 \times 23{,}904
+$$
 
-$$= 3.098\text{ GMACs} = 6.196\text{ GFLOPs}$$
+$$
+= 3.098\text{ GMACs} = 6.196\text{ GFLOPs}
+$$
 
 Plus bilinear warping (~0.5 GFLOPs): **total ~6.7 GFLOPs**.
 
-$$\text{Estimated Latency (RTX 3060)} = \frac{6.7}{12{,}000} \times 1000 + 0.8\text{ ms (warp/blend)} \approx 1.4\text{ ms}$$
+$$
+\text{Estimated Latency (RTX 3060)} = \frac{6.7}{12{,}000} \times 1000 + 0.8\text{ ms (warp/blend)} \approx 1.4\text{ ms}
+$$
 
 #### 6.3.5 Reference Implementation
 
@@ -683,73 +731,97 @@ class NeuralFG(nn.Module):
 
 ### 6.5 Sub-Pixel Jittering and Sampling Mechanics
 
-Reconstructing high-frequency geometric detail across a $3\times$ scaling factor without hallucinating artificial features requires accumulating phase-shifted spatial samples across consecutive frames. The camera projection matrix is jittered at each frame using a 2D Halton $(2, 3)$ low-discrepancy sequence. The sub-pixel offset vector $(\delta x_t, \delta y_t)$ is mapped into normalised device coordinates (NDC) using the dimensions of the low-resolution viewport $(W_{\text{LR}}, H_{\text{LR}})$:
+Reconstructing high-frequency geometric detail across a $3\times$ scaling factor without hallucinating artificial features requires accumulating phase-shifted spatial samples across consecutive frames. The camera projection matrix is jittered at each frame using a 2D Halton $(2, 3)$ low-discrepancy sequence. The sub-pixel offset vector $(\delta x\_t, \delta y\_t)$ is mapped into normalised device coordinates (NDC) using the dimensions of the low-resolution viewport $(W\_{\text{LR}}, H\_{\text{LR}})$:
 
-$$\delta x_t = \frac{\text{Halton}(t \pmod K + 1, 2) - 0.5}{W_{\text{LR}}}, \quad \delta y_t = \frac{\text{Halton}(t \pmod K + 1, 3) - 0.5}{H_{\text{LR}}}$$
+$$
+\delta x_t = \frac{\text{Halton}(t \pmod K + 1, 2) - 0.5}{W_{\text{LR}}}, \quad \delta y_t = \frac{\text{Halton}(t \pmod K + 1, 3) - 0.5}{H_{\text{LR}}}
+$$
 
 A phase sequence length of $K = 9$ (matching the spatial upsampling area $s^2 = 3^2$) provides uniform sample distribution across the reconstructed high-resolution pixel grid. The offset is incorporated directly into the camera's perspective projection matrix:
 
-$$P_{\text{jittered}} = \begin{bmatrix} P_{00} & 0 & 2\,\delta x_t & 0 \\ 0 & P_{11} & 2\,\delta y_t & 0 \\ 0 & 0 & P_{22} & P_{23} \\ 0 & 0 & -1 & 0 \end{bmatrix}$$
+$$
+P_{\text{jittered}} = \begin{bmatrix} P_{00} & 0 & 2\,\delta x_t & 0 \\ 0 & P_{11} & 2\,\delta y_t & 0 \\ 0 & 0 & P_{22} & P_{23} \\ 0 & 0 & -1 & 0 \end{bmatrix}
+$$
 
 ## 7. Loss Functions
 
 ### 7.1 Super-Resolution Losses
 
-$$\mathcal{L}_{\text{SR}} = \lambda_1 \mathcal{L}_{\text{char}} + \lambda_2 \mathcal{L}_{\text{edge}} + \lambda_3 \mathcal{L}_{\text{perc}} + \lambda_4 \mathcal{L}_{\text{temp}} + \lambda_5 \mathcal{L}_{\text{freq}}$$
+$$
+\mathcal{L}_{\text{SR}} = \lambda_1 \mathcal{L}_{\text{char}} + \lambda_2 \mathcal{L}_{\text{edge}} + \lambda_3 \mathcal{L}_{\text{perc}} + \lambda_4 \mathcal{L}_{\text{temp}} + \lambda_5 \mathcal{L}_{\text{freq}}
+$$
 
 **Charbonnier loss** (spatial fidelity, differentiable L1 approximation with non-vanishing gradient at zero):
 
-$$\mathcal{L}_{\text{char}}(\hat{I}, I^{\text{GT}}) = \frac{1}{N}\sum_{i=1}^N \sqrt{(\hat{I}(i) - I^{\text{GT}}(i))^2 + \epsilon^2}, \quad \epsilon = 10^{-3}$$
+$$
+\mathcal{L}_{\text{char}}(\hat{I}, I^{\text{GT}}) = \frac{1}{N}\sum_{i=1}^N \sqrt{(\hat{I}(i) - I^{\text{GT}}(i))^2 + \epsilon^2}, \quad \epsilon = 10^{-3}
+$$
 
 **Edge loss** (structural sharpness via discrete spatial gradients):
 
-$$\mathcal{L}_{\text{edge}} = \frac{1}{N}\sum_{i=1}^N \left(|\nabla_x \hat{I}(i) - \nabla_x I^{\text{GT}}(i)| + |\nabla_y \hat{I}(i) - \nabla_y I^{\text{GT}}(i)|\right)$$
+$$
+\mathcal{L}_{\text{edge}} = \frac{1}{N}\sum_{i=1}^N \left(|\nabla_x \hat{I}(i) - \nabla_x I^{\text{GT}}(i)| + |\nabla_y \hat{I}(i) - \nabla_y I^{\text{GT}}(i)|\right)
+$$
 
-$$\nabla_x I(x, y) = I(x+1, y) - I(x-1, y), \quad \nabla_y I(x, y) = I(x, y+1) - I(x, y-1)$$
+$$
+\nabla_x I(x, y) = I(x+1, y) - I(x-1, y), \quad \nabla_y I(x, y) = I(x, y+1) - I(x, y-1)
+$$
 
 **Perceptual loss** (VGG-19 feature matching):
 
-$$\mathcal{L}_{\text{perc}} = \frac{1}{C_j H_j W_j} \left\| \Phi_{\text{conv3-3}}(\hat{I}) - \Phi_{\text{conv3-3}}(I^{\text{GT}}) \right\|_2^2$$
+$$
+\mathcal{L}_{\text{perc}} = \frac{1}{C_j H_j W_j} \left\| \Phi_{\text{conv3-3}}(\hat{I}) - \Phi_{\text{conv3-3}}(I^{\text{GT}}) \right\|_2^2
+$$
 
-$\Phi$: VGG-19 pretrained on ImageNet (from `torchvision.models.vgg19`, BSD 3-Clause, weights frozen). Feature extraction layer: `features[15]` (conv3_3). The network is frozen during SR training and used only for gradient computation through the feature space.
+$\Phi$: VGG-19 pretrained on ImageNet (from `torchvision.models.vgg19`, BSD 3-Clause, weights frozen). Feature extraction layer: `features[15]` (`conv3_3`). The network is frozen during SR training and used only for gradient computation through the feature space.
 
 **Temporal consistency loss** (backward-warped consistency, masked by disocclusion):
 
-$$\mathcal{L}_{\text{temp}} = \frac{1}{N}\sum_{i=1}^N M_{\text{valid}}(i) \cdot \left| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right|$$
+$$
+\mathcal{L}_{\text{temp}} = \frac{1}{N}\sum_{i=1}^N M_{\text{valid}}(i) \cdot \left| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right|
+$$
 
-$$M_{\text{valid}}(p) = \exp\!\left(-\alpha \cdot \left| D_t(p) - \mathcal{W}(D_{t-1}, V_{t \to t-1})(p) \right|\right), \quad \alpha = 10.0$$
+$$
+M_{\text{valid}}(p) = \exp\!\left(-\alpha \cdot \left| D_t(p) - \mathcal{W}(D_{t-1}, V_{t \to t-1})(p) \right|\right), \quad \alpha = 10.0
+$$
 
-$\mathcal{W}(\cdot)$ represents bilinear sampling driven by backward motion vector field $V_{t \to t-1}$. $M_{\text{valid}} \in [0, 1]$ is a continuous disocclusion visibility mask using depth consistency. The exponential decay suppresses temporal loss gradients across disoccluded boundaries where past history is geometrically invalid.
+$\mathcal{W}(\cdot)$ represents bilinear sampling driven by backward motion vector field $V\_{t \to t-1}$. $M\_{\text{valid}} \in [0, 1]$ is a continuous disocclusion visibility mask using depth consistency. The exponential decay suppresses temporal loss gradients across disoccluded boundaries where past history is geometrically invalid.
 
 **Frequency loss** (penalise high-frequency energy loss in Fourier domain):
 
-$$\mathcal{L}_{\text{freq}} = \frac{1}{N}\sum_{i} \left|\text{FFT}(\hat{I})(i) - \text{FFT}(I^{\text{GT}})(i)\right|$$
+$$
+\mathcal{L}_{\text{freq}} = \frac{1}{N}\sum_{i} \left|\text{FFT}(\hat{I})(i) - \text{FFT}(I^{\text{GT}})(i)\right|
+$$
 
 Computed on the 2D DFT magnitude of the Y-channel (luminance). This encourages preservation of fine texture detail and sub-pixel edge information that Charbonnier alone would smooth away.
 
 **Loss weight schedule:**
 
-| Phase                                        | $\lambda_1$ (char) | $\lambda_2$ (edge) | $\lambda_3$ (perc) | $\lambda_4$ (temp) | $\lambda_5$ (freq) |
-| :------------------------------------------- | :----------------- | :----------------- | :----------------- | :----------------- | :----------------- |
-| Phase 1: Spatial warmup (0 to 100K iter)     | 1.0                | 0.3                | 0.0                | 0.0                | 0.0                |
-| Phase 2: Temporal integration (100K to 300K) | 1.0                | 0.5                | 0.05               | 0.25               | 0.1                |
-| Phase 3: Fine-tuning (300K to 500K)          | 1.0                | 0.5                | 0.05               | 0.25               | 0.1                |
+| Phase                                        | $\lambda\_1$ (char) | $\lambda\_2$ (edge) | $\lambda\_3$ (perc) | $\lambda\_4$ (temp) | $\lambda\_5$ (freq) |
+| :------------------------------------------- | :------------------ | :------------------ | :------------------ | :------------------ | :------------------ |
+| Phase 1: Spatial warmup (0 to 100K iter)     | 1.0                 | 0.3                 | 0.0                 | 0.0                 | 0.0                 |
+| Phase 2: Temporal integration (100K to 300K) | 1.0                 | 0.5                 | 0.05                | 0.25                | 0.1                 |
+| Phase 3: Fine-tuning (300K to 500K)          | 1.0                 | 0.5                 | 0.05                | 0.25                | 0.1                 |
 
 ### 7.2 Frame Generation Losses
 
-$$\mathcal{L}_{\text{FG}} = \mu_1 \mathcal{L}_{\text{char}}^{\text{FG}} + \mu_2 \mathcal{L}_{\text{perc}}^{\text{FG}} + \mu_3 \mathcal{L}_{\text{census}}$$
+$$
+\mathcal{L}_{\text{FG}} = \mu_1 \mathcal{L}_{\text{char}}^{\text{FG}} + \mu_2 \mathcal{L}_{\text{perc}}^{\text{FG}} + \mu_3 \mathcal{L}_{\text{census}}
+$$
 
-**Charbonnier**: Same formulation as SR, applied to interpolated frame $\hat{I}_{t-0.5}$ vs ground-truth mid-frame $I_{t-0.5}^{\text{GT}}$.
+**Charbonnier**: Same formulation as SR, applied to interpolated frame $\hat{I}\_{t-0.5}$ vs ground-truth mid-frame $I\_{t-0.5}^{\text{GT}}$.
 
-**Perceptual**: Same VGG-19 conv3_3 formulation.
+**Perceptual**: Same VGG-19 `conv3_3` formulation.
 
 **Census transform loss** (robust to global illumination shifts during interpolation):
 
-$$\mathcal{L}_{\text{census}} = \frac{1}{N}\sum_{i} \text{SoftHamming}\!\left(\text{Census}_{7 \times 7}(\hat{I}_{t-0.5})(i),\; \text{Census}_{7 \times 7}(I_{t-0.5}^{\text{GT}})(i)\right)$$
+$$
+\mathcal{L}_{\text{census}} = \frac{1}{N}\sum_{i} \text{SoftHamming}\!\left(\text{Census}_{7 \times 7}(\hat{I}_{t-0.5})(i),\; \text{Census}_{7 \times 7}(I_{t-0.5}^{\text{GT}})(i)\right)
+$$
 
 Census transform: binary comparison of each pixel against its $7 \times 7$ neighbourhood. SoftHamming uses $1 - \exp(-d^2)$ instead of hard Hamming distance for differentiability.
 
-**Weights**: $\mu_1 = 1.0, \quad \mu_2 = 0.05, \quad \mu_3 = 0.5$
+**Weights**: $\mu\_1 = 1.0, \quad \mu\_2 = 0.05, \quad \mu\_3 = 0.5$
 
 ## 8. Training Configuration
 
@@ -891,20 +963,20 @@ Frame generation presents the interpolated frame FIRST, then the real frame. Thi
 
 ### 9.3 Memory Budget (1080p, s=3 from 360p)
 
-| Resource                                 | Format                        | Size           |
-| :--------------------------------------- | :---------------------------- | :------------- |
-| History ping buffer                      | R16G16B16A16_FLOAT, 1920x1080 | 16.59 MB       |
-| History pong buffer                      | R16G16B16A16_FLOAT, 1920x1080 | 16.59 MB       |
-| LR colour input                          | R16G16B16A16_FLOAT, 640x360   | 1.84 MB        |
-| Dilated MVs                              | R16G16_FLOAT, 640x360         | 0.92 MB        |
-| Depth buffer                             | R32_FLOAT, 640x360            | 0.92 MB        |
-| SR input (packed 12ch)                   | FP16, 12x360x640              | 5.53 MB        |
-| SR activations (double-buffered)         | FP16, 24x360x640              | 10.62 MB       |
-| SR model weights                         | FP16, 34,659 params           | 0.07 MB        |
-| FG frame inputs (shared SRV, not copied) | Shared backbuffer references  | 0 MB (no copy) |
-| FG activations (at 270p)                 | FP16, 32x270x480              | 7.91 MB        |
-| FG model weights                         | FP16, 24,009 params           | 0.05 MB        |
-| **Total**                                |                               | **~61 MB**     |
+| Resource                                 | Format                          | Size           |
+| :--------------------------------------- | :------------------------------ | :------------- |
+| History ping buffer                      | `R16G16B16A16_FLOAT`, 1920x1080 | 16.59 MB       |
+| History pong buffer                      | `R16G16B16A16_FLOAT`, 1920x1080 | 16.59 MB       |
+| LR colour input                          | `R16G16B16A16_FLOAT`, 640x360   | 1.84 MB        |
+| Dilated MVs                              | `R16G16_FLOAT`, 640x360         | 0.92 MB        |
+| Depth buffer                             | `R32_FLOAT`, 640x360            | 0.92 MB        |
+| SR input (packed 12ch)                   | FP16, 12x360x640                | 5.53 MB        |
+| SR activations (double-buffered)         | FP16, 24x360x640                | 10.62 MB       |
+| SR model weights                         | FP16, 34,659 params             | 0.07 MB        |
+| FG frame inputs (shared SRV, not copied) | Shared backbuffer references    | 0 MB (no copy) |
+| FG activations (at 270p)                 | FP16, 32x270x480                | 7.91 MB        |
+| FG model weights                         | FP16, 24,009 params             | 0.05 MB        |
+| **Total**                                |                                 | **~61 MB**     |
 
 FG inputs share the existing HR backbuffer as shader resource views (SRV, read-only) rather than copying, saving ~33 MB.
 
@@ -1301,7 +1373,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 | **Bicubic**                | Interpolation              | OpenCV / PyTorch `F.interpolate`                                                                      | BSD                            | Yes                                 | Trivial baseline                  |
 | **RIFE v4.x**              | Neural frame interpolation | [hzwer/Practical-RIFE](https://github.com/hzwer/Practical-RIFE)                                       | Non-commercial (newer weights) | Yes (weights available)             | FG quality upper bound            |
 | **IFRNet**                 | Neural frame interpolation | [ltkong218/IFRNet](https://github.com/ltkong218/IFRNet)                                               | Apache 2.0                     | Yes                                 | FG baseline (commercially usable) |
-| **BasicVSR++**             | Neural video SR            | [ckkelvinchan/BasicVSR_PlusPlus](https://github.com/ckkelvinchan/BasicVSR_PlusPlus)                   | Apache 2.0                     | Yes (offline only, too slow for RT) | SR quality upper bound            |
+| **BasicVSR++**             | Neural video SR            | [`ckkelvinchan/BasicVSR_PlusPlus`](https://github.com/ckkelvinchan/BasicVSR_PlusPlus)                 | Apache 2.0                     | Yes (offline only, too slow for RT) | SR quality upper bound            |
 | **ECBSR**                  | Lightweight SR             | [xindongzhang/ECBSR](https://github.com/xindongzhang/ECBSR)                                           | MIT                            | Yes                                 | Lightweight SR alternative        |
 | **Rep-TNSR v1**            | Lightweight temporal SR    | This project (existing architecture)                                                                  | Project-internal               | Yes                                 | Ablation baseline                 |
 
@@ -1336,25 +1408,29 @@ BasicVSR++ and RIFE are offline quality-ceiling references. The primary latency-
 | Spatial fidelity     | SSIM                        | `torchmetrics.StructuralSimilarityIndexMeasure`                                                                                                                                            | Structural preservation                        |
 | Perceptual quality   | LPIPS (AlexNet)             | [richzhang/PerceptualSimilarity](https://github.com/richzhang/PerceptualSimilarity) `lpips.LPIPS(net='alex')` (BSD 2-Clause)                                                               | Learned perceptual distance                    |
 | Perceptual quality   | VMAF                        | [Netflix/vmaf](https://github.com/Netflix/vmaf) via `ffmpeg -filter_complex libvmaf` (BSD+Patent)                                                                                          | Video multi-method quality fusion              |
-| Temporal stability   | $E_{\text{warp}}$           | Custom: GT MV warped L1, masked by valid pixels                                                                                                                                            | Temporal consistency                           |
+| Temporal stability   | $E\_{\text{warp}}$          | Custom: GT MV warped L1, masked by valid pixels                                                                                                                                            | Temporal consistency                           |
 | Temporal stability   | tOF                         | RAFT-estimated flow comparison. RAFT: [princeton-vl/RAFT](https://github.com/princeton-vl/RAFT) (BSD 3-Clause). Reference metric code: [thunil/TecoGAN](https://github.com/thunil/TecoGAN) | Optical flow temporal fidelity                 |
 | Temporal stability   | tLP                         | LPIPS between consecutive warped frames. Reference: TecoGAN and BasicVSR++ evaluation scripts.                                                                                             | Temporal perceptual stability                  |
 | Temporal flicker     | MAFD                        | Custom: `mean(abs(I_t - I_{t-1}))` on Y-channel                                                                                                                                            | Raw flicker magnitude                          |
-| Ghosting             | Ghost ratio                 | Custom: percentage of pixels where $E_{\text{warp}} > \tau$ in disoccluded regions ($\tau = 0.05$)                                                                                         | Ghosting severity                              |
+| Ghosting             | Ghost ratio                 | Custom: percentage of pixels where $E\_{\text{warp}} > \tau$ in disoccluded regions ($\tau = 0.05$)                                                                                        | Ghosting severity                              |
 | Disocclusion quality | LPIPS (disoccluded regions) | Masked LPIPS using GT occlusion maps                                                                                                                                                       | Reconstruction quality in newly revealed areas |
 | FG motion accuracy   | EPE (End-Point Error)       | Compare estimated intermediate flow vs GT flow on Sintel                                                                                                                                   | Frame generation motion reconstruction         |
 | Latency              | GPU execution time (ms)     | D3D12 `ID3D12QueryHeap` timestamp queries / `cudaEventElapsedTime`                                                                                                                         | Per-pass and total pipeline latency            |
-| Throughput           | Effective FPS               | $1000 / \text{total\_pipeline\_ms}$                                                                                                                                                        | Rendering throughput                           |
+| Throughput           | Effective FPS               | `1000 / total_pipeline_ms`                                                                                                                                                                 | Rendering throughput                           |
 
-**$E_{\text{warp}}$ exact definition:**
+**$E\_{\text{warp}}$ exact definition:**
 
-$$E_{\text{warp}} = \frac{1}{T-1}\sum_{t=2}^T \frac{\sum_i M_t(i) \cdot \left\| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right\|_1}{\sum_i M_t(i)}$$
+$$
+E_{\text{warp}} = \frac{1}{T-1}\sum_{t=2}^T \frac{\sum_i M_t(i) \cdot \left\| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right\|_1}{\sum_i M_t(i)}
+$$
 
-Where $M_t$ is the valid-pixel mask (non-disoccluded region).
+Where $M\_t$ is the valid-pixel mask (non-disoccluded region).
 
 **tOF exact definition:**
 
-$$\text{tOF} = \frac{1}{T-1}\sum_{t=2}^T \left\| \text{Flow}_{\text{RAFT}}(\hat{I}_t, \hat{I}_{t-1}) - \text{Flow}_{\text{RAFT}}(I_t^{\text{GT}}, I_{t-1}^{\text{GT}}) \right\|_1$$
+$$
+\text{tOF} = \frac{1}{T-1}\sum_{t=2}^T \left\| \text{Flow}_{\text{RAFT}}(\hat{I}_t, \hat{I}_{t-1}) - \text{Flow}_{\text{RAFT}}(I_t^{\text{GT}}, I_{t-1}^{\text{GT}}) \right\|_1
+$$
 
 ### 11.4 Human/Perceptual Evaluation
 
@@ -1413,15 +1489,15 @@ $$\text{tOF} = \frac{1}{T-1}\sum_{t=2}^T \left\| \text{Flow}_{\text{RAFT}}(\hat{
 
 ### 12.3 Loss Ablations
 
-| ID  | Configuration            | Losses Active                                                                                                                   |
-| :-- | :----------------------- | :------------------------------------------------------------------------------------------------------------------------------ |
-| C1  | Charbonnier only         | $\mathcal{L}_{\text{char}}$                                                                                                     |
-| C2  | + Edge                   | $\mathcal{L}_{\text{char}} + \mathcal{L}_{\text{edge}}$                                                                         |
-| C3  | + Perceptual             | $\mathcal{L}_{\text{char}} + \mathcal{L}_{\text{edge}} + \mathcal{L}_{\text{perc}}$                                             |
-| C4  | + Temporal               | $\mathcal{L}_{\text{char}} + \mathcal{L}_{\text{edge}} + \mathcal{L}_{\text{perc}} + \mathcal{L}_{\text{temp}}$                 |
-| C5  | + Frequency (full)       | All 5 losses (proposed configuration)                                                                                           |
-| C6  | L1 replacing Charbonnier | $\mathcal{L}_1 + \mathcal{L}_{\text{edge}} + \mathcal{L}_{\text{perc}} + \mathcal{L}_{\text{temp}} + \mathcal{L}_{\text{freq}}$ |
-| C7  | LPIPS as training loss   | Replace VGG perceptual with LPIPS                                                                                               |
+| ID  | Configuration            | Losses Active                                                                                                                        |
+| :-- | :----------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | Charbonnier only         | $\mathcal{L}\_{\text{char}}$                                                                                                         |
+| C2  | + Edge                   | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}}$                                                                            |
+| C3  | + Perceptual             | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}} + \mathcal{L}\_{\text{perc}}$                                               |
+| C4  | + Temporal               | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}} + \mathcal{L}\_{\text{perc}} + \mathcal{L}\_{\text{temp}}$                  |
+| C5  | + Frequency (full)       | All 5 losses (proposed configuration)                                                                                                |
+| C6  | L1 replacing Charbonnier | $\mathcal{L}\_1 + \mathcal{L}\_{\text{edge}} + \mathcal{L}\_{\text{perc}} + \mathcal{L}\_{\text{temp}} + \mathcal{L}\_{\text{freq}}$ |
+| C7  | LPIPS as training loss   | Replace VGG perceptual with LPIPS                                                                                                    |
 
 ### 12.4 Data Ablations
 
@@ -1449,7 +1525,7 @@ $$\text{tOF} = \frac{1}{T-1}\sum_{t=2}^T \left\| \text{Flow}_{\text{RAFT}}(\hat{
 
 | Failure Mode                          | Root Cause                                                | Detection Method                                         | Mitigation Strategy                                                                                                                |
 | :------------------------------------ | :-------------------------------------------------------- | :------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
-| **Ghosting on fast motion**           | History clamping AABB too permissive                      | High $E_{\text{warp}}$ in motion regions                 | Tighten $\gamma$ (1.25 $\to$ 1.0); increase disocclusion mask sensitivity ($\alpha$ 10 $\to$ 15)                                   |
+| **Ghosting on fast motion**           | History clamping AABB too permissive                      | High $E\_{\text{warp}}$ in motion regions                | Tighten $\gamma$ (1.25 $\to$ 1.0); increase disocclusion mask sensitivity ($\alpha$ 10 $\to$ 15)                                   |
 | **Checkerboard artefacts**            | PixelShuffle random initialisation bias                   | Visual inspection of HR output at pixel level            | ICNR weight initialisation for final conv layer (ref: [ablation A6])                                                               |
 | **Temporal flicker on thin geometry** | Aliased LR input below Nyquist sampling frequency         | MAFD spikes on wire/fence test sequences                 | Increase jitter phase count $K$; add anti-flicker temporal post-filter                                                             |
 | **FG double-image on fast rotation**  | Optical flow quarter-resolution search range exceeded     | EPE > threshold on fast-rotation validation sequences    | Multi-scale pyramid refinement (2 levels) [ablation B2]; scene-cut detection bypass                                                |
@@ -1466,7 +1542,7 @@ The following claims, if supported by experimental evidence meeting the statisti
 
 1. **Spatial quality**: PSNR improvement $\geq$ 1.5 dB AND LPIPS improvement $\geq$ 20% averaged across all 5 test scenes at Quality mode (67% scale), with $p < 0.01$ on paired test.
 
-2. **Temporal stability**: $E_{\text{warp}}$ reduction $\geq$ 25% AND tOF reduction $\geq$ 20% averaged across all dynamic test scenes (City Chase, Forest Walk, SciFi Corridor), with $p < 0.01$.
+2. **Temporal stability**: $E\_{\text{warp}}$ reduction $\geq$ 25% AND tOF reduction $\geq$ 20% averaged across all dynamic test scenes (City Chase, Forest Walk, SciFi Corridor), with $p < 0.01$.
 
 3. **Frame generation quality**: Interpolated frame PSNR improvement $\geq$ 2.0 dB AND LPIPS improvement $\geq$ 25% vs FSR 3.1 FG, with $p < 0.01$.
 
@@ -1848,13 +1924,13 @@ The complete v1 pipeline executes in 2.723 ms, within the 3.0 ms budget. Memory 
 
 Reconstruction quality (existing v1 evaluation against spatial-only and single-frame methods):
 
-| Method                 | Input            | PSNR (dB) | SSIM      | IF-SSIM   | $E_{\text{warp}}$ ($\times 10^{-3}$) | GTX 1650 Runtime |
-| :--------------------- | :--------------- | :-------- | :-------- | :-------- | :----------------------------------- | :--------------- |
-| Bicubic Interpolation  | 360p $\to$ 1080p | 27.34     | 0.812     | 0.892     | 8.42                                 | 0.08 ms          |
-| AMD FSR 1.0 (Spatial)  | 360p $\to$ 1080p | 28.12     | 0.835     | 0.901     | 7.91                                 | 0.42 ms          |
-| QuickSRNet-Medium      | 360p $\to$ 1080p | 31.05     | 0.884     | 0.914     | 6.84                                 | 2.21 ms          |
-| **Rep-TNSR v1**        | 360p $\to$ 1080p | **34.82** | **0.941** | **0.986** | **1.72**                             | 2.72 ms          |
-| Native 1080p Reference | Native SSAA      | $\infty$  | 1.000     | 0.994     | 1.15                                 | 16.67 ms         |
+| Method                 | Input            | PSNR (dB) | SSIM      | IF-SSIM   | $E\_{\text{warp}}$ ($\times 10^{-3}$) | GTX 1650 Runtime |
+| :--------------------- | :--------------- | :-------- | :-------- | :-------- | :------------------------------------ | :--------------- |
+| Bicubic Interpolation  | 360p $\to$ 1080p | 27.34     | 0.812     | 0.892     | 8.42                                  | 0.08 ms          |
+| AMD FSR 1.0 (Spatial)  | 360p $\to$ 1080p | 28.12     | 0.835     | 0.901     | 7.91                                  | 0.42 ms          |
+| QuickSRNet-Medium      | 360p $\to$ 1080p | 31.05     | 0.884     | 0.914     | 6.84                                  | 2.21 ms          |
+| **Rep-TNSR v1**        | 360p $\to$ 1080p | **34.82** | **0.941** | **0.986** | **1.72**                              | 2.72 ms          |
+| Native 1080p Reference | Native SSAA      | $\infty$  | 1.000     | 0.994     | 1.15                                  | 16.67 ms         |
 
 Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Medium. These results are against FSR 1.0 (spatial only); the comparison against FSR 3.1 (temporal) is pending and is the core objective of this project.
 
@@ -1889,7 +1965,7 @@ Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Mediu
 - [ ] Frequency loss implementation.
 - [ ] 12-scene UE5 dataset captured and cached.
 - [ ] Complete architecture + loss ablation matrix.
-- [ ] Temporal stability metrics ($E_{\text{warp}}$, tOF, tLP).
+- [ ] Temporal stability metrics ($E\_{\text{warp}}$, tOF, tLP).
 
 **Acceptance criteria**: SR meets all target metrics from Section 1.3. Ablations complete with statistical significance.
 
@@ -1999,7 +2075,7 @@ Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Mediu
 | A3  | Engine-provided motion vectors are accurate for geometric motion.         | FG quality degrades on animated meshes.           | Fall back to optical flow for non-MV regions.               |
 | A4  | DirectML compiled operator performance matches hand-coded HLSL.           | May need full HLSL compute shader implementation. | HLSL path already designed as "advanced" deployment option. |
 | A5  | 12 UE5 scenes provide sufficient data diversity.                          | Generalisation failure on held-out data.          | Expand to 20+ scenes; add Sintel/TartanAir/VIPER.           |
-| A6  | FP16 precision is sufficient for all intermediate computations.           | NaN or quality regression in warp coordinates.    | Mixed FP16/FP32: FP32 for warp grid_sample coordinates.     |
+| A6  | FP16 precision is sufficient for all intermediate computations.           | NaN or quality regression in warp coordinates.    | Mixed FP16/FP32: FP32 for warp `grid_sample` coordinates.   |
 
 ### 24.2 Unavailable/Proprietary Dependencies
 
