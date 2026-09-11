@@ -28,8 +28,8 @@ This constraint prohibits network designs that rely on multi-scale feature pyram
 | :---------------------- | :----------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------- |
 | Compute Units           | 896 CUDA Cores, 0 Tensor Cores                                           | Must target generic FP16 vector instructions                                                          |
 | Peak Throughput         | 2.715 TFLOPS FP32 / 5.430 TFLOPS FP16                                    | Maximum inference computation $\le 10.58\text{ GFLOPS}$ [2]                                           |
-| VRAM Capacity & Bus     | 4 GB GDDR5/GDDR6, 128-bit bus                                            | Total pass memory footprint $\le 50\text{ MB}$ ($<1.25\%$ VRAM)                                       |
-| Memory Bandwidth        | 128 GB/s (GDDR5) to 192 GB/s (GDDR6)                                     | Total DRAM traffic per pass $\le 150\text{ MB}$ ($<39\%$ interface capacity)                          |
+| VRAM Capacity & Bus     | 4 GB GDDR5/GDDR6, 128-bit bus                                            | Total pass memory footprint $\le 50\text{ MB}$ (< 1.25% VRAM)                                         |
+| Memory Bandwidth        | 128 GB/s (GDDR5) to 192 GB/s (GDDR6)                                     | Total DRAM traffic per pass $\le 150\text{ MB}$ (< 39% interface capacity)                            |
 | Spatial Transform       | $640 \times 360$ ($360\text{p}$) $\to 1920 \times 1080$ ($1080\text{p}$) | Scale factor $s = 3.0$ ($N_{\text{in}} = 230,400\text{ px} \to N_{\text{out}} = 2,073,600\text{ px}$) |
 
 ### Structural Reparameterisation and Topology Formulation
@@ -77,11 +77,11 @@ The input tensor comprises 9 spatial channels:
 
 The internal backbone maintains an intermediate channel width of $C = 20$ across 4 fused convolutional stages, followed by a final expansion stage. Spatial activation dimensions are preserved via symmetric unit padding across all layers:
 
-- Layer 01 (Input Stem): $\text{Conv}_{3\times 3}(C_{\text{in}}=9, C=20, \text{pad}=1) \to \text{PReLU}$
+- Layer 01 (Input Stem): $\text{Conv}\_{3\times 3}(C\_{\text{in}}=9, C=20, \text{pad}=1) \to \text{PReLU}$
 - Layer 02 (Feature Extractor 1): $\text{Conv}_{3\times 3}(C=20, C=20, \text{pad}=1) \to \text{PReLU}$
 - Layer 03 (Feature Extractor 2): $\text{Conv}_{3\times 3}(C=20, C=20, \text{pad}=1) \to \text{PReLU}$
 - Layer 04 (Feature Extractor 3): $\text{Conv}_{3\times 3}(C=20, C=20, \text{pad}=1) \to \text{PReLU}$
-- Layer 05 (High-Resolution Expansion): $\text{Conv}_{3\times 3}(C=20, C_{\text{out}}=27, \text{pad}=1)$
+- Layer 05 (High-Resolution Expansion): $\text{Conv}\_{3\times 3}(C=20, C\_{\text{out}}=27, \text{pad}=1)$
 - Layer 06 (Pixel Shuffle Transform): Rearranges tensor $\mathcal{T} \in \mathbb{R}^{27 \times 360 \times 640}$ to $\mathcal{I}_{\text{SR}} \in \mathbb{R}^{3 \times 1080 \times 1920}$.
 
 The sub-pixel reorganisation maps each depth slice into high-resolution spatial coordinates using the following index relationship:
@@ -227,9 +227,9 @@ $$\nabla_x I(x, y) = I(x+1, y) - I(x-1, y), \quad \nabla_y I(x, y) = I(x, y+1) -
 
 High-level perceptual features are captured by comparing intermediate activation maps from a pre-trained VGG-19 network $\Phi$:
 
-$$\mathcal{L}_{\text{perc}} = \frac{1}{C_j H_j W_j} \left\Vert \Phi_{\text{conv3\_3}}(\hat{I}_t) - \Phi_{\text{conv3\_3}}(I_t^{\text{GT}}) \right\Vert_2^2$$
+$$\mathcal{L}_{\text{perc}} = \frac{1}{C_j H_j W_j} \left\Vert \Phi_{\text{conv3-3}}(\hat{I}_t) - \Phi_{\text{conv3-3}}(I_t^{\text{GT}}) \right\Vert_2^2$$
 
-Temporal stability is enforced via a backward-warped consistency loss $\mathcal{L}_{\text{temp}}$, which penalises differences between the current output $\hat{I}_t$ and the reprojected prior output $\hat{I}_{t-1}$:
+Temporal stability is enforced via a backward-warped consistency loss $\mathcal{L}_{\text{temp}}$, which penalises differences between the current output $\hat{I}\_t$ and the reprojected prior output $\hat{I}\_{t-1}$:
 
 $$\mathcal{L}_{\text{temp}} = \frac{1}{N} \sum_{i=1}^N M_{\text{valid}}(i) \cdot \left\vert \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right\vert$$
 
@@ -247,8 +247,8 @@ Training sequences are collected from modern deferred rendering pipelines across
 
 - Ground-truth reference frames ($I_t^{\text{GT}}$) rendered at native 1080p using $16\times$ Supersample Anti-Aliasing (SSAA) to establish clean geometric edges.
 - Low-resolution colour buffers ($I_t^{\text{LR}}$) rendered at $640 \times 360$ with the 9-phase Halton sub-pixel camera jitter applied.
-- Screen-space motion vector buffers ($R16G16\_FLOAT$) containing per-pixel dynamic object velocity concatenated with camera motion.
-- Linear camera depth buffers ($R32\_FLOAT$) and material roughness parameters.
+- Screen-space motion vector buffers (`R16G16_FLOAT`) containing per-pixel dynamic object velocity concatenated with camera motion.
+- Linear camera depth buffers (`R32_FLOAT`) and material roughness parameters.
 
 Rather than applying synthetic bicubic downsampling, low-resolution training inputs are rendered natively within the host graphics engine. This pipeline exposes the model to realistic aliasing artefacts, specular shimmering, and post-processing steps during optimisation. Training runs for 400,000 iterations using the AdamW optimiser ($\beta_1 = 0.9$, $\beta_2 = 0.999$, weight decay $10^{-4}$) with a cosine annealing learning rate schedule starting at $\eta_{\max} = 5 \times 10^{-4}$ and decaying to $\eta_{\min} = 10^{-6}$.
 
