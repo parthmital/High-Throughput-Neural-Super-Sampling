@@ -896,7 +896,7 @@ PyTorch DistributedDataParallel with `find_unused_parameters=False`. Each GPU pr
 
 **Cloud cost estimate** (4x A100 40GB on Lambda Labs / RunPod at ~\$5/hr/GPU):
 
-- Base training (SR + FG): ~34 GPU-hours $\times$ \$5 $\approx$ \$680.
+- Base training (SR + FG): ~34 GPU-hours × $5 ≈ $680.
 - With hyperparameter sweeps (5 runs): ~\$3,400.
 - Full ablation matrix (30 experiments): ~\$10,000.
 
@@ -1412,7 +1412,7 @@ BasicVSR++ and RIFE are offline quality-ceiling references. The primary latency-
 | Temporal stability   | tOF                         | RAFT-estimated flow comparison. RAFT: [princeton-vl/RAFT](https://github.com/princeton-vl/RAFT) (BSD 3-Clause). Reference metric code: [thunil/TecoGAN](https://github.com/thunil/TecoGAN) | Optical flow temporal fidelity                 |
 | Temporal stability   | tLP                         | LPIPS between consecutive warped frames. Reference: TecoGAN and BasicVSR++ evaluation scripts.                                                                                             | Temporal perceptual stability                  |
 | Temporal flicker     | MAFD                        | Custom: `mean(abs(I_t - I_{t-1}))` on Y-channel                                                                                                                                            | Raw flicker magnitude                          |
-| Ghosting             | Ghost ratio                 | Custom: percentage of pixels where $E\_{\text{warp}} > \tau$ in disoccluded regions ($\tau = 0.05$)                                                                                        | Ghosting severity                              |
+| Ghosting             | Ghost ratio                 | Custom: percentage of pixels where $E\_{\text{warp}} \gt \tau$ in disoccluded regions ($\tau = 0.05$)                                                                                      | Ghosting severity                              |
 | Disocclusion quality | LPIPS (disoccluded regions) | Masked LPIPS using GT occlusion maps                                                                                                                                                       | Reconstruction quality in newly revealed areas |
 | FG motion accuracy   | EPE (End-Point Error)       | Compare estimated intermediate flow vs GT flow on Sintel                                                                                                                                   | Frame generation motion reconstruction         |
 | Latency              | GPU execution time (ms)     | D3D12 `ID3D12QueryHeap` timestamp queries / `cudaEventElapsedTime`                                                                                                                         | Per-pass and total pipeline latency            |
@@ -1443,7 +1443,7 @@ $$
 - Questions per trial: "Which video has (a) better detail? (b) smoother motion? (c) fewer artefacts?"
 - Analysis: preference rate $\pm$ 95% CI, Bradley-Terry model scores for overall ranking.
 
-**Minimum significance**: preference rate > 60% on a one-sided binomial test, $p < 0.05$.
+**Minimum significance**: preference rate > 60% on a one-sided binomial test, $p \lt 0.05$.
 
 ### 11.5 Generalisation Tests
 
@@ -1540,17 +1540,17 @@ $$
 
 The following claims, if supported by experimental evidence meeting the statistical requirements in Section 11.6, would constitute meaningful and defensible superiority:
 
-1. **Spatial quality**: PSNR improvement $\geq$ 1.5 dB AND LPIPS improvement $\geq$ 20% averaged across all 5 test scenes at Quality mode (67% scale), with $p < 0.01$ on paired test.
+1. **Spatial quality**: PSNR improvement $\geq$ 1.5 dB AND LPIPS improvement $\geq$ 20% averaged across all 5 test scenes at Quality mode (67% scale), with $p \lt 0.01$ on paired test.
 
-2. **Temporal stability**: $E\_{\text{warp}}$ reduction $\geq$ 25% AND tOF reduction $\geq$ 20% averaged across all dynamic test scenes (City Chase, Forest Walk, SciFi Corridor), with $p < 0.01$.
+2. **Temporal stability**: $E\_{\text{warp}}$ reduction $\geq$ 25% AND tOF reduction $\geq$ 20% averaged across all dynamic test scenes (City Chase, Forest Walk, SciFi Corridor), with $p \lt 0.01$.
 
-3. **Frame generation quality**: Interpolated frame PSNR improvement $\geq$ 2.0 dB AND LPIPS improvement $\geq$ 25% vs FSR 3.1 FG, with $p < 0.01$.
+3. **Frame generation quality**: Interpolated frame PSNR improvement $\geq$ 2.0 dB AND LPIPS improvement $\geq$ 25% vs FSR 3.1 FG, with $p \lt 0.01$.
 
 4. **Latency parity**: Total pipeline latency within 120% of FSR 3.1 on the same hardware (allowing up to 20% overhead for neural inference cost).
 
 5. **Generalisation**: Quality metrics degrade by < 15% (relative LPIPS) on held-out unseen game content compared to training-distribution content.
 
-6. **Human preference**: $\geq$ 60% preference rate in 2AFC study with $\geq$ 20 participants, $p < 0.05$ (one-sided binomial).
+6. **Human preference**: $\geq$ 60% preference rate in 2AFC study with $\geq$ 20 participants, $p \lt 0.05$ (one-sided binomial).
 
 ## 15. Reproducibility Checklist and Experiment Tracking
 
@@ -2012,7 +2012,7 @@ Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Mediu
 - [ ] Human perceptual evaluation study (2AFC, $n \geq 20$).
 - [ ] Final benchmark report with confidence intervals and effect sizes.
 
-**Acceptance criteria**: All claims from Section 14 supported with $p < 0.05$.
+**Acceptance criteria**: All claims from Section 14 supported with $p \lt 0.05$.
 
 ## 22. Smallest Experiment to Falsify the Core Hypothesis
 
@@ -2062,7 +2062,7 @@ Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Mediu
 | **LAT-001** | All tiers          | All GPUs            | Standard seq           | N/A                 | 3x    | Latency profiling              |
 | **HUM-001** | SR-002 vs FSR 3.1  | 2AFC study          | 5 test scenes          | N/A                 | 3x    | Human evaluation               |
 
-**Total: ~30 experiments.** Estimated compute: ~600 GPU-hours $\approx$ \$3,000 cloud (4x A100).
+**Total: ~30 experiments.** Estimated compute: ~600 GPU-hours ≈ $3,000 cloud (4x A100).
 
 ## 24. Assumptions, Risks, and Constraints
 
@@ -2129,7 +2129,7 @@ The engineering plan tests three foundational hypotheses:
 | Spatial Image Quality    | PSNR (dB)                            | Baseline Reference                    | $\mathbf{\ge +1.50\text{ dB}}$ improvement     | Evaluated on unseen UE5 test scenes            |
 | Perceptual Similarity    | LPIPS (VGG)                          | Baseline Reference                    | $\mathbf{\ge 15.0\%}$ reduction                | Lower distance indicates superior fidelity     |
 | Perceptual Error         | Mean LDR-FLIP                        | Baseline Reference                    | $\mathbf{\le 0.038}$ (or $\ge 20\%$ reduction) | NVIDIA FLIP difference metric                  |
-| Temporal Stability       | $E\_{\text{warp}}\;(\times 10^{-3})$ | $\approx 2.80 - 3.50$                 | $\mathbf{\le 1.80}$ ($>35\%$ reduction)        | Frame-to-frame warping error under motion      |
+| Temporal Stability       | $E\_{\text{warp}}\;(\times 10^{-3})$ | $\approx 2.80 - 3.50$                 | $\mathbf{\le 1.80}$ ($\gt 35\%$ reduction)     | Frame-to-frame warping error under motion      |
 | Disocclusion Fidelity    | Masked PSNR ($dB\_{\text{occ}}$)     | Baseline Reference                    | $\mathbf{\ge +2.20\text{ dB}}$ improvement     | Evaluated strictly within disocclusion regions |
 | Super-Resolution Latency | GPU Kernel Time                      | $1.42\text{ ms}$ (RX 6600, 1080p)     | $\mathbf{\le 1.35\text{ ms}}$ (RX 6600, FP16)  | Direct3D 12 timestamp query heap               |
 | Frame-Generation Latency | GPU Kernel Time                      | $2.15\text{ ms}$ (RX 6600, 1080p)     | $\mathbf{\le 1.60\text{ ms}}$ (RX 6600, FP16)  | Async compute execution timestamp              |
@@ -2202,7 +2202,7 @@ $$
 $$
 
 $$
-M_{\text{occ}}(p) = \begin{cases} 1.0, & \text{if } \Delta D(p) < -\tau_D \cdot D_t(p) \text{ or } \mathcal{W}(p) \notin [0, 1]^2 \\ 0.0, & \text{otherwise} \end{cases}
+M_{\text{occ}}(p) = \begin{cases} 1.0, & \text{if } \Delta D(p) \lt -\tau_D \cdot D_t(p) \text{ or } \mathcal{W}(p) \notin [0, 1]^2 \\ 0.0, & \text{otherwise} \end{cases}
 $$
 
 The depth tolerance threshold is parameterised to $\tau\_D = 0.01$ (1% relative depth deviation).
@@ -2438,7 +2438,7 @@ Baselines include AMD FSR 3.1.4 (FidelityFX SDK v1.1.4), Intel XeSS 1.3 (DP4a no
 | AMD FSR 3.1.4              | 4K ($2\times$)    | 34.20       | 0.925          | 0.125         | 0.049           | 2.45                                 | $3.85\text{ ms}$       | $5.40\text{ ms}$       | $36.5\text{ ms}$           |
 | Proposed (Rep-TNSR + BiFG) | 4K ($2\times$)    | 36.80       | 0.964          | 0.078         | 0.031           | 1.38                                 | 3.65 ms                | 3.95 ms                | 34.2 ms                    |
 
-**Statistical Rigor**: Metric improvements over FSR 3.1.4 are statistically significant under a two-tailed Wilcoxon signed-rank test ($p < 0.001, N = 1,200$ test frames across 10 scenes) with 95% bootstrap confidence intervals.
+**Statistical Rigor**: Metric improvements over FSR 3.1.4 are statistically significant under a two-tailed Wilcoxon signed-rank test ($p \lt 0.001, N = 1{,}200$ test frames across 10 scenes) with 95% bootstrap confidence intervals.
 
 #### Perceptual Double-Blind Evaluation
 
@@ -2446,7 +2446,7 @@ To confirm visual superiority, an automated 2-Alternative Forced Choice (2AFC) s
 
 - **Test Stimuli**: 10-second video sequences rendered at native display refresh rates comparing FSR 3.1.4 against the proposed pipeline under identical dynamic camera orbits.
 - **Protocol**: Display panels were calibrated to sRGB at 120 Hz. Participants identified the clip showing superior edge stability, detail preservation, and minimal artefacting.
-- **Result**: Observers preferred the proposed pipeline in 78.4% of pairwise comparisons ($p < 10^{-6}$), noting improved foliage stability, preserved chain-link fence geometry, and the absence of block-edge tearing under rapid motion.
+- **Result**: Observers preferred the proposed pipeline in 78.4% of pairwise comparisons ($p \lt 10^{-6}$), noting improved foliage stability, preserved chain-link fence geometry, and the absence of block-edge tearing under rapid motion.
 
 ### 25.9 Comprehensive Ablation Matrix and Architectural Sensitivity
 
@@ -2468,7 +2468,7 @@ Ablations were conducted on the CitySample benchmark ($1080\text{p} \to 4\text{K
 - **Abrupt Scene Cuts**: Reprojecting history across cuts pollutes the frame with invalid scene contents. The temporal pre-pass calculates a normalised scene change metric across 9 screen tiles. If the histogram divergence exceeds $\tau\_{\text{scene}} = 0.45$, a temporal reset flag is set, bypassing the history buffer and running Rep-TNSR in spatial fallback mode for that frame.
 - **Sub-Pixel Geometry and Shimmering**: Fine structures (such as power lines and chain-link fences) can fall between low-resolution samples across frames. A $3 \times 3$ nearest-depth dilation pass identifies silhouette boundaries, where history accumulation is constrained by a tightened variance bounding box in YCoCg space to prevent background sample bleeding.
 - **User Interface (UI) Corruption**: Passing rendered 2D UI elements through frame interpolation causes severe smearing and double-image artefacts. The engine isolates the UI into an off-screen render target, composing it onto the upscaled frame after super-resolution. For engines that cannot separate UI rendering, a difference pre-pass extracts the UI alpha mask by comparing pre-UI and post-UI colour buffers, directly re-compositing the unwarped UI onto the final interpolated frame.
-- **Low Framerate Collapses ($<40\text{ FPS}$)**: At low baseline framerates, large inter-frame pixel displacements violate linear trajectory assumptions. The swapchain pacing proxy monitors frame presentation intervals; if the rendering duration exceeds $25.0\text{ ms}$, the system blends the Rep-BiFG output back to the original rendered frame ($I\_t$), avoiding visual judder.
+- **Low Framerate Collapses ($\lt 40\text{ FPS}$)**: At low baseline framerates, large inter-frame pixel displacements violate linear trajectory assumptions. The swapchain pacing proxy monitors frame presentation intervals; if the rendering duration exceeds $25.0\text{ ms}$, the system blends the Rep-BiFG output back to the original rendered frame ($I\_t$), avoiding visual judder.
 
 ### 25.11 Implementation Artifacts, Configuration, and Codebase Skeleton
 
@@ -2978,7 +2978,7 @@ The benchmark harness validates the core claims on a single GPU without requirin
 #### 4. Phased Implementation Plan
 
 - **Phase 1: Foundations and Capture Pipeline (Weeks 01 to 04)**: Deliver the Unreal Engine 5 automated capture plugin, the dataset sharding pipeline, and the baseline verification harness. Acceptance gate: $\ge 50,000$ valid sequence frames captured with ground-truth SSAA and G-buffers.
-- **Phase 2: Rep-TNSR Training and Export (Weeks 05 to 08)**: Train the multi-branch model, implement structural reparameterisation export scripts, and deploy via DirectML. Acceptance gate: Numerical parity between the training graph and fused model ($<10^{-4}$); Kernel latency $\le 2.25\text{ ms}$ on GTX 1650 Mobile.
+- **Phase 2: Rep-TNSR Training and Export (Weeks 05 to 08)**: Train the multi-branch model, implement structural reparameterisation export scripts, and deploy via DirectML. Acceptance gate: Numerical parity between the training graph and fused model ($\lt 10^{-4}$); Kernel latency $\le 2.25\text{ ms}$ on GTX 1650 Mobile.
 - **Phase 3: Rep-BiFG Bilateral Synthesis (Weeks 09 to 12)**: Implement the atomic min-depth splatting compute shader, train the bilateral inpainting trunk, and configure async compute dispatch. Acceptance gate: FG latency $\le 2.40\text{ ms}$ on TU117; complete elimination of block-edge tearing artefacts.
 - **Phase 4: Swapchain Integration and Validation (Weeks 13 to 16)**: Build the Direct3D 12/Vulkan proxy swapchain, set up the PresentMon latency profiling harness, and conduct the double-blind human study. Acceptance gate: Pipeline outperforms FSR 3.1 across $\ge 75\%$ of perceptual comparisons.
 
