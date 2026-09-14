@@ -115,67 +115,90 @@ This constraint prohibits network designs that rely on multi-scale feature pyram
 
 ## 3. Datasets: Training, Validation, and Testing
 
-### 3.1 Training Data Sources
+### 3.1 Data Strategy and Prioritisation Hierarchy
 
-| Dataset                           | Content                                                                                                                                            | Access                                                                                       | Licence                                               | G-Buffers Available                                    | Role                                                  |
-| :-------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------- | :---------------------------------------------------- | :----------------------------------------------------- | :---------------------------------------------------- |
-| **Custom UE5 Captures** (primary) | 8 to 12 Unreal Engine 5 scenes: Bistro, Sun Temple, Valley, City Park, SciFi Corridor, Medieval Game Environment, Stylised Forest, Industrial Zone | Self-generated via [UnrealCV](https://unrealcv.org/) plugin + custom capture actor           | Project-internal (UE5 EULA permits data distribution) | Colour, MV, Depth, Roughness, Normal, Exposure, Jitter | Primary training                                      |
-| **ExtraSS Dataset**               | Multi-scene rendered sequences with G-buffers, Halton jitter, disocclusion masks                                                                   | [NJU-3DV/ExtraSS](https://github.com/NJU-3DV/ExtraSS)                                        | Academic research use                                 | Colour, MV, Depth, Disocclusion                        | Training + validation                                 |
-| **MPI Sintel**                    | Animated film render passes with dense GT optical flow                                                                                             | [sintel.is.tue.mpg.de](http://sintel.is.tue.mpg.de/)                                         | CC BY 3.0                                             | Clean, Final, Flow, Depth, Occlusion                   | Validation + optical flow eval                        |
-| **REDS**                          | 300 real-world dynamic video sequences at 720p                                                                                                     | [seungjunnah.github.io/Datasets/reds.html](https://seungjunnah.github.io/Datasets/reds.html) | CC BY 4.0                                             | None (colour only)                                     | Cross-domain generalisation                           |
-| **Vimeo-90K Septuplet**           | 89,800 real-world video clips (448x256)                                                                                                            | [toflow.csail.mit.edu](https://toflow.csail.mit.edu/)                                        | Academic non-commercial                               | None (colour only)                                     | FG pretraining only (non-commercial constraint noted) |
-| **TartanAir**                     | AirSim synthetic visual SLAM dataset                                                                                                               | [theairlab.org/tartanair](https://theairlab.org/tartanair/)                                  | Research                                              | Flow, Depth, Normals, Stereo                           | Supplementary optical flow training                   |
-| **VIPER / Playing for Data**      | GTA V extracted sequences                                                                                                                          | [playing-for-benchmarks.org](https://playing-for-benchmarks.org/)                            | Research                                              | Flow, Depth, Semantics                                 | Supplementary training                                |
+To accelerate minimum viable product (MVP) development, all initial model training, validation, and rapid prototyping are conducted within Kaggle Notebooks (utilising dual NVIDIA Tesla T4 GPUs or single P100 GPUs). Kaggle environments enforce specific operational constraints: 30 hours per week of GPU quota, an ephemeral working filesystem (`/kaggle/working`) capped at 20 GB, and optimal reliability when external internet access is disabled during runtime.
 
-### 3.2 Held-Out Generalisation Test Sets (Excluded from Training)
+Consequently, datasets are organised into a strict three-tier priority hierarchy:
 
-| Dataset                                                                                    | Purpose                                              |
-| :----------------------------------------------------------------------------------------- | :--------------------------------------------------- |
-| 3 UE5 scenes with distinct art styles (Desert Landscape, Underwater Reef, Cartoon Village) | Unseen game content and art style generalisation     |
-| 2 Unity HDRP captures (urban environment, interior architecture)                           | Unseen engine generalisation                         |
-| FSR 3.1 SDK Bistro sample (frame dumps extracted via RenderDoc)                            | Direct FSR 3.1 comparison under identical conditions |
+1. **Priority 1: Kaggle-Native Benchmark Datasets (Immediate MVP Focus)**. Datasets already hosted within the Kaggle Dataset registry that can be mounted directly into notebooks under `/kaggle/input/` with zero download delay, zero network bandwidth overhead, and zero consumption of the local `/kaggle/working` disk limit.
+2. **Priority 2: Custom MVP G-Buffer Kaggle Pack**. A lightweight, pre-rendered UE5 mini-batch (e.g. 300 to 600 frames of the Bistro scene with full 12-channel G-buffers: colour, motion vectors, depth, jitter phase) packaged and hosted privately or publicly on Kaggle (`parthmital/neuralss-ue5-bistro-gbuffers`) to validate G-buffer conditioning inside Kaggle notebooks.
+3. **Priority 3: Full-Scale Workstation / Cluster Captures (Post-MVP Production)**. Full multi-scene 12-scene raw captures (~260 GB raw, ~80 GB cached), along with external academic datasets requiring manual download scripts, reserved for post-MVP cluster scaling.
 
-### 3.3 Dataset Construction and Splits
+### 3.2 Priority 1: Kaggle-Native Datasets (Immediate MVP Training & Evaluation)
 
-**Per-scene capture specification:**
+The following datasets have been independently verified as active, accessible repositories on Kaggle, forming the verified foundation for training, validating, and benchmarking the MVP pipeline in Kaggle Notebooks:
 
-- 60-second sequences at 60 FPS = 3,600 frames per sequence.
-- Camera paths: 3 per scene (static orbit, dynamic chase, rapid cut montage).
-- Total: 12 scenes $\times$ 3 paths $\times$ 3,600 frames $\approx$ 129,600 training frames.
-- Split: 80% train / 10% validation / 10% test. Split by scene (not by frame) to prevent temporal leakage.
+| Dataset                         | Verified Kaggle Dataset Link                                                                                                                       | Canonical Kaggle Slug                                     | Mount Path in Notebook                                 | Modalities Provided                                                                       | Pipeline Role in MVP                                                                                                          | Licence                    |
+| :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------- | :----------------------------------------------------- | :---------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- | :------------------------- |
+| **MPI Sintel**                  | [artemmmtry/mpi-sintel-dataset](https://www.kaggle.com/datasets/artemmmtry/mpi-sintel-dataset)                                                     | `artemmmtry/mpi-sintel-dataset`                           | `/kaggle/input/mpi-sintel-dataset`                     | Clean/Final RGB passes, dense optical flow (`.flo`), depth maps (`.dpt`), occlusion masks | Primary synthetic benchmark for motion vectors, optical flow, intermediate frame generation (NeuralFG), and depth consistency | CC BY 3.0                  |
+| **REDS (Full)**                 | [amithkesavmrajagiri/reds-dataset](https://www.kaggle.com/datasets/amithkesavmrajagiri/reds-dataset)                                               | `amithkesavmrajagiri/reds-dataset`                        | `/kaggle/input/reds-dataset`                           | 720p dynamic sharp video sequences (`train_sharp`, `val_sharp`)                           | High-throughput Video Super-Resolution (VSR) temporal accumulation and multi-frame sharpness training                         | CC BY 4.0                  |
+| **REDS VSR Toy**                | [cookiemonsteryum/reds-video-superresolution-toy-dataset](https://www.kaggle.com/datasets/cookiemonsteryum/reds-video-superresolution-toy-dataset) | `cookiemonsteryum/reds-video-superresolution-toy-dataset` | `/kaggle/input/reds-video-superresolution-toy-dataset` | Pre-cropped paired HR (128x128) and LR (32x32) patches                                    | Ultra-fast pipeline sanity checks and rapid debugging runs (< 15 mins)                                                        | CC BY 4.0                  |
+| **Vid4 Video Benchmark**        | [uom200647r/vid4-dataset](https://www.kaggle.com/datasets/uom200647r/vid4-dataset)                                                                 | `uom200647r/vid4-dataset`                                 | `/kaggle/input/vid4-dataset`                           | 4 classic video sequences (`city`, `walk`, `calendar`, `foliage`)                         | Standardised lightweight benchmark for temporal stability, PSNR, and flicker metrics                                          | Public domain              |
+| **Vimeo Triplet**               | [chenshu123/vimeo-triplet](https://www.kaggle.com/datasets/chenshu123/vimeo-triplet)                                                               | `chenshu123/vimeo-triplet`                                | `/kaggle/input/vimeo-triplet`                          | 3-frame sequences ($t-1, t-0.5, t$) at 448x256                                            | Frame generation (NeuralFG) ground-truth supervision for intermediate frame synthesis                                         | Academic non-commercial    |
+| **Vimeo-90K Septuplet**         | [wangsally/vimeo-90k-7](https://www.kaggle.com/datasets/wangsally/vimeo-90k-7)                                                                     | `wangsally/vimeo-90k-7`                                   | `/kaggle/input/vimeo-90k-7`                            | 91,701 7-frame sequences at 448x256 with train/test lists                                 | Multi-frame temporal recurrent super-resolution and temporal consistency loss tuning                                          | Academic non-commercial    |
+| **DIV2K High Resolution**       | [soumikrakshit/div2k-high-resolution-images](https://www.kaggle.com/datasets/soumikrakshit/div2k-high-resolution-images)                           | `soumikrakshit/div2k-high-resolution-images`              | `/kaggle/input/div2k-high-resolution-images`           | 800 train + 100 val 2K high-fidelity images                                               | Phase 1 spatial warmup for Rep-TNSR convolutional trunk before temporal conditioning                                          | NTIRE Challenge (Academic) |
+| **DF2K+OST**                    | [itzloghotxd/df2k-ost](https://www.kaggle.com/datasets/itzloghotxd/df2k-ost)                                                                       | `itzloghotxd/df2k-ost`                                    | `/kaggle/input/df2k-ost`                               | Combined DIV2K + Flickr2K + OST restoration data                                          | Scaled spatial reconstruction training for wider model tiers (Quality / Ultra)                                                | Academic                   |
+| **Flickr2K**                    | [daehoyang/flickr2k](https://www.kaggle.com/datasets/daehoyang/flickr2k)                                                                           | `daehoyang/flickr2k`                                      | `/kaggle/input/flickr2k`                               | 2,650 high-resolution 2K images                                                           | Expanded spatial pretraining pool when scaling Rep-TNSR capacity                                                              | CC BY 2.0                  |
+| **RealSR V3**                   | [yashchoudhary/realsr-v3](https://www.kaggle.com/datasets/yashchoudhary/realsr-v3)                                                                 | `yashchoudhary/realsr-v3`                                 | `/kaggle/input/realsr-v3`                              | Paired Canon/Nikon optical zoom LR/HR real-world photos                                   | Spatial robustness testing against non-synthetic optical blur and sensor noise                                                | Academic                   |
+| **FlyingChairs**                | [craljimenez/flyingchairs](https://www.kaggle.com/datasets/craljimenez/flyingchairs)                                                               | `craljimenez/flyingchairs`                                | `/kaggle/input/flyingchairs`                           | 22,872 synthetic image pairs with ground-truth optical flow fields                        | Initial flow estimation pre-training for NeuralFG prior to gaming motion vector fine-tuning                                   | Research                   |
+| **Super Resolution Benchmarks** | [jesucristo/super-resolution-benchmarks](https://www.kaggle.com/datasets/jesucristo/super-resolution-benchmarks)                                   | `jesucristo/super-resolution-benchmarks`                  | `/kaggle/input/super-resolution-benchmarks`            | Classic benchmark sets (Set5, Set14, B100, Urban100, Manga109)                            | Quantitative spatial reconstruction comparison across standard academic baselines                                             | Research                   |
 
-**Ground truth generation:**
+### 3.3 Kaggle Environment Execution and Data Loading Pipeline
 
-- HR reference: native 1080p rendered with $16\times$ SSAA (temporal accumulation over 16 jittered sub-frames) to establish clean geometric edges.
-- LR input: native 360p render (NOT downsampled from HR) with 9-phase Halton(2,3) sub-pixel camera jitter applied.
-- Additional LR scales: 540p (for $2\times$ scale), 720p (for $1.5\times$ scale) renders.
+To ensure seamless execution inside Kaggle Notebooks:
 
-**Per-frame data record:**
+1. **Zero-Copy Input Access**: All attached datasets reside under `/kaggle/input/` as read-only virtual mounts. Training loaders read images directly from this tree without copying them to `/kaggle/working/`, reserving disk storage strictly for model checkpoints, tensorboard events, and exported ONNX binaries.
+2. **On-the-Fly LR Generation**: For public image and video datasets lacking engine G-buffers, the Kaggle DataLoader generates paired low-resolution inputs on the fly. High-resolution crops (e.g. $192 \times 192$ pixels) are downsampled by a scale factor of $s=3.0$ using anti-aliased bicubic filtering (`torch.nn.functional.interpolate(..., scale_factor=1/3, antialias=True)`) to produce $64 \times 64$ low-resolution inputs.
+3. **Multi-Input Dataset Auto-Discovery**: The notebook loader scans `/kaggle/input` recursively across supported image extensions (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.webp`), automatically aggregating files across any attached Kaggle datasets without requiring hard-coded relative paths.
+4. **Dual GPU T4 DataParallelism**: Datasets are dispatched across Kaggle's dual NVIDIA Tesla T4 GPUs using `torch.nn.DataParallel` with pinned memory (`pin_memory=True`), four worker threads per GPU, and FP16 automatic mixed precision (AMP) enabled.
 
-```
-frame_NNNNNN/
-  color_lr.exr            # R16G16B16A16_FLOAT, W_LR x H_LR
-  color_hr.exr            # R16G16B16A16_FLOAT, W_HR x H_HR (GT)
-  motion_vectors.exr       # R16G16_FLOAT, W_LR x H_LR (backward screen-space MV)
-  depth.exr               # R32_FLOAT, W_LR x H_LR (linear camera depth)
-  normal.exr              # R16G16B16_FLOAT, W_LR x H_LR (world-space normals)
-  roughness.png           # R8, W_LR x H_LR (material roughness)
-  exposure.json           # {"value": float, "jitter_x": float, "jitter_y": float, "frame_index": int, "phase_k": int}
-```
+### 3.4 Priority 2: Custom MVP G-Buffer Kaggle Dataset Pack
 
-### 3.4 Licensing Constraints
+While Kaggle-native datasets provide abundant RGB sequences, optical flow, and depth maps, the full Rep-TNSR architecture requires 12-channel G-buffer inputs (colour, reprojected history, screen-space motion vectors, linear depth, temporal confidence, and sub-pixel jitter phase).
 
-| Component           | Licence                 | Commercial Use         | Constraint                                         |
-| :------------------ | :---------------------- | :--------------------- | :------------------------------------------------- |
-| Custom UE5 captures | Project-internal        | Yes                    | UE5 EULA permits captured data distribution        |
-| ExtraSS             | Academic research       | No                     | Training use restricted to non-commercial research |
-| MPI Sintel          | CC BY 3.0               | Yes (with attribution) | Attribution required                               |
-| REDS                | CC BY 4.0               | Yes (with attribution) | Attribution required                               |
-| Vimeo-90K           | Academic non-commercial | No                     | Exclude if targeting commercial deployment         |
-| TartanAir           | Research                | Restricted             | Check before commercial use                        |
-| VIPER               | Research                | Restricted             | Check before commercial use                        |
+To bridge this gap for the Kaggle-hosted MVP:
 
-For commercial deployment: train exclusively on custom UE5 captures + REDS + Sintel.
+- **Packaged Mini-Dataset**: 300 to 600 consecutive frames from the UE5 Bistro scene are rendered at native 1080p (SSAA reference) and native 360p (jittered LR) with complete EXR G-buffers.
+- **Kaggle Dataset Upload**: The packaged mini-dataset (~2.5 GB compressed) is uploaded to Kaggle as `parthmital/neuralss-ue5-bistro-gbuffers`.
+- **Kaggle Notebook Integration**: The dataset is attached via `+ Add Input` and mounted at `/kaggle/input/neuralss-ue5-bistro-gbuffers`, enabling immediate end-to-end verification of the 12-channel G-buffer conditioning and variance-clamped history reprojection within Kaggle notebooks.
+
+### 3.5 Priority 3: Full-Scale Post-MVP Datasets (Workstation / Cluster Phase)
+
+Once the MVP demonstrates architectural feasibility and passes the core falsification criterion on Kaggle, the full production training pipeline expands to external and locally generated datasets:
+
+| Dataset                          | Content                                                                                                                                                              | Access                                                                             | Licence                               | G-Buffers Available                                                         | Production Role                     |
+| :------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- | :------------------------------------ | :-------------------------------------------------------------------------- | :---------------------------------- |
+| **Custom UE5 12-Scene Captures** | 12 full Unreal Engine 5 environments (Bistro, Sun Temple, Valley, City Park, SciFi Corridor, Medieval, Stylised Forest, Industrial, Desert, Reef, Village, Interior) | Self-generated via [UnrealCV](https://unrealcv.org/) plugin + custom capture actor | Project-internal (UE5 EULA compliant) | Colour, MV, Depth, Roughness, World Normal, Auto-Exposure, Sub-pixel Jitter | Production training and evaluation  |
+| **ExtraSS Dataset**              | Multi-scene rendered sequences with G-buffers, Halton jitter, disocclusion masks                                                                                     | [NJU-3DV/ExtraSS](https://github.com/NJU-3DV/ExtraSS)                              | Academic research use                 | Colour, MV, Depth, Disocclusion                                             | Academic cross-validation           |
+| **VIPER / Playing for Data**     | GTA V extracted high-fidelity gaming sequences                                                                                                                       | [playing-for-benchmarks.org](https://playing-for-benchmarks.org/)                  | Research                              | Flow, Depth, Semantics                                                      | Supplementary gaming generalisation |
+
+### 3.6 Held-Out Generalisation Test Sets (Excluded from Training)
+
+| Dataset                                   | Source / Location                                                     | Purpose                                                                           |
+| :---------------------------------------- | :-------------------------------------------------------------------- | :-------------------------------------------------------------------------------- |
+| **3 Unseen UE5 Scenes**                   | Custom capture (Desert Landscape, Underwater Reef, Cartoon Village)   | Unseen game content and distinct art style generalisation                         |
+| **2 Unity HDRP Scenes**                   | Custom capture (Urban Street, Architectural Interior)                 | Cross-engine shading model generalisation                                         |
+| **FSR 3.1 SDK Bistro Sequence**           | Frame dumps extracted via RenderDoc from FidelityFX SDK Bistro sample | Direct, identical-condition benchmark vs FSR 3.1 Quality mode                     |
+| **Vid4 Benchmark**                        | Kaggle mount `/kaggle/input/vid4-dataset`                             | Standardized objective comparison against published academic VSR baselines        |
+| **SR Benchmarks (Set5, Set14, Urban100)** | Kaggle mount `/kaggle/input/super-resolution-benchmarks`              | Standardized comparison against published Single-Image Super-Resolution baselines |
+
+### 3.7 Licensing Constraints and Commercial Feasibility
+
+| Component / Dataset                 | Host Platform                                                                                          | Licence                   | Commercial Deployment Feasibility | Usage Constraint                                                       |
+| :---------------------------------- | :----------------------------------------------------------------------------------------------------- | :------------------------ | :-------------------------------- | :--------------------------------------------------------------------- |
+| **MPI Sintel**                      | Kaggle (`artemmmtry/mpi-sintel-dataset`)                                                               | CC BY 3.0                 | Yes                               | Attribution required                                                   |
+| **REDS (Full & Toy)**               | Kaggle (`amithkesavmrajagiri/reds-dataset`, `cookiemonsteryum/reds-video-superresolution-toy-dataset`) | CC BY 4.0                 | Yes                               | Attribution required                                                   |
+| **Vid4**                            | Kaggle (`uom200647r/vid4-dataset`)                                                                     | Public Domain             | Yes                               | None                                                                   |
+| **Flickr2K**                        | Kaggle (`daehoyang/flickr2k`)                                                                          | CC BY 2.0                 | Yes                               | Attribution required                                                   |
+| **DIV2K & DF2K+OST**                | Kaggle (`soumikrakshit/div2k-high-resolution-images`, `itzloghotxd/df2k-ost`)                          | Academic                  | Restricted                        | Commercial use requires retraining on CC/Internal data                 |
+| **Vimeo-90K (Triplet & Septuplet)** | Kaggle (`chenshu123/vimeo-triplet`, `wangsally/vimeo-90k-7`)                                           | Academic non-commercial   | No                                | For research and MVP prototyping only; exclude from commercial release |
+| **FlyingChairs**                    | Kaggle (`craljimenez/flyingchairs`)                                                                    | Research                  | No                                | Pretraining flow backbone only; discard before commercial weights      |
+| **RealSR V3**                       | Kaggle (`yashchoudhary/realsr-v3`)                                                                     | Academic                  | Restricted                        | Verification required prior to commercial distribution                 |
+| **Super Resolution Benchmarks**     | Kaggle (`jesucristo/super-resolution-benchmarks`)                                                      | Research / Non-commercial | No                                | Evaluation only                                                        |
+| **Custom UE5 Captures**             | Internal / Kaggle Private                                                                              | Project-internal          | Yes                               | Fully compliant with UE5 EULA for synthetic training data              |
+
+For commercial deployment, model weights are trained exclusively on custom UE5 captures, REDS, and MPI Sintel, ensuring zero licensing contamination from non-commercial academic datasets.
 
 ## 4. Synthetic Data Generation Pipeline
 
@@ -884,7 +907,25 @@ PyTorch DistributedDataParallel with `find_unused_parameters=False`. Each GPU pr
 - Fixed seeds: `torch.manual_seed(42)`, `numpy.random.seed(42)`, `random.seed(42)`.
 - `CUBLAS_WORKSPACE_CONFIG=:16:8` for deterministic cuBLAS.
 
-### 8.6 Hardware Requirements and Training Cost Estimates
+### 8.6 Hardware Requirements and Training Profiles
+
+#### 8.6.1 Kaggle Notebook MVP Training Profile (Top Priority)
+
+The MVP training phase runs entirely within free Kaggle Notebooks using attached Kaggle-native datasets:
+
+| Resource / Parameter   | Kaggle Notebook Environment Specification                                               |
+| :--------------------- | :-------------------------------------------------------------------------------------- |
+| Accelerator            | 2x NVIDIA Tesla T4 (16 GB GDDR6 per GPU, 32 GB total) or 1x Tesla P100 (16 GB)          |
+| Precision              | Native FP16 Automatic Mixed Precision (`torch.amp.autocast('cuda')`)                    |
+| Parallelism            | `torch.nn.DataParallel` across 2x T4 GPUs                                               |
+| Batch Size             | 32 per GPU (effective batch size = 64)                                                  |
+| Dataset Storage        | Virtual zero-copy mount under `/kaggle/input/` (unlimited, does not consume local disk) |
+| Working Scratch Disk   | 20 GB ephemeral `/kaggle/working/` (reserved for checkpoints, logs, and ONNX exports)   |
+| Throughput             | ~25 to 30 images/s aggregate across 2x T4                                               |
+| Training Time (MVP SR) | ~2.5 to 4.0 hours for 10 to 15 epochs on DIV2K / REDS subset                            |
+| Runtime Cost           | \$0.00 (operates within Kaggle's 30-hour weekly GPU quota)                              |
+
+#### 8.6.2 Production Workstation and Cluster Scaling (Post-MVP)
 
 | Resource                     | Minimum (Functional) | Recommended (Full Pipeline)        |
 | :--------------------------- | :------------------- | :--------------------------------- |
@@ -1777,7 +1818,21 @@ CLI override example: `python train.py --config configs/sr_ultra.yaml model.base
 ## 18. Commands
 
 ```bash
-# Dataset download (Sintel, TartanAir, REDS)
+# Kaggle CLI: Download verified Kaggle-native MVP datasets (for local testing if required)
+kaggle datasets download -d artemmmtry/mpi-sintel-dataset -p data/sintel --unzip
+kaggle datasets download -d amithkesavmrajagiri/reds-dataset -p data/reds --unzip
+kaggle datasets download -d cookiemonsteryum/reds-video-superresolution-toy-dataset -p data/reds_toy --unzip
+kaggle datasets download -d soumikrakshit/div2k-high-resolution-images -p data/div2k --unzip
+kaggle datasets download -d itzloghotxd/df2k-ost -p data/df2k_ost --unzip
+kaggle datasets download -d uom200647r/vid4-dataset -p data/vid4 --unzip
+kaggle datasets download -d chenshu123/vimeo-triplet -p data/vimeo_triplet --unzip
+kaggle datasets download -d wangsally/vimeo-90k-7 -p data/vimeo_septuplet --unzip
+kaggle datasets download -d jesucristo/super-resolution-benchmarks -p data/sr_benchmarks --unzip
+
+# Kaggle Notebook: Push notebook and trigger remote GPU T4 x 2 execution
+kaggle kernels push -p .
+
+# Dataset download (external sources: Sintel, TartanAir, REDS via script)
 python scripts/download_datasets.py --datasets sintel tartanair reds --output data/
 
 # UE5 G-buffer capture (requires UnrealCV plugin installed)
@@ -2027,7 +2082,7 @@ Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Mediu
 
 **Expected outcome**: Based on existing v1 results (34.82 dB PSNR vs FSR 1.0's 28.12 dB), and FSR 3.1's estimated ~33.5 dB at Quality mode (significant improvement over FSR 1.0 due to temporal accumulation), we expect the neural approach to still win on both metrics. However, this has NOT been verified against FSR 3.1 specifically. The gap may be narrower than against FSR 1.0.
 
-**Required resources**: 1x RTX 3090, ~10 GB data, ~8 hours total (training + evaluation). This is the minimum cost to determine whether the project direction is viable.
+**Required resources**: Kaggle Notebook (2x Tesla T4 GPUs, ~3 hours runtime, zero cloud cost) or workstation (1x RTX 3090, ~6 hours). Data requirement: ~2.5 GB to 10 GB attached under `/kaggle/input/`. This provides the fastest, zero-cost path to determine whether the project direction is viable.
 
 ## 23. Exact Experiment Matrix
 
