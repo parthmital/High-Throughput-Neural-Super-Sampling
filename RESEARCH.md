@@ -1,3058 +1,678 @@
-# NeuralSS: High-Throughput Neural Super-Sampling and Frame Generation
+# NeuralSS: Neural Super-Sampling and Frame Generation
 
-> GPU-agnostic neural upscaling and frame generation pipeline. Explicit objective: measurably outperform AMD FSR 3.1 in perceptual quality, temporal stability, end-to-end latency, and cross-game generalisation.
+Research plan for a GPU-agnostic, real-time neural upscaler (Rep-TNSR) and frame generator (NeuralFG) intended to measurably outperform AMD FSR 3.1 in image quality, temporal stability, latency and generalisation.
 
-## 1. Research Objectives, Hypotheses, and Success Criteria
+**Status (October 2026).** This repository contains this plan and two Kaggle notebooks that train and evaluate RGB-only versions of both networks on public datasets (section 13). No result in this document comes from the proposed G-buffer system yet. Every number is labelled as one of: a target, an arithmetic estimate, or a measurement carried over from the earlier Rep-TNSR v1 project (section 15).
 
-### 1.1 Core Hypothesis
+## 1. Objective and Hypotheses
 
-A lightweight, temporally-recurrent neural architecture consuming engine G-buffers (colour, motion vectors, depth, exposure) can simultaneously produce spatially superior and temporally more stable upscaled frames, and generate higher-fidelity interpolated frames, compared to FSR 3.1's hand-crafted heuristic pipeline, while meeting the same latency and hardware-agnostic deployment constraints.
+**Objective.** Build two small, decoupled networks, Rep-TNSR for upscaling and NeuralFG for frame interpolation. They consume engine G-buffers (colour, motion vectors, depth, exposure), run through vendor-neutral APIs (DirectML, Vulkan, plain compute shaders), and beat FSR 3.1 at the same scale factor on the same GPU.
 
-### 1.2 Sub-Hypotheses
+**Core hypothesis.** A lightweight convolutional network conditioned on G-buffers produces sharper and more temporally stable upscaled frames, and more accurate interpolated frames, than FSR 3.1's hand-tuned heuristics, within the same latency and memory envelope and without vendor-specific hardware.
 
-| ID  | Hypothesis                                                                                                                                                             | Falsification Criterion                                                               |
-| :-- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------ |
-| H1  | Neural SR with G-buffer conditioning and structural reparameterisation produces higher perceptual quality than FSR 3.1 temporal upscaling at equivalent scale factors. | LPIPS(ours) >= LPIPS(FSR 3.1) on >= 3 of 5 test scenes.                               |
-| H2  | Learned temporal accumulation with variance-guided gating reduces ghosting and flicker below FSR 3.1 levels.                                                           | $E\_{\text{warp}}$(ours) >= $E\_{\text{warp}}$(FSR 3.1) OR tOF(ours) >= tOF(FSR 3.1). |
-| H3  | Neural optical flow estimation plus learned warping produces fewer disocclusion artefacts than FSR 3.1's hierarchical compute-based flow.                              | Human preference rate < 55% vs FSR 3.1 frame generation on the disocclusion test set. |
-| H4  | The full SR + FG pipeline can execute within FSR 3.1's latency envelope (SR: < 2.0 ms, FG: < 3.0 ms at 1080p on RTX 3060 class hardware).                              | End-to-end latency exceeds FSR 3.1 by > 20% on any tested GPU.                        |
-| H5  | Training on diverse synthetic G-buffer data generalises to unseen games and engines without fine-tuning.                                                               | Quality degradation > 15% LPIPS on any of 3 held-out game datasets.                   |
+| ID  | Hypothesis                                                                                                                                    | Falsified if                                                                                                              |
+| :-- | :-------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
+| H1  | Neural SR with G-buffer conditioning and structural reparameterisation gives higher perceptual quality than FSR 3.1 at the same scale factor. | Our LPIPS is not lower than FSR 3.1's on at least 3 of the 5 test sequences.                                              |
+| H2  | Learned temporal accumulation with variance-clamped history reduces ghosting and flicker below FSR 3.1.                                       | Our warping error or tOF is not lower than FSR 3.1's.                                                                     |
+| H3  | Learned intermediate flow with occlusion-aware blending produces fewer disocclusion artefacts than FSR 3.1 frame generation.                  | Human preference for ours is below 55 percent on the disocclusion test set.                                               |
+| H4  | The full SR + FG pipeline fits FSR 3.1's latency envelope.                                                                                    | Our P95 latency exceeds FSR 3.1's by more than 20 percent on any tested GPU, or misses the absolute targets in section 2. |
+| H5  | Training on diverse synthetic G-buffer data generalises to unseen games and engines without fine-tuning.                                      | LPIPS degrades by more than 15 percent on any held-out game set relative to in-distribution content.                      |
 
-### 1.3 Measurable Success Criteria (vs FSR 3.1 Quality Mode, 67% Render Scale)
+## 2. Success Criteria
 
-| Metric                                | FSR 3.1 Baseline (estimated) | Target            | Measurement                                      |
-| :------------------------------------ | :--------------------------- | :---------------- | :----------------------------------------------- |
-| PSNR (dB)                             | 33.5                         | >= 35.0 (+1.5 dB) | Y-channel, per-frame average over test sequences |
-| SSIM                                  | 0.935                        | >= 0.950          | Full RGB, per-frame average                      |
-| LPIPS (AlexNet)                       | 0.085                        | <= 0.065 (-23%)   | Per-frame average, lower is better               |
-| tOF ($\times 10^{-3}$)                | 3.8                          | <= 3.0            | RAFT-estimated flow on output vs GT              |
-| $E\_{\text{warp}}$ ($\times 10^{-3}$) | 2.4                          | <= 1.8            | GT motion-vector warped consistency              |
-| VMAF                                  | 82                           | >= 87             | Per-sequence average via Netflix/vmaf            |
-| Frame Gen PSNR (dB)                   | 28.5                         | >= 30.5 (+2.0 dB) | Interpolated frame vs GT mid-frame               |
-| Frame Gen LPIPS                       | 0.110                        | <= 0.080          | Interpolated frame quality                       |
-| SR Latency (1080p, RTX 3060)          | 1.2 ms                       | <= 1.5 ms         | D3D12 timestamp queries, P95                     |
-| FG Latency (1080p, RTX 3060)          | 2.0 ms                       | <= 2.5 ms         | D3D12 timestamp queries, P95                     |
-| VRAM (total pipeline)                 | ~60 MB                       | <= 80 MB          | PIX/RenderDoc resource inspector                 |
-| Parameters (SR)                       | 0 (heuristic)                | <= 50K            | `sum(p.numel())`                                 |
-| Parameters (FG)                       | 0 (heuristic)                | <= 200K           | `sum(p.numel())`                                 |
+Comparisons use the FSR 3.1 mode with the same scale factor. FSR 3.1 presets are Quality 1.5x, Balanced 1.7x, Performance 2.0x and Ultra Performance 3.0x per axis ([AMD FSR 3.1 manual](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/super-resolution-upscaler/)). The primary configuration, 640x360 to 1920x1080, is 3x and is therefore compared against **Ultra Performance**, not Quality.
 
-### 1.4 FSR 3.1 Baseline Characterisation
+FSR 3.1 baseline values are not assumed. They are measured on the identical test sequences in experiment SR-001 and LAT-001, and the targets below are relative to those measurements.
 
-FSR 3.1 ([GPUOpen-LibrariesAndSDKs/FidelityFX-SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), MIT licence) is the current cross-vendor baseline. Key architectural properties:
+| Metric                                    | Target                                                   | Measurement                                                     |
+| :---------------------------------------- | :------------------------------------------------------- | :-------------------------------------------------------------- |
+| PSNR, luma (dB)                           | at least +1.5 dB over FSR 3.1                            | Per-frame mean over the test sequences                          |
+| SSIM                                      | at least +0.015 over FSR 3.1                             | Full RGB, per-frame mean                                        |
+| LPIPS (AlexNet)                           | at least 20 percent lower                                | Per-frame mean                                                  |
+| Warping error                             | at least 25 percent lower                                | Ground-truth motion-vector warp, valid pixels only (section 12) |
+| tOF                                       | at least 20 percent lower                                | RAFT flow on outputs against RAFT flow on ground truth          |
+| VMAF                                      | at least +5 points                                       | Per-sequence, Netflix VMAF via ffmpeg                           |
+| FG PSNR (dB)                              | at least +2.0 dB over FSR 3.1 FG                         | Interpolated frame against the rendered middle frame            |
+| FG LPIPS                                  | at least 25 percent lower                                | Interpolated frame                                              |
+| SR latency, 1080p output, RTX 3060        | P95 at most 1.5 ms and at most 120 percent of FSR 3.1    | D3D12 timestamp queries                                         |
+| FG latency, 1080p, RTX 3060               | P95 at most 2.5 ms and at most 120 percent of FSR 3.1 FG | D3D12 timestamp queries                                         |
+| SR latency, 1080p output, GTX 1650 Mobile | P95 at most 3.0 ms (Performance or Quality tier)         | D3D12 timestamp queries                                         |
+| Pipeline VRAM, 1080p                      | at most 100 MB                                           | Committed resources (section 10.3)                              |
+| Parameters                                | SR at most 50K, FG at most 200K                          | Fused model parameter count                                     |
 
-**Temporal upscaling pipeline** (heuristic, no neural inference):
+## 3. Baseline: AMD FSR 3.1
 
-- Sub-pixel camera jitter via Halton(2,3) low-discrepancy sequence.
-- Temporal reprojection using 2D screen-space motion vectors and linear depth.
-- History rectification via YCoCg colour-space variance bounding (mean $\pm$ $\gamma \cdot \sigma$).
-- Lanczos-based spatial reconstruction for accumulating jittered samples.
-- Rewritten accumulation weighting in v3.1 to reduce temporal fizziness on thin geometry.
+FSR 3.1 ([FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), MIT licence) is the open, cross-vendor baseline. Neither its upscaler nor its frame generator uses neural inference.
 
-**Optical flow frame generation pipeline** (compute-based, no neural inference):
+**Temporal upscaler.** Sub-pixel camera jitter from a Halton(2,3) sequence; reprojection of history with dilated motion vectors and depth; history rectification by colour-space variance clamping; Lanczos-style reconstruction of jittered samples; reactive and transparency masks to reduce history weight; sharpening (RCAS). Version 3.1 decoupled the upscaler from frame generation and reworked accumulation to reduce shimmering on thin geometry.
 
-- Hierarchical optical flow estimation on luminance delta between frames $t-1$ and $t$.
-- Motion vector fusion: engine geometric MVs (dilated) merged with optical flow field.
-- Bidirectional warping of frames $t-1$ and $t$ to synthesise frame $t-0.5$.
-- Disocclusion hole-filling via adjacent valid sample blending.
-- Scene-cut detection: luminance delta threshold bypass.
-- HUD/UI decoupled via separate texture overlay within a custom swapchain proxy.
+**Frame generation.** Hierarchical optical flow on luminance between frames t-1 and t, fused with dilated engine motion vectors; bidirectional warping to t-0.5; disocclusion hole filling; scene-cut detection by luminance change; UI composited separately through a swapchain proxy. Interpolation adds at least one frame of display latency, mitigated by latency-reduction SDKs (AMD Anti-Lag 2, NVIDIA Reflex).
 
-**Required engine inputs**: LR colour buffer, screen-space motion vectors (`R16G16_FLOAT`), depth buffer (preferably inverted `R32_FLOAT`), exposure value, reactive mask (optional), transparency and composition mask (optional), HUD/UI texture with alpha (required for FG).
+**Required engine inputs.** LR colour, screen-space motion vectors (`R16G16_FLOAT`), depth (preferably inverted `R32_FLOAT`), exposure, optional reactive and transparency masks, and a separate HUD texture for frame generation.
 
-**Performance characteristics** (Quality mode, mid-range GPU):
+**Known failure modes.** Smearing at disocclusions during fast camera motion, ghosting on thin geometry, double images when flow fails on fast rotation, HUD distortion without UI separation, particle and transparency smearing without reactive masks, and a sluggish feel below 50 to 60 FPS base rate.
 
-- Upscaling: 0.8 ms to 1.4 ms (1440p to 4K).
-- Frame generation: 1.2 ms to 2.5 ms additional compute.
-- Inherent latency: FG introduces at least one baseline frame time of delay (interpolation, not extrapolation). AMD Radeon Anti-Lag 2 SDK or NVIDIA Reflex mitigate input latency.
+**Other upscalers (reference only, not reproducible baselines).** NVIDIA DLSS 3.x: neural SR on Tensor Cores, frame generation on the RTX 40 optical flow accelerator, closed weights. Intel XeSS 1.3: neural SR on XMX with a DP4a fallback, open SDK (Apache 2.0), closed weights, no frame generation in that version. FSR 3.1 is the only fully open SR plus FG suite.
 
-**Known failure modes**: disocclusion smearing on fast camera moves, ghosting on thin geometry (fences, wires) during rapid motion, optical flow mismatch on extreme camera rotation (double-image artefacts), HUD/UI distortion without proper UI separation, particle/transparency smearing without reactive masks, sluggish feel below 50-60 FPS base rate.
+## 4. Hardware Targets and Compute Budget
 
-**Competitor landscape** (for reference only, not reproducible baselines):
+Two hardware tiers are targeted. Estimates below assume 65 percent of peak arithmetic throughput, which matches the earlier v1 measurement (section 15.1: 7.96 GFLOP in 2.145 ms on a GTX 1650 Mobile, about 3.7 TFLOPS sustained).
 
-- NVIDIA DLSS 3/3.7: neural SR (Tensor Cores) + OFA-based FG (RTX 40 series only). Closed source. ([github.com/NVIDIA/DLSS](https://github.com/NVIDIA/DLSS), API headers only.)
-- Intel XeSS 1.3: neural SR (XMX on Arc, DP4a fallback). No integrated FG. SDK open source (Apache 2.0, [github.com/intel/xess](https://github.com/intel/xess)), model weights proprietary.
-- FSR 3.1 is the only fully open-source, cross-vendor upscaling and frame generation suite.
+| Quantity                           | GTX 1650 Mobile (TU117)                                   | RTX 3060 (GA106)                                                |
+| :--------------------------------- | :-------------------------------------------------------- | :-------------------------------------------------------------- |
+| Shader cores and clock             | 896 CUDA cores, 1.515 GHz boost (varies by laptop)        | 3,584 CUDA cores, 1.777 GHz boost                               |
+| Peak FP32 (cores x 2 FLOP x clock) | 2.72 TFLOPS                                               | 12.74 TFLOPS                                                    |
+| Peak FP16 without tensor cores     | 5.43 TFLOPS (dedicated FP16 units at twice the FP32 rate) | about 12.74 TFLOPS (same rate as FP32)                          |
+| Sustained FP16 at 65 percent       | 3.53 TFLOPS                                               | 8.28 TFLOPS                                                     |
+| Tensor cores                       | none                                                      | yes; usable only through DirectML meta-commands or vendor paths |
+| Memory bandwidth                   | 128 GB/s (GDDR5) or 192 GB/s (GDDR6)                      | 360 GB/s                                                        |
+| SR budget at 1080p, 60 FPS         | 3.0 ms of the 16.67 ms frame                              | 1.5 ms (success criterion)                                      |
+| Compute in that budget             | 10.6 GFLOP, about 5.3 GMAC                                | 12.4 GFLOP, about 6.2 GMAC                                      |
+| Data movable in that budget        | 384 MB at 128 GB/s                                        | 540 MB                                                          |
 
-## 2. Compute Boundaries and Hardware Execution Dynamics
+Design consequences: no attention, no multi-scale feature pyramids, no wide skip concatenations; all non-linear work happens at LR resolution; one plain 3x3 convolution chain at inference; FP16 storage and arithmetic.
 
-Reconstructing low-resolution video and render streams from 360p ($640 \times 360$) to native 1080p ($1920 \times 1080$) at 60 FPS on entry-level mobile silicon requires strict adherence to arithmetic and memory bandwidth budgets. The target deployment hardware, exemplified by the NVIDIA GeForce GTX 1650 Mobile based on the TU117 Turing architecture, contains 896 active CUDA cores operating at a typical boost frequency of 1515 MHz. Unlike its higher-tier desktop or RTX-branded counterparts, the TU117 silicon contains zero dedicated matrix-acceleration engines (Tensor Cores). Consequently, all neural inference workloads must execute through standard Streaming Multiprocessor (SM) arithmetic logic units (ALUs).
+## 5. Datasets
 
-The Turing SM microarchitecture features an independent half-precision datapath supporting dual-issue FP16 operations (FP16x2 packed math). The theoretical upper compute bounds are governed by the core configuration and operational clock rate:
+### 5.1 Strategy
 
-$$
-\text{Peak}_{\text{FP32}} = 896\,\text{Cores} \times 2\,\frac{\text{FLOP}}{\text{Cycle}} \times 1.515\,\text{GHz} = 2.715\,\text{TFLOPS}
-$$
+1. **Priority 1: Kaggle-hosted public datasets.** Mounted read-only under `/kaggle/input`, used now by the two notebooks to validate architectures, training code and evaluation on standard benchmarks. RGB only.
+2. **Priority 2: Kaggle G-buffer pack (planned).** 300 to 600 consecutive frames of the UE5 Bistro scene with full G-buffers, LR jittered renders and SSAA references, about 2.5 GB compressed, to be uploaded as a private Kaggle dataset. It does not exist yet.
+3. **Priority 3: full UE5 captures and external datasets** on a workstation or cluster (sections 5.4 and 5.5).
 
-$$
-\text{Peak}_{\text{FP16}} = 2 \times \text{Peak}_{\text{FP32}} = 5.430\,\text{TFLOPS}
-$$
+### 5.2 Kaggle Datasets (Priority 1)
 
-A 60 FPS runtime enforces a total target frame time of 16.67 ms. Allocating a maximum latency budget of 3.00 ms to the super-resolution reconstruction pass leaves approximately 13.67 ms for the host engine's primary graphics and compute pipelines. On real-world Turing SM architectures, when factoring in instruction cache thrashing, register allocation stalls, and thread divergence, standard compute shaders achieve an arithmetic efficiency of 60% to 65% of theoretical peak:
+Contents were checked against the September 2026 notebook run, which listed 539,147 image files in total. Mirrors also contain degraded copies (LR, bicubic, blurred) and non-colour passes; the notebooks drop these by path token before use.
 
-$$
-\text{Throughput}_{\text{Sustained FP16}} \approx 5.430\,\text{TFLOPS} \times 0.65 = 3.529\,\text{TFLOPS} = 3529\,\text{GFLOPS}
-$$
+| Dataset             | Kaggle slug                                               | Observed content                                                                                | Used by                                                                               |
+| :------------------ | :-------------------------------------------------------- | :---------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------ |
+| DIV2K               | `soumikrakshit/div2k-high-resolution-images`              | 900 images (800 train, 100 validation), 2K                                                      | SR training                                                                           |
+| Flickr2K            | `daehoyang/flickr2k`                                      | 2,650 images, 2K                                                                                | SR training                                                                           |
+| DF2K-OST            | `itzloghotxd/df2k-ost`                                    | 96,818 files; overlaps DIV2K and Flickr2K                                                       | SR training (duplicates removed by name)                                              |
+| RealSR V3           | `yashchoudhary/realsr-v3`                                 | 3,130 files, paired camera LR/HR                                                                | SR training (HR side only)                                                            |
+| REDS                | `amithkesavmrajagiri/reds-dataset`                        | 48,000 files, 720p sequences, including degraded copies                                         | SR and FG training                                                                    |
+| REDS VSR toy        | `cookiemonsteryum/reds-video-superresolution-toy-dataset` | 48,000 small paired patches                                                                     | Not used (patches smaller than the training crops)                                    |
+| Vimeo-90K septuplet | `wangsally/vimeo-90k-7`                                   | 65,009 frames (about 9,300 septuplets, a subset of the 91,701 in the original release), 448x256 | SR and FG training                                                                    |
+| Vimeo-90K triplet   | `chenshu123/vimeo-triplet`                                | 219,573 frames (about 73,000 triplets), 448x256                                                 | FG training and test (official test list when present), SR training                   |
+| MPI Sintel          | `artemmmtry/mpi-sintel-dataset`                           | 7,466 image files: clean and final passes plus flow visualisations and masks                    | SR and FG training (clean and final only)                                             |
+| FlyingChairs        | `craljimenez/flyingchairs`                                | 22,872 image pairs with `.flo` flow                                                             | Not used by the notebooks (no middle frame); reserved for flow pre-training ablations |
+| Vid4                | `uom200647r/vid4-dataset`                                 | 513 files: the 171 ground-truth frames of 4 sequences plus degraded copies                      | Test only (SR video metrics, FG zero-shot)                                            |
+| SR benchmarks       | `jesucristo/super-resolution-benchmarks`                  | 1,344 files: Set5, Set14, B100, Urban100, Manga109 with LR copies                               | SR test only                                                                          |
 
-$$
-\text{FLOP Budget}_{(3.0\,\text{ms})} = 3529\,\text{GFLOPS} \times 0.003\,\text{s} \approx 10.587\,\text{GFLOPS} \equiv 5.293\,\text{GMACs}
-$$
+**Mount paths.** Kaggle mounts a dataset at `/kaggle/input/<slug>` or, in the newer layout seen in the last run, at `/kaggle/input/datasets/<owner>/<slug>`. The notebooks look up datasets by slug under both layouts and never hard-code inner folder names.
 
-Memory bandwidth imposes a co-equal boundary condition. The TU117 interfaces with 4 GB of memory across a 128-bit bus, providing $128\text{ GB/s}$ of peak bandwidth with GDDR5 or $192\text{ GB/s}$ with GDDR6. Over a 3.00 ms frame window, the maximum volume of data that can be moved across the GDDR5 physical interface is:
+### 5.3 Kaggle Data Pipeline
 
-$$
-\text{Data Transfer Limit}_{(3.0\,\text{ms})} = 128\,\text{GB/s} \times 0.003\,\text{s} = 384\,\text{MB}
-$$
+- **Discovery.** A randomised, capped directory walk per dataset (at most 40,000 to 60,000 files). A full recursive walk of the mounts took 15 minutes in the last run.
+- **Filtering.** Path-token rules drop LR, bicubic, `x2`/`x3`/`x4`, blurred and compressed copies, other methods' outputs, and Sintel flow, occlusion, depth and albedo passes. For test sets, files marked HR or GT are preferred.
+- **Splits.** A deterministic hash of the image, sequence or video id sends about 3 percent of groups to validation, so no sequence is split across train and validation. Benchmarks and Vid4 are test-only.
+- **Caching.** Images are decoded once by all CPU cores into a uint8 patch cache in `/kaggle/working/cache`. The cache is memory-mapped and shared by both GPU processes, then deleted at the end. The last run was limited by JPEG and PNG decoding on 4 cores (about 210 images per second), not by the GPUs.
+- **Degradation.** For SR, LR inputs are made on the GPU with anti-aliased bicubic downsampling to an exact size. This differs slightly from MATLAB `imresize`, so notebook numbers are compared against the bicubic baseline computed in the same way, not against published tables.
 
-This constraint prohibits network designs that rely on multi-scale feature pyramids, widespread residual skip concatenations, or attention mechanisms. Such operators require extensive activation caching, generate fragmented global memory access patterns, and induce frequent L2 cache invalidation, which saturates memory bandwidth and increases execution latency.
+### 5.4 Custom UE5 Captures (Priority 3)
 
-| Architectural Parameter | Target Mobile GPU (TU117 / GTX 1650 Mobile)                              | Production Constraint (3.0 ms Budget)                                                                   |
-| :---------------------- | :----------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------ |
-| Compute Units           | 896 CUDA Cores, 0 Tensor Cores                                           | Must target generic FP16 vector instructions                                                            |
-| Peak Throughput         | 2.715 TFLOPS FP32 / 5.430 TFLOPS FP16                                    | Maximum inference computation $\le 10.58\text{ GFLOPS}$                                                 |
-| VRAM Capacity & Bus     | 4 GB GDDR5/GDDR6, 128-bit bus                                            | Total pass memory footprint $\le 50\text{ MB}$ (< 1.25% VRAM)                                           |
-| Memory Bandwidth        | 128 GB/s (GDDR5) to 192 GB/s (GDDR6)                                     | Total DRAM traffic per pass $\le 150\text{ MB}$ (< 39% interface capacity)                              |
-| Spatial Transform       | $640 \times 360$ ($360\text{p}$) $\to 1920 \times 1080$ ($1080\text{p}$) | Scale factor $s = 3.0$ ($N\_{\text{in}} = 230,400\text{ px} \to N\_{\text{out}} = 2,073,600\text{ px}$) |
-
-## 3. Datasets: Training, Validation, and Testing
-
-### 3.1 Data Strategy and Prioritisation Hierarchy
-
-To accelerate minimum viable product (MVP) development, all initial model training, validation, and rapid prototyping are conducted within Kaggle Notebooks (utilising dual NVIDIA Tesla T4 GPUs or single P100 GPUs). Kaggle environments enforce specific operational constraints: 30 hours per week of GPU quota, an ephemeral working filesystem (`/kaggle/working`) capped at 20 GB, and optimal reliability when external internet access is disabled during runtime.
-
-Consequently, datasets are organised into a strict three-tier priority hierarchy:
-
-1. **Priority 1: Kaggle-Native Benchmark Datasets (Immediate MVP Focus)**. Datasets already hosted within the Kaggle Dataset registry that can be mounted directly into notebooks under `/kaggle/input/` with zero download delay, zero network bandwidth overhead, and zero consumption of the local `/kaggle/working` disk limit.
-2. **Priority 2: Custom MVP G-Buffer Kaggle Pack**. A lightweight, pre-rendered UE5 mini-batch (e.g. 300 to 600 frames of the Bistro scene with full 12-channel G-buffers: colour, motion vectors, depth, jitter phase) packaged and hosted privately or publicly on Kaggle (`parthmital/neuralss-ue5-bistro-gbuffers`) to validate G-buffer conditioning inside Kaggle notebooks.
-3. **Priority 3: Full-Scale Workstation / Cluster Captures (Post-MVP Production)**. Full multi-scene 12-scene raw captures (~260 GB raw, ~80 GB cached), along with external academic datasets requiring manual download scripts, reserved for post-MVP cluster scaling.
-
-### 3.2 Priority 1: Kaggle-Native Datasets (Immediate MVP Training & Evaluation)
-
-The following datasets have been independently verified as active, accessible repositories on Kaggle, forming the verified foundation for training, validating, and benchmarking the MVP pipeline in Kaggle Notebooks:
-
-| Dataset                         | Verified Kaggle Dataset Link                                                                                                                       | Canonical Kaggle Slug                                     | Mount Path in Notebook                                 | Modalities Provided                                                                       | Pipeline Role in MVP                                                                                                          | Licence                    |
-| :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------- | :----------------------------------------------------- | :---------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- | :------------------------- |
-| **MPI Sintel**                  | [artemmmtry/mpi-sintel-dataset](https://www.kaggle.com/datasets/artemmmtry/mpi-sintel-dataset)                                                     | `artemmmtry/mpi-sintel-dataset`                           | `/kaggle/input/mpi-sintel-dataset`                     | Clean/Final RGB passes, dense optical flow (`.flo`), depth maps (`.dpt`), occlusion masks | Primary synthetic benchmark for motion vectors, optical flow, intermediate frame generation (NeuralFG), and depth consistency | CC BY 3.0                  |
-| **REDS (Full)**                 | [amithkesavmrajagiri/reds-dataset](https://www.kaggle.com/datasets/amithkesavmrajagiri/reds-dataset)                                               | `amithkesavmrajagiri/reds-dataset`                        | `/kaggle/input/reds-dataset`                           | 720p dynamic sharp video sequences (`train_sharp`, `val_sharp`)                           | High-throughput Video Super-Resolution (VSR) temporal accumulation and multi-frame sharpness training                         | CC BY 4.0                  |
-| **REDS VSR Toy**                | [cookiemonsteryum/reds-video-superresolution-toy-dataset](https://www.kaggle.com/datasets/cookiemonsteryum/reds-video-superresolution-toy-dataset) | `cookiemonsteryum/reds-video-superresolution-toy-dataset` | `/kaggle/input/reds-video-superresolution-toy-dataset` | Pre-cropped paired HR (128x128) and LR (32x32) patches                                    | Ultra-fast pipeline sanity checks and rapid debugging runs (< 15 mins)                                                        | CC BY 4.0                  |
-| **Vid4 Video Benchmark**        | [uom200647r/vid4-dataset](https://www.kaggle.com/datasets/uom200647r/vid4-dataset)                                                                 | `uom200647r/vid4-dataset`                                 | `/kaggle/input/vid4-dataset`                           | 4 classic video sequences (`city`, `walk`, `calendar`, `foliage`)                         | Standardised lightweight benchmark for temporal stability, PSNR, and flicker metrics                                          | Public domain              |
-| **Vimeo Triplet**               | [chenshu123/vimeo-triplet](https://www.kaggle.com/datasets/chenshu123/vimeo-triplet)                                                               | `chenshu123/vimeo-triplet`                                | `/kaggle/input/vimeo-triplet`                          | 3-frame sequences ($t-1, t-0.5, t$) at 448x256                                            | Frame generation (NeuralFG) ground-truth supervision for intermediate frame synthesis                                         | Academic non-commercial    |
-| **Vimeo-90K Septuplet**         | [wangsally/vimeo-90k-7](https://www.kaggle.com/datasets/wangsally/vimeo-90k-7)                                                                     | `wangsally/vimeo-90k-7`                                   | `/kaggle/input/vimeo-90k-7`                            | 91,701 7-frame sequences at 448x256 with train/test lists                                 | Multi-frame temporal recurrent super-resolution and temporal consistency loss tuning                                          | Academic non-commercial    |
-| **DIV2K High Resolution**       | [soumikrakshit/div2k-high-resolution-images](https://www.kaggle.com/datasets/soumikrakshit/div2k-high-resolution-images)                           | `soumikrakshit/div2k-high-resolution-images`              | `/kaggle/input/div2k-high-resolution-images`           | 800 train + 100 val 2K high-fidelity images                                               | Phase 1 spatial warmup for Rep-TNSR convolutional trunk before temporal conditioning                                          | NTIRE Challenge (Academic) |
-| **DF2K+OST**                    | [itzloghotxd/df2k-ost](https://www.kaggle.com/datasets/itzloghotxd/df2k-ost)                                                                       | `itzloghotxd/df2k-ost`                                    | `/kaggle/input/df2k-ost`                               | Combined DIV2K + Flickr2K + OST restoration data                                          | Scaled spatial reconstruction training for wider model tiers (Quality / Ultra)                                                | Academic                   |
-| **Flickr2K**                    | [daehoyang/flickr2k](https://www.kaggle.com/datasets/daehoyang/flickr2k)                                                                           | `daehoyang/flickr2k`                                      | `/kaggle/input/flickr2k`                               | 2,650 high-resolution 2K images                                                           | Expanded spatial pretraining pool when scaling Rep-TNSR capacity                                                              | CC BY 2.0                  |
-| **RealSR V3**                   | [yashchoudhary/realsr-v3](https://www.kaggle.com/datasets/yashchoudhary/realsr-v3)                                                                 | `yashchoudhary/realsr-v3`                                 | `/kaggle/input/realsr-v3`                              | Paired Canon/Nikon optical zoom LR/HR real-world photos                                   | Spatial robustness testing against non-synthetic optical blur and sensor noise                                                | Academic                   |
-| **FlyingChairs**                | [craljimenez/flyingchairs](https://www.kaggle.com/datasets/craljimenez/flyingchairs)                                                               | `craljimenez/flyingchairs`                                | `/kaggle/input/flyingchairs`                           | 22,872 synthetic image pairs with ground-truth optical flow fields                        | Initial flow estimation pre-training for NeuralFG prior to gaming motion vector fine-tuning                                   | Research                   |
-| **Super Resolution Benchmarks** | [jesucristo/super-resolution-benchmarks](https://www.kaggle.com/datasets/jesucristo/super-resolution-benchmarks)                                   | `jesucristo/super-resolution-benchmarks`                  | `/kaggle/input/super-resolution-benchmarks`            | Classic benchmark sets (Set5, Set14, B100, Urban100, Manga109)                            | Quantitative spatial reconstruction comparison across standard academic baselines                                             | Research                   |
-
-### 3.3 Kaggle Environment Execution and Data Loading Pipeline
-
-To ensure seamless execution inside Kaggle Notebooks:
-
-1. **Zero-Copy Input Access**: All attached datasets reside under `/kaggle/input/` as read-only virtual mounts. Training loaders read images directly from this tree without copying them to `/kaggle/working/`, reserving disk storage strictly for model checkpoints, tensorboard events, and exported ONNX binaries.
-2. **On-the-Fly LR Generation**: For public image and video datasets lacking engine G-buffers, the Kaggle DataLoader generates paired low-resolution inputs on the fly. High-resolution crops (e.g. $192 \times 192$ pixels) are downsampled by a scale factor of $s=3.0$ using anti-aliased bicubic filtering (`torch.nn.functional.interpolate(..., scale_factor=1/3, antialias=True)`) to produce $64 \times 64$ low-resolution inputs.
-3. **Multi-Input Dataset Auto-Discovery**: The notebook loader scans `/kaggle/input` recursively across supported image extensions (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.webp`), automatically aggregating files across any attached Kaggle datasets without requiring hard-coded relative paths.
-4. **Dual GPU T4 DataParallelism**: Datasets are dispatched across Kaggle's dual NVIDIA Tesla T4 GPUs using `torch.nn.DataParallel` with pinned memory (`pin_memory=True`), four worker threads per GPU, and FP16 automatic mixed precision (AMP) enabled.
-
-### 3.4 Priority 2: Custom MVP G-Buffer Kaggle Dataset Pack
-
-While Kaggle-native datasets provide abundant RGB sequences, optical flow, and depth maps, the full Rep-TNSR architecture requires 12-channel G-buffer inputs (colour, reprojected history, screen-space motion vectors, linear depth, temporal confidence, and sub-pixel jitter phase).
-
-To bridge this gap for the Kaggle-hosted MVP:
-
-- **Packaged Mini-Dataset**: 300 to 600 consecutive frames from the UE5 Bistro scene are rendered at native 1080p (SSAA reference) and native 360p (jittered LR) with complete EXR G-buffers.
-- **Kaggle Dataset Upload**: The packaged mini-dataset (~2.5 GB compressed) is uploaded to Kaggle as `parthmital/neuralss-ue5-bistro-gbuffers`.
-- **Kaggle Notebook Integration**: The dataset is attached via `+ Add Input` and mounted at `/kaggle/input/neuralss-ue5-bistro-gbuffers`, enabling immediate end-to-end verification of the 12-channel G-buffer conditioning and variance-clamped history reprojection within Kaggle notebooks.
-
-### 3.5 Priority 3: Full-Scale Post-MVP Datasets (Workstation / Cluster Phase)
-
-Once the MVP demonstrates architectural feasibility and passes the core falsification criterion on Kaggle, the full production training pipeline expands to external and locally generated datasets:
-
-| Dataset                          | Content                                                                                                                                                              | Access                                                                             | Licence                               | G-Buffers Available                                                         | Production Role                     |
-| :------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- | :------------------------------------ | :-------------------------------------------------------------------------- | :---------------------------------- |
-| **Custom UE5 12-Scene Captures** | 12 full Unreal Engine 5 environments (Bistro, Sun Temple, Valley, City Park, SciFi Corridor, Medieval, Stylised Forest, Industrial, Desert, Reef, Village, Interior) | Self-generated via [UnrealCV](https://unrealcv.org/) plugin + custom capture actor | Project-internal (UE5 EULA compliant) | Colour, MV, Depth, Roughness, World Normal, Auto-Exposure, Sub-pixel Jitter | Production training and evaluation  |
-| **ExtraSS Dataset**              | Multi-scene rendered sequences with G-buffers, Halton jitter, disocclusion masks                                                                                     | [NJU-3DV/ExtraSS](https://github.com/NJU-3DV/ExtraSS)                              | Academic research use                 | Colour, MV, Depth, Disocclusion                                             | Academic cross-validation           |
-| **VIPER / Playing for Data**     | GTA V extracted high-fidelity gaming sequences                                                                                                                       | [playing-for-benchmarks.org](https://playing-for-benchmarks.org/)                  | Research                              | Flow, Depth, Semantics                                                      | Supplementary gaming generalisation |
-
-### 3.6 Held-Out Generalisation Test Sets (Excluded from Training)
-
-| Dataset                                   | Source / Location                                                     | Purpose                                                                           |
-| :---------------------------------------- | :-------------------------------------------------------------------- | :-------------------------------------------------------------------------------- |
-| **3 Unseen UE5 Scenes**                   | Custom capture (Desert Landscape, Underwater Reef, Cartoon Village)   | Unseen game content and distinct art style generalisation                         |
-| **2 Unity HDRP Scenes**                   | Custom capture (Urban Street, Architectural Interior)                 | Cross-engine shading model generalisation                                         |
-| **FSR 3.1 SDK Bistro Sequence**           | Frame dumps extracted via RenderDoc from FidelityFX SDK Bistro sample | Direct, identical-condition benchmark vs FSR 3.1 Quality mode                     |
-| **Vid4 Benchmark**                        | Kaggle mount `/kaggle/input/vid4-dataset`                             | Standardized objective comparison against published academic VSR baselines        |
-| **SR Benchmarks (Set5, Set14, Urban100)** | Kaggle mount `/kaggle/input/super-resolution-benchmarks`              | Standardized comparison against published Single-Image Super-Resolution baselines |
-
-### 3.7 Licensing Constraints and Commercial Feasibility
-
-| Component / Dataset                 | Host Platform                                                                                          | Licence                   | Commercial Deployment Feasibility | Usage Constraint                                                       |
-| :---------------------------------- | :----------------------------------------------------------------------------------------------------- | :------------------------ | :-------------------------------- | :--------------------------------------------------------------------- |
-| **MPI Sintel**                      | Kaggle (`artemmmtry/mpi-sintel-dataset`)                                                               | CC BY 3.0                 | Yes                               | Attribution required                                                   |
-| **REDS (Full & Toy)**               | Kaggle (`amithkesavmrajagiri/reds-dataset`, `cookiemonsteryum/reds-video-superresolution-toy-dataset`) | CC BY 4.0                 | Yes                               | Attribution required                                                   |
-| **Vid4**                            | Kaggle (`uom200647r/vid4-dataset`)                                                                     | Public Domain             | Yes                               | None                                                                   |
-| **Flickr2K**                        | Kaggle (`daehoyang/flickr2k`)                                                                          | CC BY 2.0                 | Yes                               | Attribution required                                                   |
-| **DIV2K & DF2K+OST**                | Kaggle (`soumikrakshit/div2k-high-resolution-images`, `itzloghotxd/df2k-ost`)                          | Academic                  | Restricted                        | Commercial use requires retraining on CC/Internal data                 |
-| **Vimeo-90K (Triplet & Septuplet)** | Kaggle (`chenshu123/vimeo-triplet`, `wangsally/vimeo-90k-7`)                                           | Academic non-commercial   | No                                | For research and MVP prototyping only; exclude from commercial release |
-| **FlyingChairs**                    | Kaggle (`craljimenez/flyingchairs`)                                                                    | Research                  | No                                | Pretraining flow backbone only; discard before commercial weights      |
-| **RealSR V3**                       | Kaggle (`yashchoudhary/realsr-v3`)                                                                     | Academic                  | Restricted                        | Verification required prior to commercial distribution                 |
-| **Super Resolution Benchmarks**     | Kaggle (`jesucristo/super-resolution-benchmarks`)                                                      | Research / Non-commercial | No                                | Evaluation only                                                        |
-| **Custom UE5 Captures**             | Internal / Kaggle Private                                                                              | Project-internal          | Yes                               | Fully compliant with UE5 EULA for synthetic training data              |
-
-For commercial deployment, model weights are trained exclusively on custom UE5 captures, REDS, and MPI Sintel, ensuring zero licensing contamination from non-commercial academic datasets.
-
-## 4. Synthetic Data Generation Pipeline
-
-```
-UnrealCV Plugin / Custom UE5 Capture Actor
-│
-├── Configure: Halton(2,3) jitter sequence (K=9 phases for s=3)
-├── Configure: Camera path (keyframed or AI-driven random walk)
-├── Per frame:
-│   ├── Inject sub-pixel jitter into projection matrix (see Section 6.1)
-│   ├── Render LR colour (360p, point-sampled, no TAA, no post-processing)
-│   ├── Render HR reference (1080p, 16x SSAA temporal accumulation)
-│   ├── Export screen-space backward MV buffer (R16G16_FLOAT)
-│   ├── Export linear depth (R32_FLOAT, camera-space Z)
-│   ├── Export world normals (R16G16B16_FLOAT) + roughness (R8)
-│   ├── Record exposure value from auto-exposure luminance histogram
-│   └── Save frame metadata JSON (jitter offset, phase index, camera matrix)
-│
-├── Motion variation injection (per-scene):
-│   ├── Static objects with camera-only motion (architecture, terrain)
-│   ├── Animated skeletal meshes (characters, vehicles, animals)
-│   ├── Particle systems (fire, smoke, sparks, rain, snow)
-│   ├── Alpha-tested foliage and chain-link fencing
-│   ├── Transparent / translucent surfaces (glass, water, ice)
-│   ├── Dynamic lighting changes (day/night cycle, explosions, muzzle flash)
-│   ├── Screen-space reflections and ray-traced reflections
-│   └── Camera cuts (hard scene transitions, teleports)
-│
-├── Disocclusion ground truth:
-│   ├── Forward-warp frame t-1 depth to frame t coordinate space
-│   ├── Mark pixels with depth inconsistency > threshold as disoccluded
-│   └── Export binary disocclusion mask per frame
-│
-└── UI / Transparency handling:
-    ├── UI elements rendered to separate overlay texture with alpha
-    ├── Training data excludes UI compositing
-    ├── Reactive mask channel marks pixels where temporal history
-    │   should be discounted (transparent particles, reflections)
-    └── Follows FSR 3.1 reactive mask convention for compatibility
-```
-
-**Frame generation training data extension:**
-
-For each consecutive pair $(t-1, t)$, additionally render the ground-truth mid-frame $t-0.5$ by interpolating the camera matrix and re-rendering at the intermediate timestamp. This provides direct supervision for the frame generation network.
-
-```
-frame_NNNNNN/
-  ... (standard buffers as above)
-  color_hr_mid.exr         # GT frame at t-0.5 for FG training
-  motion_vectors_mid.exr   # MV at t-0.5 (optional, for flow supervision)
-```
-
-## 5. Data Preprocessing, Augmentation, Normalisation, and Storage
-
-### 5.1 Preprocessing Pipeline
-
-```python
-def preprocess_frame(
-    color_lr: Tensor,   # [3, H, W], linear HDR RGB
-    color_hr: Tensor,   # [3, sH, sW], linear HDR RGB
-    mv: Tensor,         # [2, H, W], screen-space backward MV in pixels
-    depth: Tensor,      # [1, H, W], linear camera depth
-    exposure: float,    # scalar exposure multiplier from engine histogram
-    jitter_xy: tuple,   # (jitter_x, jitter_y) in NDC
-    phase_k: int,       # jitter phase index [0, K-1]
-    W_lr: int, H_lr: int,
-    K: int = 9,         # total jitter phases (s^2)
-) -> dict:
-    # 1. Exposure normalisation
-    color_lr_exp = color_lr * exposure
-    color_hr_exp = color_hr * exposure
-
-    # 2. RGB -> YCoCg
-    color_lr_ycocg = rgb_to_ycocg(color_lr_exp)
-    color_hr_ycocg = rgb_to_ycocg(color_hr_exp)
-
-    # 3. Luminance compression: Y_c = ln(1 + Y) / (1 + ln(1 + Y))
-    color_lr_ycocg[0] = ln(1 + max(Y, 0)) / (1 + ln(1 + max(Y, 0)))
-    color_hr_ycocg[0] = same
-
-    # 4. Back to RGB (compressed domain)
-    color_lr_norm = ycocg_to_rgb(color_lr_ycocg)
-    color_hr_norm = ycocg_to_rgb(color_hr_ycocg)
-
-    # 5. Motion vectors: normalise to [-1, 1] relative to LR resolution
-    mv_norm = mv / tensor([W_lr, H_lr])
-
-    # 6. Depth: inverse normalisation to [0, 1]
-    depth_inv = 1.0 / (depth + 1e-6)
-    depth_norm = (depth_inv - depth_inv.min()) / (depth_inv.max() - depth_inv.min() + 1e-6)
-
-    # 7. Jitter phase encoding
-    jitter_phase = phase_k / K  # scalar in [0, 1)
-
-    return {
-        "color_lr": color_lr_norm,       # [3, H, W]
-        "color_hr": color_hr_norm,       # [3, sH, sW]
-        "mv": mv_norm,                   # [2, H, W]
-        "depth": depth_norm,             # [1, H, W]
-        "jitter_phase": jitter_phase,    # scalar
-        "exposure": exposure,            # scalar (for inverse at output)
-    }
-```
-
-**YCoCg colour space transforms (exact definitions):**
-
-$$
-\begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix} = \begin{bmatrix} 0.25 & 0.50 & 0.25 \\ 0.50 & 0.00 & -0.50 \\ -0.25 & 0.50 & -0.25 \end{bmatrix} \begin{bmatrix} R \\ G \\ B \end{bmatrix}
-$$
-
-$$
-\begin{bmatrix} R \\ G \\ B \end{bmatrix} = \begin{bmatrix} 1 & 1 & -1 \\ 1 & 0 & 1 \\ 1 & -1 & -1 \end{bmatrix} \begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix}
-$$
-
-**Luminance compression and decompression:**
-
-$$
-Y_{\text{compressed}} = \frac{\ln(1.0 + Y)}{1.0 + \ln(1.0 + Y)}
-$$
-
-$$
-Y_{\text{decompressed}} = \exp\!\left(\frac{Y_c}{1.0 - Y_c}\right) - 1.0, \quad Y_c \in [0, 1)
-$$
-
-### 5.2 Augmentation (Applied Online During Training)
-
-| Augmentation               | Probability | Parameters                          | MV Adjustment                  |
-| :------------------------- | :---------- | :---------------------------------- | :----------------------------- |
-| Random horizontal flip     | 0.5         | Mirror                              | Negate MV x-component          |
-| Random vertical flip       | 0.5         | Mirror                              | Negate MV y-component          |
-| Random 90/180/270 rotation | 0.5         | Rotate                              | Rotate MV accordingly          |
-| Random crop (LR space)     | 1.0         | 64x64 LR patch (192x192 HR for s=3) | Crop MV, depth correspondingly |
-| Temporal reverse           | 0.3         | Swap frame order                    | Negate all motion vectors      |
-| Colour jitter (brightness) | 0.2         | $\pm 0.1$ multiplicative            | None                           |
-| MV noise injection         | 0.3         | Gaussian $\sigma = 0.3$ px          | Applied to MV                  |
-| Depth quantisation         | 0.1         | Reduce to 16-bit precision          | Applied to depth               |
-| Exposure oscillation       | 0.1         | $\pm 0.3$ EV random walk            | Applied to exposure scalar     |
-
-### 5.3 Storage Format and Caching
-
-- **On-disk raw**: OpenEXR files (lossless, half-float), organised per-scene/per-sequence/per-frame.
-- **Training cache**: Pre-cropped 64x64 LR patches stored as memory-mapped `.bin` files (FP16 tensors, NCHW layout). Generated offline by `scripts/generate_cache.py`.
-- **DataLoader**: 8 workers, `pin_memory=True`, `prefetch_factor=4`, `persistent_workers=True`.
-- **Estimated storage**: ~12 scenes $\times$ 10,800 frames $\times$ ~2 MB/frame $\approx$ 260 GB raw; ~80 GB cached patches.
-
-## 6. Model Architecture
-
-### 6.1 System Overview: Two Separate Networks
-
-Super-resolution and frame generation are treated as **separate networks** with **no shared backbone**.
-
-Rationale:
-
-1. They operate on fundamentally different input configurations (LR G-buffers vs HR frame pairs).
-2. They have different latency budgets (SR: < 2 ms; FG: < 3 ms).
-3. Decoupling allows mixing with external upscalers (matching FSR 3.1's decoupled architecture introduced in v3.1).
-4. Independent ablation and deployment.
-
-```
-Engine Render (LR) ──┬──> [Pre-Processing] ──> [SR Network] ──> [Post-Processing] ──> Upscaled Frame (HR)
-                     │                                                                      │
-                     │                                                                      ├──> Display (odd frames)
-                     │                                                                      │
-                     └──> [FG Network] ──────────────────────────────────────────────────────┴──> Interpolated Frame (HR)
-                          (takes 2 upscaled                                                        │
-                           frames + MVs + depth)                                                   └──> Display (even frames)
-```
-
-### 6.2 Super-Resolution Network: Rep-TNSR v2
-
-#### 6.2.1 Structural Reparameterisation and Topology Formulation
-
-To circumvent the latency penalties associated with multi-branch residual topologies while retaining the expressive capacity required to resolve high-frequency geometric boundaries, the architecture adopts a structurally reparameterisable, single-path convolutional backbone inspired by Edge-oriented Convolution Blocks (ECB, [xindongzhang/ECBSR](https://github.com/xindongzhang/ECBSR), MIT licence).
-
-During the training phase, the network utilises an expanded multi-branch topology that simultaneously routes intermediate features through standard $3 \times 3$ convolutions, $1 \times 1$ point-wise projections, an identity connection, and a set of fixed, first-order and second-order differential spatial operators (Sobel and Laplacian). Prior to model compilation and engine deployment, every linear branch is collapsed into a single, homogeneous $3 \times 3$ convolution via associative linear transformations.
-
-The feedforward representation of an intermediate feature block during training processes the activation tensor $X \in \mathbb{R}^{C\_{\text{in}} \times H \times W}$ through the following parallel operations:
-
-$$
-Y = \text{Conv}_{3\times 3}(X) + \text{Conv}_{1\times 1}(X) + X + \text{Conv}_{1\times 1}^{\text{SobelX}}(K_{\text{SobelX}} * X) + \text{Conv}_{1\times 1}^{\text{SobelY}}(K_{\text{SobelY}} * X) + \text{Conv}_{1\times 1}^{\text{Lap}}(K_{\text{Lap}} * X)
-$$
-
-Where $K\_{\text{SobelX}}, K\_{\text{SobelY}}, K\_{\text{Lap}} \in \mathbb{R}^{1 \times 1 \times 3 \times 3}$ define non-trainable, discrete differential filters:
-
-$$
-K_{\text{SobelX}} = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix}, \quad K_{\text{SobelY}} = \begin{bmatrix} -1 & -2 & -1 \\ 0 & 0 & 0 \\ 1 & 2 & 1 \end{bmatrix}, \quad K_{\text{Lap}} = \begin{bmatrix} 0 & 1 & 0 \\ 1 & -4 & 1 \\ 0 & 1 & 0 \end{bmatrix}
-$$
-
-The unified inference kernel $W\_{\text{fused}} \in \mathbb{R}^{C\_{\text{out}} \times C\_{\text{in}} \times 3 \times 3}$ and its corresponding bias vector $B\_{\text{fused}} \in \mathbb{R}^{C\_{\text{out}}}$ are synthesised offline:
-
-$$
-W_{\text{fused}} = W_{3\times 3} + W_{1\times 1 \to 3\times 3} + W_{\text{id}\to 3\times 3} + \sum_{p \in \{\text{SobelX}, \text{SobelY}, \text{Lap}\}} \left( W_{1\times 1}^{p} \otimes K_{p} \right)
-$$
-
-$$
-B_{\text{fused}} = B_{3\times 3} + B_{1\times 1} + B_{\text{SobelX}} + B_{\text{SobelY}} + B_{\text{Lap}}
-$$
-
-This conversion eliminates all runtime branching. The final deployed model consists of a strictly linear sequence of plain $3 \times 3$ convolutions, maximising GPU instruction-cache locality and avoiding the memory bandwidth overhead of intermediate skip concatenations.
-
-#### 6.2.2 Design Evolution from Rep-TNSR v1
-
-- **v1 (existing)**: 4 reparameterised blocks, 20 channels, 9-channel input, 17,387 parameters.
-- **v2 (proposed)**: 6 reparameterised blocks, 24 channels, 12-channel input, ~34,659 parameters (within 50K budget).
-
-Three quality tiers are provided for different hardware classes:
-
-| Tier        | Blocks | Channels | Fused Params | GFLOPs (360p $\to$ 1080p) | Estimated Latency (GTX 1650 Mobile) | Estimated Latency (RTX 3060) | Target GPU Class    |
-| :---------- | :----- | :------- | :----------- | :------------------------ | :---------------------------------- | :--------------------------- | :------------------ |
-| Performance | 4      | 16       | ~11,000      | 4.2                       | ~1.2 ms                             | ~0.4 ms                      | GTX 1650, RX 570    |
-| Quality     | 4      | 20       | ~17,387      | 7.96                      | ~2.3 ms                             | ~0.7 ms                      | RTX 2060, RX 5700   |
-| Ultra       | 6      | 24       | ~34,659      | 15.83                     | ~4.5 ms (over budget)               | ~1.3 ms                      | RTX 3060+, RX 6700+ |
-
-The Ultra tier exceeds the 3.0 ms budget on GTX 1650 Mobile class hardware. On that class, fall back to Quality or Performance tier. The Ultra tier targets RTX 3060+ class hardware where sustained FP16 throughput is ~12 TFLOPS.
-
-#### 6.2.3 Input Tensor Specification
-
-$X \in \mathbb{R}^{12 \times H\_{\text{LR}} \times W\_{\text{LR}}}$
-
-| Channel Index | Content                                                      | Format | Source                |
-| :------------ | :----------------------------------------------------------- | :----- | :-------------------- |
-| 0, 1, 2       | Current colour (compressed RGB)                              | FP16   | Pre-processing shader |
-| 3, 4, 5       | Reprojected history colour (variance-clamped)                | FP16   | Pre-processing shader |
-| 6, 7          | Dilated motion vectors (normalised)                          | FP16   | Pre-processing shader |
-| 8             | Disocclusion / validity mask                                 | FP16   | Pre-processing shader |
-| 9             | Linear depth (normalised)                                    | FP16   | Depth buffer          |
-| 10            | Temporal confidence (exponential decay of depth consistency) | FP16   | Pre-processing shader |
-| 11            | Jitter phase index (encoded as float: phase/K)               | FP16   | CPU constant          |
-
-Channels 9, 10, 11 are **new** relative to v1 (which used 9 channels). Depth provides geometric context for resolving edges at depth discontinuities. Temporal confidence provides a continuous reliability signal for the history buffer. Jitter phase allows the network to learn phase-specific reconstruction kernels.
-
-#### 6.2.4 Architecture Specification
-
-```
-Input [12, H, W]
-  │
-  ├─ Layer 1: RepConvBlock(12, 24) + PReLU     → [24, H, W]
-  ├─ Layer 2: RepConvBlock(24, 24) + PReLU     → [24, H, W]
-  ├─ Layer 3: RepConvBlock(24, 24) + PReLU     → [24, H, W]
-  ├─ Layer 4: RepConvBlock(24, 24) + PReLU     → [24, H, W]
-  ├─ Layer 5: RepConvBlock(24, 24) + PReLU     → [24, H, W]
-  ├─ Layer 6: RepConvBlock(24, 24) + PReLU     → [24, H, W]
-  ├─ Layer 7: Conv2d(24, 3*s², 3, pad=1)       → [27, H, W]  (for s=3)
-  └─ PixelShuffle(s)                            → [3, sH, sW]
-```
-
-All non-linear feature transformations execute in the low-resolution coordinate space. The final projection layer expands the channel depth to $C\_{\text{out}} = 3 \times s^2$ prior to spatial rearrangement via sub-pixel convolution (depth-to-space pixel shuffle):
-
-$$
-\mathcal{I}_{\text{SR}}(c, y \cdot s + d_y, x \cdot s + d_x) = \mathcal{T}(c \cdot s^2 + d_y \cdot s + d_x, y, x)
-$$
-
-Where $c \in \{0, 1, 2\}$ denotes the target RGB channel, and $d\_y, d\_x \in \{0, \ldots, s-1\}$ represent the sub-pixel spatial offsets.
-
-#### 6.2.5 Parameter Count (Ultra Tier, Fused, s=3)
-
-| Layer                                         | Parameters                                           |
-| :-------------------------------------------- | :--------------------------------------------------- |
-| L1: Conv(12, 24, 3x3) + bias                  | 12 $\times$ 24 $\times$ 9 + 24 = 2,616               |
-| L2 to L6: 5 $\times$ Conv(24, 24, 3x3) + bias | 5 $\times$ (24 $\times$ 24 $\times$ 9 + 24) = 26,040 |
-| L7: Conv(24, 27, 3x3) + bias                  | 24 $\times$ 27 $\times$ 9 + 27 = 5,859               |
-| PReLU: 6 $\times$ 24 learnable slopes         | 144                                                  |
-| **Total**                                     | **34,659**                                           |
-
-#### 6.2.6 FLOP Analysis (Ultra Tier, 640x360 Input, s=3)
-
-$$
-\text{MACs} = N_{\text{pixels}} \times \sum_l (C_{\text{in}}^l \times C_{\text{out}}^l \times K^2)
-$$
-
-$$
-= 230{,}400 \times (12 \times 24 \times 9 + 5 \times 24 \times 24 \times 9 + 24 \times 27 \times 9)
-$$
-
-$$
-= 230{,}400 \times (2{,}592 + 25{,}920 + 5{,}832) = 230{,}400 \times 34{,}344
-$$
-
-$$
-= 7.914\text{ GMACs} = 15.83\text{ GFLOPs}
-$$
-
-$$
-\text{Estimated Kernel Latency (RTX 3060, ~12 TFLOPS sustained)} = \frac{15.83}{12{,}000} \times 1000 \approx 1.32\text{ ms}
-$$
-
-#### 6.2.7 Reference Implementation
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class ReparameterizedConvBlock(nn.Module):
-    """Multi-branch training block that fuses to a single 3x3 conv at deployment."""
-
-    def __init__(self, in_channels: int, out_channels: int):
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-        self.conv3x3 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=True)
-        self.conv1x1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0, bias=True)
-
-        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
-        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
-        laplacian = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=torch.float32).view(1, 1, 3, 3)
-
-        self.register_buffer("sobel_x", sobel_x)
-        self.register_buffer("sobel_y", sobel_y)
-        self.register_buffer("laplacian", laplacian)
-
-        self.conv_sobel_x = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True)
-        self.conv_sobel_y = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True)
-        self.conv_laplacian = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True)
-
-        self.act = nn.PReLU(num_parameters=out_channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out_3x3 = self.conv3x3(x)
-        out_1x1 = self.conv1x1(x)
-
-        sx = F.conv2d(x, self.sobel_x.repeat(self.in_channels, 1, 1, 1), padding=1, groups=self.in_channels)
-        sy = F.conv2d(x, self.sobel_y.repeat(self.in_channels, 1, 1, 1), padding=1, groups=self.in_channels)
-        lap = F.conv2d(x, self.laplacian.repeat(self.in_channels, 1, 1, 1), padding=1, groups=self.in_channels)
-
-        out_edge = self.conv_sobel_x(sx) + self.conv_sobel_y(sy) + self.conv_laplacian(lap)
-        out_identity = x if self.in_channels == self.out_channels else 0.0
-
-        return self.act(out_3x3 + out_1x1 + out_edge + out_identity)
-
-    @torch.no_grad()
-    def export_fused_weight(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Collapse all branches into a single 3x3 kernel + bias."""
-        w_fused = self.conv3x3.weight.clone()
-        b_fused = self.conv3x3.bias.clone()
-
-        # Pad 1x1 to 3x3
-        w_fused += F.pad(self.conv1x1.weight, (1, 1, 1, 1), mode="constant", value=0)
-        b_fused += self.conv1x1.bias
-
-        # Expand differential operators: W_1x1 outer-product K_operator
-        w_sobel_x_fused = self.conv_sobel_x.weight * self.sobel_x
-        w_sobel_y_fused = self.conv_sobel_y.weight * self.sobel_y
-        w_lap_fused = self.conv_laplacian.weight * self.laplacian
-
-        w_fused += (w_sobel_x_fused + w_sobel_y_fused + w_lap_fused)
-        b_fused += (self.conv_sobel_x.bias + self.conv_sobel_y.bias + self.conv_laplacian.bias)
-
-        # Identity branch
-        if self.in_channels == self.out_channels:
-            id_tensor = torch.zeros_like(w_fused)
-            for i in range(self.in_channels):
-                id_tensor[i, i, 1, 1] = 1.0
-            w_fused += id_tensor
-
-        return w_fused, b_fused
-
-
-class RepTNSR(nn.Module):
-    """Rep-TNSR v2: Reparameterisable Temporal Neural Super-Resolution.
-
-    Quality tiers:
-        Performance: in_channels=9,  base_channels=16, num_blocks=4 (~11K params)
-        Quality:     in_channels=9,  base_channels=20, num_blocks=4 (~17K params)
-        Ultra:       in_channels=12, base_channels=24, num_blocks=6 (~35K params)
-    """
-
-    def __init__(self, in_channels: int = 12, base_channels: int = 24,
-                 num_blocks: int = 6, scale: int = 3):
-        super().__init__()
-        self.scale = scale
-        self.stem = ReparameterizedConvBlock(in_channels, base_channels)
-        self.blocks = nn.ModuleList([
-            ReparameterizedConvBlock(base_channels, base_channels)
-            for _ in range(num_blocks - 1)
-        ])
-        self.conv_out = nn.Conv2d(base_channels, 3 * (scale ** 2), kernel_size=3, padding=1)
-        self.pixel_shuffle = nn.PixelShuffle(scale)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        feat = self.stem(x)
-        for block in self.blocks:
-            feat = block(feat)
-        return self.pixel_shuffle(self.conv_out(feat))
-```
-
-### 6.3 Frame Generation Network: NeuralFG
-
-Frame generation interpolates frame $t-0.5$ given upscaled frames $t-1$ and $t$ plus their engine-provided motion vectors and depth.
-
-**Key difference from FSR 3.1 FG**: FSR 3.1 uses hand-crafted hierarchical optical flow on luminance. NeuralFG uses a lightweight learned intermediate flow estimator inspired by RIFE's IFNet ([hzwer/Practical-RIFE](https://github.com/hzwer/Practical-RIFE)) but drastically compressed.
-
-#### 6.3.1 Input Tensor Specification
-
-$X\_{\text{FG}} \in \mathbb{R}^{10 \times H\_{\text{HR}} \times W\_{\text{HR}}}$
-
-| Channel Index | Content                                                        |
-| :------------ | :------------------------------------------------------------- |
-| 0, 1, 2       | Upscaled frame $t-1$ (compressed RGB)                          |
-| 3, 4, 5       | Upscaled frame $t$ (compressed RGB)                            |
-| 6, 7          | Engine motion vectors $t-1 \to t$ (upscaled to HR, normalised) |
-| 8             | Depth $t$ (upscaled to HR, normalised)                         |
-| 9             | Depth $t-1$ (upscaled to HR, normalised)                       |
-
-#### 6.3.2 Architecture
-
-The network operates at HR resolution but uses aggressive $4\times$ spatial downsampling to keep compute tractable. All flow estimation and occlusion reasoning happen at quarter resolution.
-
-```
-Input [10, H, W]
-  │
-  ├─ AvgPool2d(4)                                → [10, H/4, W/4]
-  ├─ Conv2d(10, 32, 3, pad=1) + LeakyReLU(0.2)   → [32, H/4, W/4]
-  ├─ Conv2d(32, 32, 3, pad=1) + LeakyReLU(0.2)   → [32, H/4, W/4]
-  ├─ Conv2d(32, 32, 3, pad=1) + LeakyReLU(0.2)   → [32, H/4, W/4]
-  ├─ Conv2d(32, 9, 3, pad=1)                      → [9, H/4, W/4]
-  │   ├─ Channels 0, 1:  flow_{t-1 → t-0.5} (Δx, Δy)
-  │   ├─ Channels 2, 3:  flow_{t → t-0.5} (Δx, Δy)
-  │   ├─ Channels 4, 5:  occlusion weights (sigmoid-activated, per-direction)
-  │   └─ Channels 6, 7, 8: residual colour correction (RGB)
-  │
-  ├─ F.interpolate(scale_factor=4, bilinear)      → [9, H, W]
-  │
-  ├─ Warp frame_{t-1} by flow_{0→0.5}            → [3, H, W]  (grid_sample, bilinear)
-  ├─ Warp frame_{t}   by flow_{1→0.5}            → [3, H, W]  (grid_sample, bilinear)
-  │
-  ├─ Blend: out = σ(occ_0) * warp_0 + σ(occ_1) * warp_1 + residual
-  └─ Output [3, H, W]
-```
-
-#### 6.3.3 Parameter Count
-
-| Layer                               | Parameters                                           |
-| :---------------------------------- | :--------------------------------------------------- |
-| Conv(10, 32, 3x3) + bias            | 10 $\times$ 32 $\times$ 9 + 32 = 2,912               |
-| 2 $\times$ Conv(32, 32, 3x3) + bias | 2 $\times$ (32 $\times$ 32 $\times$ 9 + 32) = 18,496 |
-| Conv(32, 9, 3x3) + bias             | 32 $\times$ 9 $\times$ 9 + 9 = 2,601                 |
-| **Total**                           | **24,009**                                           |
-
-#### 6.3.4 FLOP Analysis (1080p Input, 4x Downsample to 270p Processing)
-
-$$
-N_{\text{ds}} = 480 \times 270 = 129{,}600
-$$
-
-$$
-\text{MACs} = 129{,}600 \times (10 \times 32 \times 9 + 2 \times 32 \times 32 \times 9 + 32 \times 9 \times 9)
-$$
-
-$$
-= 129{,}600 \times (2{,}880 + 18{,}432 + 2{,}592) = 129{,}600 \times 23{,}904
-$$
-
-$$
-= 3.098\text{ GMACs} = 6.196\text{ GFLOPs}
-$$
-
-Plus bilinear warping (~0.5 GFLOPs): **total ~6.7 GFLOPs**.
-
-$$
-\text{Estimated Latency (RTX 3060)} = \frac{6.7}{12{,}000} \times 1000 + 0.8\text{ ms (warp/blend)} \approx 1.4\text{ ms}
-$$
-
-#### 6.3.5 Reference Implementation
-
-```python
-class NeuralFG(nn.Module):
-    """Compact learned intermediate flow estimator for frame generation."""
-
-    def __init__(self, in_channels: int = 10, mid_channels: int = 32, downsample: int = 4):
-        super().__init__()
-        self.downsample = downsample
-
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, mid_channels, 3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(mid_channels, mid_channels, 3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(mid_channels, mid_channels, 3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(mid_channels, 9, 3, padding=1),
-        )
-
-    def forward(self, frame_prev: torch.Tensor, frame_curr: torch.Tensor,
-                mv: torch.Tensor, depth_prev: torch.Tensor,
-                depth_curr: torch.Tensor) -> torch.Tensor:
-        B, _, H, W = frame_prev.shape
-
-        x = torch.cat([frame_prev, frame_curr, mv, depth_curr, depth_prev], dim=1)
-
-        # Process at quarter resolution
-        x_ds = F.avg_pool2d(x, self.downsample)
-        pred = self.encoder(x_ds)
-        pred = F.interpolate(pred, size=(H, W), mode="bilinear", align_corners=False)
-
-        # Unpack predictions
-        flow_01 = pred[:, 0:2]   # flow from frame t-1 toward t-0.5
-        flow_10 = pred[:, 2:4]   # flow from frame t toward t-0.5
-        occ = torch.sigmoid(pred[:, 4:6])  # occlusion weights [2 channels]
-        residual = pred[:, 6:9]  # colour residual
-
-        # Warp both frames to t-0.5
-        grid_01 = self._flow_to_grid(flow_01, H, W)
-        grid_10 = self._flow_to_grid(flow_10, H, W)
-
-        warp_0 = F.grid_sample(frame_prev, grid_01, mode="bilinear",
-                               padding_mode="border", align_corners=False)
-        warp_1 = F.grid_sample(frame_curr, grid_10, mode="bilinear",
-                               padding_mode="border", align_corners=False)
-
-        # Occlusion-weighted blend + residual
-        out = occ[:, 0:1] * warp_0 + occ[:, 1:2] * warp_1 + residual
-        return out
-
-    @staticmethod
-    def _flow_to_grid(flow: torch.Tensor, H: int, W: int) -> torch.Tensor:
-        """Convert pixel-space flow to normalised grid for grid_sample."""
-        grid_y, grid_x = torch.meshgrid(
-            torch.linspace(-1, 1, H, device=flow.device),
-            torch.linspace(-1, 1, W, device=flow.device),
-            indexing="ij",
-        )
-        grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-        flow_norm = torch.stack([
-            2.0 * flow[:, 0] / W,
-            2.0 * flow[:, 1] / H,
-        ], dim=-1).unsqueeze(1) if flow.dim() == 3 else torch.stack([
-            2.0 * flow[:, 0] / W,
-            2.0 * flow[:, 1] / H,
-        ], dim=-1)
-        # Reshape flow_norm to [B, H, W, 2]
-        flow_norm = flow.permute(0, 2, 3, 1)
-        flow_norm = torch.stack([
-            2.0 * flow_norm[..., 0] / W,
-            2.0 * flow_norm[..., 1] / H,
-        ], dim=-1)
-        return grid.expand(flow.shape[0], -1, -1, -1) + flow_norm
-```
-
-### 6.4 Temporal Memory Strategy
-
-**SR network**: No explicit recurrent hidden state. Temporal information enters via the reprojected + variance-clamped history buffer, managed externally via ping-pong double-buffering (identical to the existing Rep-TNSR v1 and FSR 3.1). The history buffer IS the temporal memory.
-
-**FG network**: Stateless per-interpolation. Takes two completed frames and produces the intermediate. No hidden state.
-
-**Rationale for no RNN/LSTM/ConvLSTM:**
-
-1. Stateful networks require careful state management across scene cuts, resolution changes, and teleports.
-2. FSR 3.1 manages temporal state externally (history buffer + variance clamping) and this approach is proven robust in production.
-3. Eliminates ONNX/DirectML export complexity for recurrent operators.
-4. Runtime state management for recurrent models across frame drops, resolution switches, and pause/resume is fragile.
-
-### 6.5 Sub-Pixel Jittering and Sampling Mechanics
-
-Reconstructing high-frequency geometric detail across a $3\times$ scaling factor without hallucinating artificial features requires accumulating phase-shifted spatial samples across consecutive frames. The camera projection matrix is jittered at each frame using a 2D Halton $(2, 3)$ low-discrepancy sequence. The sub-pixel offset vector $(\delta x\_t, \delta y\_t)$ is mapped into normalised device coordinates (NDC) using the dimensions of the low-resolution viewport $(W\_{\text{LR}}, H\_{\text{LR}})$:
-
-$$
-\delta x_t = \frac{\text{Halton}(t \pmod K + 1, 2) - 0.5}{W_{\text{LR}}}, \quad \delta y_t = \frac{\text{Halton}(t \pmod K + 1, 3) - 0.5}{H_{\text{LR}}}
-$$
-
-A phase sequence length of $K = 9$ (matching the spatial upsampling area $s^2 = 3^2$) provides uniform sample distribution across the reconstructed high-resolution pixel grid. The offset is incorporated directly into the camera's perspective projection matrix:
-
-$$
-P_{\text{jittered}} = \begin{bmatrix} P_{00} & 0 & 2\,\delta x_t & 0 \\ 0 & P_{11} & 2\,\delta y_t & 0 \\ 0 & 0 & P_{22} & P_{23} \\ 0 & 0 & -1 & 0 \end{bmatrix}
-$$
-
-## 7. Loss Functions
-
-### 7.1 Super-Resolution Losses
-
-$$
-\mathcal{L}_{\text{SR}} = \lambda_1 \mathcal{L}_{\text{char}} + \lambda_2 \mathcal{L}_{\text{edge}} + \lambda_3 \mathcal{L}_{\text{perc}} + \lambda_4 \mathcal{L}_{\text{temp}} + \lambda_5 \mathcal{L}_{\text{freq}}
-$$
-
-**Charbonnier loss** (spatial fidelity, differentiable L1 approximation with non-vanishing gradient at zero):
-
-$$
-\mathcal{L}_{\text{char}}(\hat{I}, I^{\text{GT}}) = \frac{1}{N}\sum_{i=1}^N \sqrt{(\hat{I}(i) - I^{\text{GT}}(i))^2 + \epsilon^2}, \quad \epsilon = 10^{-3}
-$$
-
-**Edge loss** (structural sharpness via discrete spatial gradients):
-
-$$
-\mathcal{L}_{\text{edge}} = \frac{1}{N}\sum_{i=1}^N \left(|\nabla_x \hat{I}(i) - \nabla_x I^{\text{GT}}(i)| + |\nabla_y \hat{I}(i) - \nabla_y I^{\text{GT}}(i)|\right)
-$$
-
-$$
-\nabla_x I(x, y) = I(x+1, y) - I(x-1, y), \quad \nabla_y I(x, y) = I(x, y+1) - I(x, y-1)
-$$
-
-**Perceptual loss** (VGG-19 feature matching):
-
-$$
-\mathcal{L}_{\text{perc}} = \frac{1}{C_j H_j W_j} \left\| \Phi_{\text{conv3-3}}(\hat{I}) - \Phi_{\text{conv3-3}}(I^{\text{GT}}) \right\|_2^2
-$$
-
-$\Phi$: VGG-19 pretrained on ImageNet (from `torchvision.models.vgg19`, BSD 3-Clause, weights frozen). Feature extraction layer: `features[15]` (`conv3_3`). The network is frozen during SR training and used only for gradient computation through the feature space.
-
-**Temporal consistency loss** (backward-warped consistency, masked by disocclusion):
-
-$$
-\mathcal{L}_{\text{temp}} = \frac{1}{N}\sum_{i=1}^N M_{\text{valid}}(i) \cdot \left| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right|
-$$
-
-$$
-M_{\text{valid}}(p) = \exp\!\left(-\alpha \cdot \left| D_t(p) - \mathcal{W}(D_{t-1}, V_{t \to t-1})(p) \right|\right), \quad \alpha = 10.0
-$$
-
-$\mathcal{W}(\cdot)$ represents bilinear sampling driven by backward motion vector field $V\_{t \to t-1}$. $M\_{\text{valid}} \in [0, 1]$ is a continuous disocclusion visibility mask using depth consistency. The exponential decay suppresses temporal loss gradients across disoccluded boundaries where past history is geometrically invalid.
-
-**Frequency loss** (penalise high-frequency energy loss in Fourier domain):
-
-$$
-\mathcal{L}_{\text{freq}} = \frac{1}{N}\sum_{i} \left|\text{FFT}(\hat{I})(i) - \text{FFT}(I^{\text{GT}})(i)\right|
-$$
-
-Computed on the 2D DFT magnitude of the Y-channel (luminance). This encourages preservation of fine texture detail and sub-pixel edge information that Charbonnier alone would smooth away.
-
-**Loss weight schedule:**
-
-| Phase                                        | $\lambda\_1$ (char) | $\lambda\_2$ (edge) | $\lambda\_3$ (perc) | $\lambda\_4$ (temp) | $\lambda\_5$ (freq) |
-| :------------------------------------------- | :------------------ | :------------------ | :------------------ | :------------------ | :------------------ |
-| Phase 1: Spatial warmup (0 to 100K iter)     | 1.0                 | 0.3                 | 0.0                 | 0.0                 | 0.0                 |
-| Phase 2: Temporal integration (100K to 300K) | 1.0                 | 0.5                 | 0.05                | 0.25                | 0.1                 |
-| Phase 3: Fine-tuning (300K to 500K)          | 1.0                 | 0.5                 | 0.05                | 0.25                | 0.1                 |
-
-### 7.2 Frame Generation Losses
-
-$$
-\mathcal{L}_{\text{FG}} = \mu_1 \mathcal{L}_{\text{char}}^{\text{FG}} + \mu_2 \mathcal{L}_{\text{perc}}^{\text{FG}} + \mu_3 \mathcal{L}_{\text{census}}
-$$
-
-**Charbonnier**: Same formulation as SR, applied to interpolated frame $\hat{I}\_{t-0.5}$ vs ground-truth mid-frame $I\_{t-0.5}^{\text{GT}}$.
-
-**Perceptual**: Same VGG-19 `conv3_3` formulation.
-
-**Census transform loss** (robust to global illumination shifts during interpolation):
-
-$$
-\mathcal{L}_{\text{census}} = \frac{1}{N}\sum_{i} \text{SoftHamming}\!\left(\text{Census}_{7 \times 7}(\hat{I}_{t-0.5})(i),\; \text{Census}_{7 \times 7}(I_{t-0.5}^{\text{GT}})(i)\right)
-$$
-
-Census transform: binary comparison of each pixel against its $7 \times 7$ neighbourhood. SoftHamming uses $1 - \exp(-d^2)$ instead of hard Hamming distance for differentiability.
-
-**Weights**: $\mu\_1 = 1.0, \quad \mu\_2 = 0.05, \quad \mu\_3 = 0.5$
-
-## 8. Training Configuration
-
-### 8.1 Training Curriculum
-
-| Phase                         | Iterations   | Focus                              | LR Patch Size | Temporal Frames per Sample    | Active Losses |
-| :---------------------------- | :----------- | :--------------------------------- | :------------ | :---------------------------- | :------------ |
-| Phase 1: Spatial warmup       | 0 to 100K    | Pixel-level spatial reconstruction | 64x64         | 1 (single frame, no temporal) | Char + Edge   |
-| Phase 2: Temporal integration | 100K to 300K | Full multi-objective with temporal | 64x64         | 2 (consecutive pair)          | All 5 losses  |
-| Phase 3: Fine-tune            | 300K to 500K | All losses, larger patches         | 96x96         | 2 (consecutive pair)          | All 5 losses  |
-
-### 8.2 Optimiser and Learning Rate Schedule
-
-```python
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=5e-4,           # eta_max
-    betas=(0.9, 0.999),
-    weight_decay=1e-4,
-)
-
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer,
-    T_max=500_000,      # total iterations
-    eta_min=1e-6,       # eta_min
-)
-```
-
-### 8.3 Batch Strategy and Mixed Precision
-
-```python
-batch_size_per_gpu = 16  # 2-frame pairs, 64x64 LR patches
-
-# PyTorch native AMP (automatic mixed precision)
-scaler = torch.amp.GradScaler("cuda")
-with torch.amp.autocast("cuda", dtype=torch.float16):
-    output = model(input_tensor)
-    loss = compute_loss(output, target)
-scaler.scale(loss).backward()
-torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-scaler.step(optimizer)
-scaler.update()
-scheduler.step()
-```
-
-### 8.4 Distributed Training
-
-```bash
-# DDP with 2 to 4 GPUs
-torchrun --nproc_per_node=4 train.py --config configs/sr_ultra.yaml --distributed
-```
-
-PyTorch DistributedDataParallel with `find_unused_parameters=False`. Each GPU processes `batch_size_per_gpu` samples. Effective batch size = `batch_size_per_gpu * num_gpus`.
-
-### 8.5 Checkpointing and Reproducibility
-
-- Checkpoint every 10K iterations.
-- Save: model state dict, optimiser state dict, scheduler state dict, AMP scaler state dict, Python/NumPy/PyTorch/CUDA RNG states, current iteration counter, best validation metric value.
-- Deterministic mode: `torch.use_deterministic_algorithms(True)` where supported.
-- Fixed seeds: `torch.manual_seed(42)`, `numpy.random.seed(42)`, `random.seed(42)`.
-- `CUBLAS_WORKSPACE_CONFIG=:16:8` for deterministic cuBLAS.
-
-### 8.6 Hardware Requirements and Training Profiles
-
-#### 8.6.1 Kaggle Notebook MVP Training Profile (Top Priority)
-
-The MVP training phase runs entirely within free Kaggle Notebooks using attached Kaggle-native datasets:
-
-| Resource / Parameter   | Kaggle Notebook Environment Specification                                               |
-| :--------------------- | :-------------------------------------------------------------------------------------- |
-| Accelerator            | 2x NVIDIA Tesla T4 (16 GB GDDR6 per GPU, 32 GB total) or 1x Tesla P100 (16 GB)          |
-| Precision              | Native FP16 Automatic Mixed Precision (`torch.amp.autocast('cuda')`)                    |
-| Parallelism            | `torch.nn.DataParallel` across 2x T4 GPUs                                               |
-| Batch Size             | 32 per GPU (effective batch size = 64)                                                  |
-| Dataset Storage        | Virtual zero-copy mount under `/kaggle/input/` (unlimited, does not consume local disk) |
-| Working Scratch Disk   | 20 GB ephemeral `/kaggle/working/` (reserved for checkpoints, logs, and ONNX exports)   |
-| Throughput             | ~25 to 30 images/s aggregate across 2x T4                                               |
-| Training Time (MVP SR) | ~2.5 to 4.0 hours for 10 to 15 epochs on DIV2K / REDS subset                            |
-| Runtime Cost           | \$0.00 (operates within Kaggle's 30-hour weekly GPU quota)                              |
-
-#### 8.6.2 Production Workstation and Cluster Scaling (Post-MVP)
-
-| Resource                     | Minimum (Functional) | Recommended (Full Pipeline)        |
-| :--------------------------- | :------------------- | :--------------------------------- |
-| GPUs                         | 1x RTX 3090 (24 GB)  | 4x RTX 4090 (24 GB each)           |
-| SR training time (500K iter) | ~72 hours (1x 3090)  | ~20 hours (4x 4090)                |
-| FG training time (300K iter) | ~48 hours (1x 3090)  | ~14 hours (4x 4090)                |
-| Dataset storage              | 300 GB               | 500 GB (raw + cache + checkpoints) |
-| System RAM                   | 32 GB                | 64 GB                              |
-
-**Cloud cost estimate** (4x A100 40GB on Lambda Labs / RunPod at ~\$5/hr/GPU):
-
-- Base training (SR + FG): ~34 GPU-hours × $5 ≈ $680.
-- With hyperparameter sweeps (5 runs): ~\$3,400.
-- Full ablation matrix (30 experiments): ~\$10,000.
-
-## 9. Runtime Inference Pipeline
-
-### 9.1 Execution Flow
-
-```
-Frame t render complete (360p)
-│
-├─ [Pass 1] Pre-Processing Compute Shader (0.2 to 0.3 ms)
-│  ├─ Depth dilation (3x3 nearest-depth neighbourhood)
-│  ├─ Motion vector dilation (use closest-depth MV)
-│  ├─ Temporal reprojection (bilinear warp of history buffer)
-│  ├─ RGB -> YCoCg conversion + luminance compression
-│  ├─ 3x3 neighbourhood variance -> AABB min/max in YCoCg
-│  ├─ History clamping to AABB (gamma threshold = 1.25)
-│  ├─ Disocclusion mask evaluation (UV bounds + depth consistency)
-│  ├─ Temporal confidence computation (exponential depth decay)
-│  └─ Pack 12 channels -> flat FP16 structured buffer [12, H, W]
-│
-├─ [Pass 2] Neural SR Trunk via DirectML / Compute (1.5 to 2.5 ms)
-│  ├─ IDMLCommandRecorder::RecordDispatch (DirectML path)
-│  │   OR hand-coded HLSL compute dispatch (native path)
-│  └─ Output: (3 * s^2)-channel feature map in LR coordinate space
-│
-├─ [Pass 3] Post-Processing Compute Shader (0.15 to 0.25 ms)
-│  ├─ Depth-to-Space pixel shuffle rearrangement
-│  ├─ YCoCg -> RGB conversion
-│  ├─ Luminance decompression (inverse logarithmic transform)
-│  ├─ Inverse exposure scaling
-│  └─ Write to HR backbuffer + update history ping-pong buffer
-│
-├─ [Pass 4] Frame Generation (OPTIONAL, 1.2 to 2.0 ms)
-│  ├─ Triggered every other frame or on demand
-│  ├─ Input: HR frame t-1 + HR frame t (from SR) + upscaled MVs + depth
-│  ├─ Downsample 4x -> flow estimation -> upsample 4x
-│  ├─ Bidirectional warp + occlusion-weighted blend + residual
-│  └─ Output: interpolated HR frame at t-0.5
-│
-└─ Present (HR frame OR interpolated frame, UI composited last)
-```
-
-### 9.2 Frame Pacing Strategy
-
-**Without frame generation:**
-
-```
-Render(t) → SR(t) → Present(t) → Render(t+1) → SR(t+1) → Present(t+1)
-|<------- 16.67 ms ------->|    |<------- 16.67 ms ------->|
-Displayed FPS: equal to render rate
-```
-
-**With frame generation:**
-
-```
-Render(t) → SR(t) → FG(t-0.5) → Present(t-0.5) → Present(t) → Render(t+1) → ...
-|<-------------- ~16.67 ms ------------->|
-Displayed FPS: 2x base render rate
-Input latency: base frame time + FG compute (~1.5 ms)
-```
-
-Frame generation presents the interpolated frame FIRST, then the real frame. This reduces perceived input latency compared to presenting the interpolated frame after the real frame. Combined with a frame queue depth of 1 (no pre-rendered frames), effective input latency overhead is limited to the FG compute time (~1.5 ms).
-
-### 9.3 Memory Budget (1080p, s=3 from 360p)
-
-| Resource                                 | Format                          | Size           |
-| :--------------------------------------- | :------------------------------ | :------------- |
-| History ping buffer                      | `R16G16B16A16_FLOAT`, 1920x1080 | 16.59 MB       |
-| History pong buffer                      | `R16G16B16A16_FLOAT`, 1920x1080 | 16.59 MB       |
-| LR colour input                          | `R16G16B16A16_FLOAT`, 640x360   | 1.84 MB        |
-| Dilated MVs                              | `R16G16_FLOAT`, 640x360         | 0.92 MB        |
-| Depth buffer                             | `R32_FLOAT`, 640x360            | 0.92 MB        |
-| SR input (packed 12ch)                   | FP16, 12x360x640                | 5.53 MB        |
-| SR activations (double-buffered)         | FP16, 24x360x640                | 10.62 MB       |
-| SR model weights                         | FP16, 34,659 params             | 0.07 MB        |
-| FG frame inputs (shared SRV, not copied) | Shared backbuffer references    | 0 MB (no copy) |
-| FG activations (at 270p)                 | FP16, 32x270x480                | 7.91 MB        |
-| FG model weights                         | FP16, 24,009 params             | 0.05 MB        |
-| **Total**                                |                                 | **~61 MB**     |
-
-FG inputs share the existing HR backbuffer as shader resource views (SRV, read-only) rather than copying, saving ~33 MB.
-
-### 9.4 Quantisation and Execution Backend
-
-The inference pipeline is implemented using DirectML (DirectX 12) and native HLSL Compute Shaders (Shader Model 6.2+). DirectML optimises the structurally reparameterised neural trunk by compiling the linear convolutional sequence into an optimised hardware meta-command. Compiling compute passes with the DirectX Shader Compiler (DXC) using the `-enable-16bit-types` flag allows the hardware to execute packed FP16 arithmetic natively.
-
-The fused model weights (34,659 parameters $\times$ 2 bytes FP16 = 69.3 KB for SR, 48.0 KB for FG) fit entirely within a single 64 KB GPU constant buffer (or two for FG). This eliminates global memory fetches for model weights during hand-coded HLSL execution.
-
-### 9.5 Deployment Paths
-
-| Path                               | Platform                | GPU Vendor Support           | Maturity   | Relative Latency  | Notes                                                                                                                                                                                                 |
-| :--------------------------------- | :---------------------- | :--------------------------- | :--------- | :---------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **DirectML C++ API** (primary)     | Windows 10/11           | AMD, NVIDIA, Intel, Qualcomm | Production | Optimal           | Records into D3D12 command list directly. [github.com/microsoft/DirectML](https://github.com/microsoft/DirectML), MIT. Operator coverage verified: Conv2D, PReLU, DepthToSpace all supported.         |
-| **Native HLSL Compute** (advanced) | Windows (D3D12)         | All                          | Production | Lowest possible   | Weights in constant buffer. Fuse pre/post-processing with neural layers. Compile via DXC.                                                                                                             |
-| **ncnn Vulkan**                    | Windows, Linux, Android | All                          | Production | Good              | [github.com/Tencent/ncnn](https://github.com/Tencent/ncnn), BSD 3-Clause. PNNX export from PyTorch. Mature FP16 Vulkan compute backend. CPU dispatch overhead < 0.1 ms.                               |
-| **TensorRT** (NVIDIA fast path)    | Windows, Linux          | NVIDIA only                  | Production | Fastest on NVIDIA | [developer.nvidia.com/tensorrt](https://developer.nvidia.com/tensorrt). Proprietary. Conv+PReLU fusion. Not cross-vendor.                                                                             |
-| **ONNX Runtime DirectML EP**       | Windows                 | AMD, NVIDIA, Intel           | Production | Higher overhead   | [github.com/microsoft/onnxruntime](https://github.com/microsoft/onnxruntime). CPU session dispatch adds 0.8 to 1.5 ms overhead. Likely exceeds budget for tight loops. Better for offline evaluation. |
-
-ONNX Runtime is unsuitable for the sub-3 ms real-time target due to session dispatch overhead and D3D12 fence synchronisation cost between the game engine graphics queue and the ONNX Runtime session. Use it only for offline model validation and parity testing.
-
-**Export pipeline:**
-
-```
-PyTorch model (training)
-  ├─ Structural reparameterisation (fuse all branches offline)
-  ├─ torch.onnx.export() → model_sr.onnx / model_fg.onnx
-  │   ├─ opset_version=17
-  │   ├─ dynamic_axes for H, W (channel dims fixed)
-  │   └─ Verify numerically with onnxruntime.InferenceSession
-  ├─ DirectML: Load ONNX → DML graph compilation → IDMLCompiledOperator
-  ├─ ncnn: PNNX export (PyTorch → TorchScript → .param + .bin)
-  ├─ TensorRT: trtexec --onnx=model.onnx --fp16 --workspace=256
-  └─ Native HLSL: Extract fused FP16 weights → embed in constant buffer
-```
-
-### 9.6 Zero-Allocation Double-Buffered Memory Management
-
-All memory targets required by the SR/FG pipeline are pre-allocated during engine initialisation within a single committed memory heap (`D3D12_HEAP_TYPE_DEFAULT`). No dynamic allocation occurs during the render loop.
-
-Temporal history tracking uses a ping-pong double-buffering design. Two 1080p texture targets alternate roles: one serves as the history resource from frame $t-1$ (SRV), while the other acts as the unordered access view (UAV) write target for frame $t$. At frame completion, resource handles swap. No blit or copy operation is needed.
-
-Synchronisation between passes uses direct execution fences (`ID3D12Fence` / `VkSemaphore`), eliminating CPU sync points and driver overhead.
-
-### 9.7 Pipeline Integration (D3D12 C++)
-
-```cpp
-#pragma once
-#include <d3d12.h>
-#include <DirectML.h>
-#include <wrl/client.h>
-#include <cstdint>
-
-using Microsoft::WRL::ComPtr;
-
-struct SuperResConstants
-{
-    uint32_t LRWidth;
-    uint32_t LRHeight;
-    uint32_t HRWidth;
-    uint32_t HRHeight;
-    float JitterOffsetX;
-    float JitterOffsetY;
-    float ExposureMultiplier;
-    float InvExposureMultiplier;
-    float GammaThreshold;
-    float TemporalConfidenceDecay;
-    float JitterPhaseNorm;
-    float Padding;
-};
-
-class SuperResolutionSystem
-{
-public:
-    void Dispatch(
-        ID3D12GraphicsCommandList4* cmdList,
-        ID3D12Resource* currentLRColor,
-        ID3D12Resource* motionVectors,
-        ID3D12Resource* depthBuffer,
-        ID3D12Resource* outputHRBuffer,
-        float jitterX, float jitterY,
-        float currentExposure,
-        float jitterPhaseNorm)
-    {
-        D3D12_RESOURCE_BARRIER initialBarriers[4] = {};
-        initialBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
-            currentLRColor, D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        initialBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(
-            motionVectors, D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        initialBarriers[2] = CD3DX12_RESOURCE_BARRIER::Transition(
-            m_historyBufferPing.Get(), D3D12_RESOURCE_STATE_COMMON,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        initialBarriers[3] = CD3DX12_RESOURCE_BARRIER::Transition(
-            outputHRBuffer, D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        cmdList->ResourceBarrier(4, initialBarriers);
-
-        SuperResConstants cb = {};
-        cb.LRWidth = 640;
-        cb.LRHeight = 360;
-        cb.HRWidth = 1920;
-        cb.HRHeight = 1080;
-        cb.JitterOffsetX = jitterX;
-        cb.JitterOffsetY = jitterY;
-        cb.ExposureMultiplier = currentExposure;
-        cb.InvExposureMultiplier = 1.0f / (currentExposure > 1e-5f ? currentExposure : 1.0f);
-        cb.GammaThreshold = 1.25f;
-        cb.TemporalConfidenceDecay = 10.0f;
-        cb.JitterPhaseNorm = jitterPhaseNorm;
-
-        cmdList->SetComputeRootSignature(m_rootSignature.Get());
-        cmdList->SetComputeRoot32BitConstants(0, sizeof(SuperResConstants) / 4, &cb, 0);
-
-        // Pass 1: Pre-processing (dilation, reprojection, variance clamping)
-        cmdList->SetPipelineState(m_preProcessPSO.Get());
-        cmdList->Dispatch((640 + 7) / 8, (360 + 7) / 8, 1);
-
-        D3D12_RESOURCE_BARRIER midBarrier =
-            CD3DX12_RESOURCE_BARRIER::UAV(m_fusedInputActivationBuffer.Get());
-        cmdList->ResourceBarrier(1, &midBarrier);
-
-        // Pass 2: DirectML neural trunk
-        ID3D12DescriptorHeap* descriptorHeaps[] = { m_dmlDescriptorHeap.Get() };
-        cmdList->SetDescriptorHeaps(1, descriptorHeaps);
-        m_dmlCommandRecorder->RecordDispatch(
-            cmdList, m_dmlCompiledModel.Get(), m_dmlBindingTable.Get());
-
-        D3D12_RESOURCE_BARRIER dmlBarrier =
-            CD3DX12_RESOURCE_BARRIER::UAV(m_fusedExpandedActivationBuffer.Get());
-        cmdList->ResourceBarrier(1, &dmlBarrier);
-
-        // Pass 3: Post-processing (pixel shuffle, colour inversion)
-        cmdList->SetPipelineState(m_reconstructPSO.Get());
-        cmdList->Dispatch((640 + 7) / 8, (360 + 7) / 8, 1);
-
-        D3D12_RESOURCE_BARRIER finalBarriers[2] = {};
-        finalBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
-            outputHRBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            D3D12_RESOURCE_STATE_PRESENT);
-        finalBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(
-            m_historyBufferPing.Get(),
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_COMMON);
-        cmdList->ResourceBarrier(2, finalBarriers);
-
-        m_historyBufferPing.Swap(m_historyBufferPong);
-    }
-
-private:
-    ComPtr<ID3D12RootSignature> m_rootSignature;
-    ComPtr<ID3D12PipelineState> m_preProcessPSO;
-    ComPtr<ID3D12PipelineState> m_reconstructPSO;
-    ComPtr<ID3D12DescriptorHeap> m_dmlDescriptorHeap;
-    ComPtr<IDMLCompiledOperator> m_dmlCompiledModel;
-    ComPtr<IDMLCommandRecorder> m_dmlCommandRecorder;
-    ComPtr<IDMLBindingTable> m_dmlBindingTable;
-    ComPtr<ID3D12Resource> m_historyBufferPing;
-    ComPtr<ID3D12Resource> m_historyBufferPong;
-    ComPtr<ID3D12Resource> m_fusedInputActivationBuffer;
-    ComPtr<ID3D12Resource> m_fusedExpandedActivationBuffer;
-};
-```
-
-### 9.8 Pre-Processing Compute Shader (HLSL)
-
-```hlsl
-// PreProcessTemporal.hlsl
-// Execution: Compute Shader (8x8 Thread Group), dispatched over 640x360
-// Produces 12-channel packed FP16 input for neural SR trunk
-
-cbuffer SuperResConstants : register(b0)
-{
-    uint2  g_LRResolution;
-    uint2  g_HRResolution;
-    float2 g_JitterOffset;
-    float  g_ExposureMultiplier;
-    float  g_InvExposureMultiplier;
-    float  g_GammaThreshold;
-    float  g_TemporalConfidenceDecay;
-    float  g_JitterPhaseNorm;
-    float  g_Padding;
-};
-
-Texture2D<float4> g_CurrentColorTexture   : register(t0);
-Texture2D<float2> g_MotionVectorTexture   : register(t1);
-Texture2D<float>  g_LinearDepthTexture    : register(t2);
-Texture2D<float4> g_HistoryColorTexture   : register(t3);
-Texture2D<float>  g_HistoryDepthTexture   : register(t4);
-
-SamplerState g_LinearSampler : register(s0);
-SamplerState g_PointSampler  : register(s1);
-
-RWStructuredBuffer<float16_t> g_FusedNeuralInputBuffer : register(u0);
-
-float3 RGB_to_YCoCg(float3 c)
-{
-    return float3(
-        0.25f * c.r + 0.50f * c.g + 0.25f * c.b,
-        0.50f * c.r + 0.00f * c.g - 0.50f * c.b,
-       -0.25f * c.r + 0.50f * c.g - 0.25f * c.b
-    );
-}
-
-float3 YCoCg_to_RGB(float3 c)
-{
-    return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
-}
-
-float CompressLuminance(float y)
-{
-    return log(1.0f + max(y, 0.0f)) / (1.0f + log(1.0f + max(y, 0.0f)));
-}
-
-[numthreads(8, 8, 1)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
-{
-    if (dtid.x >= g_LRResolution.x || dtid.y >= g_LRResolution.y) return;
-
-    int2 coord = int2(dtid.xy);
-    float2 invRes = 1.0f / float2(g_LRResolution);
-    float2 centerUV = (float2(coord) + 0.5f) * invRes;
-
-    // 1. Dilated MV fetch (3x3 nearest-depth)
-    float nearestDepth = 1e8f;
-    int2 bestOff = int2(0, 0);
-    [unroll] for (int dy = -1; dy <= 1; ++dy)
-    [unroll] for (int dx = -1; dx <= 1; ++dx)
-    {
-        int2 sc = clamp(coord + int2(dx, dy), int2(0,0), int2(g_LRResolution) - 1);
-        float d = g_LinearDepthTexture.Load(int3(sc, 0)).r;
-        if (d < nearestDepth) { nearestDepth = d; bestOff = int2(dx, dy); }
-    }
-    float2 dilatedMV = g_MotionVectorTexture.Load(int3(coord + bestOff, 0)).xy;
-
-    // 2. Reprojected coordinates
-    float2 historyUV = centerUV - dilatedMV - g_JitterOffset;
-
-    // 3. Local 3x3 moments in YCoCg
-    float3 m1 = 0, m2 = 0;
-    float3 centerRGB = 0;
-    [unroll] for (int y = -1; y <= 1; ++y)
-    [unroll] for (int x = -1; x <= 1; ++x)
-    {
-        int2 sc = clamp(coord + int2(x, y), int2(0,0), int2(g_LRResolution) - 1);
-        float3 s = g_CurrentColorTexture.Load(int3(sc, 0)).rgb * g_ExposureMultiplier;
-        float3 ycocg = RGB_to_YCoCg(s);
-        if (x == 0 && y == 0) centerRGB = s;
-        m1 += ycocg; m2 += ycocg * ycocg;
-    }
-    float3 mean = m1 / 9.0f;
-    float3 stdDev = sqrt(abs(m2 / 9.0f - mean * mean));
-    float3 aabbMin = mean - g_GammaThreshold * stdDev;
-    float3 aabbMax = mean + g_GammaThreshold * stdDev;
-
-    // 4. Sample and clamp history
-    float3 rawHist = g_HistoryColorTexture.SampleLevel(g_LinearSampler, historyUV, 0).rgb
-                     * g_ExposureMultiplier;
-    float3 histYCoCg = clamp(RGB_to_YCoCg(rawHist), aabbMin, aabbMax);
-    float3 clampedHist = YCoCg_to_RGB(histYCoCg);
-
-    // 5. Disocclusion mask
-    float disoccMask = 1.0f;
-    if (historyUV.x < 0 || historyUV.x > 1 || historyUV.y < 0 || historyUV.y > 1)
-    {
-        disoccMask = 0.0f;
-        clampedHist = centerRGB;
-    }
-
-    // 6. Temporal confidence (depth-based)
-    float histDepth = g_HistoryDepthTexture.SampleLevel(g_LinearSampler, historyUV, 0).r;
-    float depthDiff = abs(nearestDepth - histDepth);
-    float temporalConf = exp(-g_TemporalConfidenceDecay * depthDiff) * disoccMask;
-
-    // 7. Normalise depth
-    float depthNorm = 1.0f / (nearestDepth + 1e-6f);
-    // Note: per-frame min/max normalisation done at CPU side; here use raw inverse
-
-    // 8. Luminance compression
-    float3 curYCoCg = RGB_to_YCoCg(centerRGB);
-    curYCoCg.x = CompressLuminance(curYCoCg.x);
-    float3 normCur = YCoCg_to_RGB(curYCoCg);
-
-    float3 hstYCoCg = RGB_to_YCoCg(clampedHist);
-    hstYCoCg.x = CompressLuminance(hstYCoCg.x);
-    float3 normHist = YCoCg_to_RGB(hstYCoCg);
-
-    // 9. Write 12-channel planar buffer [12, H, W]
-    uint si = coord.y * g_LRResolution.x + coord.x;
-    uint ps = g_LRResolution.x * g_LRResolution.y;
-
-    g_FusedNeuralInputBuffer[ 0 * ps + si] = float16_t(normCur.r);
-    g_FusedNeuralInputBuffer[ 1 * ps + si] = float16_t(normCur.g);
-    g_FusedNeuralInputBuffer[ 2 * ps + si] = float16_t(normCur.b);
-    g_FusedNeuralInputBuffer[ 3 * ps + si] = float16_t(normHist.r);
-    g_FusedNeuralInputBuffer[ 4 * ps + si] = float16_t(normHist.g);
-    g_FusedNeuralInputBuffer[ 5 * ps + si] = float16_t(normHist.b);
-    g_FusedNeuralInputBuffer[ 6 * ps + si] = float16_t(dilatedMV.x);
-    g_FusedNeuralInputBuffer[ 7 * ps + si] = float16_t(dilatedMV.y);
-    g_FusedNeuralInputBuffer[ 8 * ps + si] = float16_t(disoccMask);
-    g_FusedNeuralInputBuffer[ 9 * ps + si] = float16_t(depthNorm);
-    g_FusedNeuralInputBuffer[10 * ps + si] = float16_t(temporalConf);
-    g_FusedNeuralInputBuffer[11 * ps + si] = float16_t(g_JitterPhaseNorm);
-}
-```
-
-### 9.9 Post-Processing Reconstruction Shader (HLSL)
-
-```hlsl
-// PostProcessReconstruct.hlsl
-// Dispatched across 640x360 to output 1920x1080 (3x scaling)
-
-#define UPSCALE_FACTOR 3
-
-cbuffer SuperResConstants : register(b0)
-{
-    uint2  g_LRResolution;
-    uint2  g_HRResolution;
-    float2 g_JitterOffset;
-    float  g_ExposureMultiplier;
-    float  g_InvExposureMultiplier;
-    float  g_GammaThreshold;
-    float  g_TemporalConfidenceDecay;
-    float  g_JitterPhaseNorm;
-    float  g_Padding;
-};
-
-StructuredBuffer<float16_t> g_ExpandedActivationFeatures : register(t0);
-RWTexture2D<float4> g_FinalOutputTarget : register(u0);
-
-float3 RGB_to_YCoCg(float3 c)
-{
-    return float3(
-        0.25f * c.r + 0.50f * c.g + 0.25f * c.b,
-        0.50f * c.r + 0.00f * c.g - 0.50f * c.b,
-       -0.25f * c.r + 0.50f * c.g - 0.25f * c.b
-    );
-}
-
-float3 YCoCg_to_RGB(float3 c)
-{
-    return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
-}
-
-float DecompressLuminance(float cy)
-{
-    float y = clamp(cy, 0.0f, 0.999f);
-    return exp(y / (1.0f - y)) - 1.0f;
-}
-
-[numthreads(8, 8, 1)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
-{
-    uint2 lrCoord = dtid.xy;
-    if (lrCoord.x >= g_LRResolution.x || lrCoord.y >= g_LRResolution.y) return;
-
-    uint si = lrCoord.y * g_LRResolution.x + lrCoord.x;
-    uint ps = g_LRResolution.x * g_LRResolution.y;
-
-    float16_t rawChannels[27];
-    [unroll] for (int c = 0; c < 27; ++c)
-        rawChannels[c] = g_ExpandedActivationFeatures[c * ps + si];
-
-    [unroll] for (int dy = 0; dy < UPSCALE_FACTOR; ++dy)
-    [unroll] for (int dx = 0; dx < UPSCALE_FACTOR; ++dx)
-    {
-        uint2 hrCoord = lrCoord * UPSCALE_FACTOR + uint2(dx, dy);
-        if (hrCoord.x < g_HRResolution.x && hrCoord.y < g_HRResolution.y)
-        {
-            uint spi = dy * UPSCALE_FACTOR + dx;
-            float3 rgb;
-            rgb.r = float(rawChannels[0 * 9 + spi]);
-            rgb.g = float(rawChannels[1 * 9 + spi]);
-            rgb.b = float(rawChannels[2 * 9 + spi]);
-
-            float3 ycocg = RGB_to_YCoCg(rgb);
-            ycocg.x = DecompressLuminance(ycocg.x);
-            rgb = YCoCg_to_RGB(ycocg);
-            rgb *= g_InvExposureMultiplier;
-
-            g_FinalOutputTarget[hrCoord] = float4(max(rgb, 0.0f), 1.0f);
-        }
-    }
-}
-```
-
-## 10. Baselines
-
-| Baseline                   | Type                       | Source                                                                                                | Licence                        | Reproducible                        | Role                              |
-| :------------------------- | :------------------------- | :---------------------------------------------------------------------------------------------------- | :----------------------------- | :---------------------------------- | :-------------------------------- |
-| **FSR 3.1** (primary)      | Heuristic SR + FG          | [GPUOpen-LibrariesAndSDKs/FidelityFX-SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | MIT                            | Yes, fully open source              | Primary comparison target         |
-| **FSR 1.0** (spatial only) | Spatial filter             | Same repo                                                                                             | MIT                            | Yes                                 | Lower bound spatial reference     |
-| **Bicubic**                | Interpolation              | OpenCV / PyTorch `F.interpolate`                                                                      | BSD                            | Yes                                 | Trivial baseline                  |
-| **RIFE v4.x**              | Neural frame interpolation | [hzwer/Practical-RIFE](https://github.com/hzwer/Practical-RIFE)                                       | Non-commercial (newer weights) | Yes (weights available)             | FG quality upper bound            |
-| **IFRNet**                 | Neural frame interpolation | [ltkong218/IFRNet](https://github.com/ltkong218/IFRNet)                                               | Apache 2.0                     | Yes                                 | FG baseline (commercially usable) |
-| **BasicVSR++**             | Neural video SR            | [`ckkelvinchan/BasicVSR_PlusPlus`](https://github.com/ckkelvinchan/BasicVSR_PlusPlus)                 | Apache 2.0                     | Yes (offline only, too slow for RT) | SR quality upper bound            |
-| **ECBSR**                  | Lightweight SR             | [xindongzhang/ECBSR](https://github.com/xindongzhang/ECBSR)                                           | MIT                            | Yes                                 | Lightweight SR alternative        |
-| **Rep-TNSR v1**            | Lightweight temporal SR    | This project (existing architecture)                                                                  | Project-internal               | Yes                                 | Ablation baseline                 |
-
-BasicVSR++ and RIFE are offline quality-ceiling references. The primary latency-matched comparison is FSR 3.1 under identical input conditions and hardware.
-
-## 11. Evaluation Protocol
-
-### 11.1 Test Configurations
-
-| Config | Input Resolution | Output Resolution | Scale Factor | Frame Generation | Purpose                  |
-| :----- | :--------------- | :---------------- | :----------- | :--------------- | :----------------------- |
-| C1     | 640x360          | 1920x1080         | 3x           | No               | Primary SR evaluation    |
-| C2     | 960x540          | 1920x1080         | 2x           | No               | Medium scale SR          |
-| C3     | 1280x720         | 1920x1080         | 1.5x         | No               | Quality mode SR          |
-| C4     | 640x360          | 1920x1080         | 3x           | Yes              | Full pipeline            |
-| C5     | 1280x720         | 2560x1440         | 2x           | Yes              | Higher target resolution |
-| C6     | 1280x720         | 3840x2160         | 3x           | No               | 4K output test           |
-
-### 11.2 Test Sequences (5 Scenes, 300 Frames Each)
-
-1. **Bistro Interior**: Static camera, fine detail, specular surfaces, complex lighting.
-2. **City Chase**: Fast camera motion, many disocclusions, moving vehicles, reflections.
-3. **Forest Walk**: Alpha-tested foliage, particle effects (fireflies), subsurface scattering.
-4. **SciFi Corridor**: Emissive materials, screen-space reflections, thin geometry (cables, pipes).
-5. **Stylised Village**: Non-photorealistic rendering, flat shading, cel-shaded outlines, cartoon palette.
-
-### 11.3 Objective Metrics
-
-| Category             | Metric                      | Implementation Source                                                                                                                                                                      | Measures                                       |
-| :------------------- | :-------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------- |
-| Spatial fidelity     | PSNR (Y-channel)            | [Lightning-AI/torchmetrics](https://github.com/Lightning-AI/torchmetrics) `PeakSignalNoiseRatio` (Apache 2.0)                                                                              | Pixel-level reconstruction accuracy            |
-| Spatial fidelity     | SSIM                        | `torchmetrics.StructuralSimilarityIndexMeasure`                                                                                                                                            | Structural preservation                        |
-| Perceptual quality   | LPIPS (AlexNet)             | [richzhang/PerceptualSimilarity](https://github.com/richzhang/PerceptualSimilarity) `lpips.LPIPS(net='alex')` (BSD 2-Clause)                                                               | Learned perceptual distance                    |
-| Perceptual quality   | VMAF                        | [Netflix/vmaf](https://github.com/Netflix/vmaf) via `ffmpeg -filter_complex libvmaf` (BSD+Patent)                                                                                          | Video multi-method quality fusion              |
-| Temporal stability   | $E\_{\text{warp}}$          | Custom: GT MV warped L1, masked by valid pixels                                                                                                                                            | Temporal consistency                           |
-| Temporal stability   | tOF                         | RAFT-estimated flow comparison. RAFT: [princeton-vl/RAFT](https://github.com/princeton-vl/RAFT) (BSD 3-Clause). Reference metric code: [thunil/TecoGAN](https://github.com/thunil/TecoGAN) | Optical flow temporal fidelity                 |
-| Temporal stability   | tLP                         | LPIPS between consecutive warped frames. Reference: TecoGAN and BasicVSR++ evaluation scripts.                                                                                             | Temporal perceptual stability                  |
-| Temporal flicker     | MAFD                        | Custom: `mean(abs(I_t - I_{t-1}))` on Y-channel                                                                                                                                            | Raw flicker magnitude                          |
-| Ghosting             | Ghost ratio                 | Custom: percentage of pixels where $E\_{\text{warp}} \gt \tau$ in disoccluded regions ($\tau = 0.05$)                                                                                      | Ghosting severity                              |
-| Disocclusion quality | LPIPS (disoccluded regions) | Masked LPIPS using GT occlusion maps                                                                                                                                                       | Reconstruction quality in newly revealed areas |
-| FG motion accuracy   | EPE (End-Point Error)       | Compare estimated intermediate flow vs GT flow on Sintel                                                                                                                                   | Frame generation motion reconstruction         |
-| Latency              | GPU execution time (ms)     | D3D12 `ID3D12QueryHeap` timestamp queries / `cudaEventElapsedTime`                                                                                                                         | Per-pass and total pipeline latency            |
-| Throughput           | Effective FPS               | `1000 / total_pipeline_ms`                                                                                                                                                                 | Rendering throughput                           |
-
-**$E\_{\text{warp}}$ exact definition:**
-
-$$
-E_{\text{warp}} = \frac{1}{T-1}\sum_{t=2}^T \frac{\sum_i M_t(i) \cdot \left\| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right\|_1}{\sum_i M_t(i)}
-$$
-
-Where $M\_t$ is the valid-pixel mask (non-disoccluded region).
-
-**tOF exact definition:**
-
-$$
-\text{tOF} = \frac{1}{T-1}\sum_{t=2}^T \left\| \text{Flow}_{\text{RAFT}}(\hat{I}_t, \hat{I}_{t-1}) - \text{Flow}_{\text{RAFT}}(I_t^{\text{GT}}, I_{t-1}^{\text{GT}}) \right\|_1
-$$
-
-### 11.4 Human/Perceptual Evaluation
-
-**Protocol**: Two-alternative forced choice (2AFC).
-
-- 20 participants (balanced mix of experienced gamers and non-gamers).
-- 30 paired comparisons per participant (Ours vs FSR 3.1).
-- 5-second video clips at native playback speed, displayed at native monitor resolution.
-- Randomised left/right placement per trial, double-blind (neither participant nor experimenter knows which is which during viewing).
-- Questions per trial: "Which video has (a) better detail? (b) smoother motion? (c) fewer artefacts?"
-- Analysis: preference rate $\pm$ 95% CI, Bradley-Terry model scores for overall ranking.
-
-**Minimum significance**: preference rate > 60% on a one-sided binomial test, $p \lt 0.05$.
-
-### 11.5 Generalisation Tests
-
-| Test                | Condition                                                                               | Pass Criterion                                                                 |
-| :------------------ | :-------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
-| Unseen game content | 3 held-out UE5 scenes                                                                   | LPIPS degradation < 15% relative to training-distribution content              |
-| Unseen engine       | 2 Unity HDRP scenes                                                                     | LPIPS degradation < 15%                                                        |
-| Unseen art style    | Cartoon/cel-shaded, photorealistic, pixel art                                           | LPIPS degradation < 20% (wider tolerance for extreme style shift)              |
-| Unseen resolution   | 4K output (not trained at 4K)                                                           | PSNR degradation < 1.0 dB                                                      |
-| Cross-GPU           | GTX 1650, RTX 3060, RTX 4070, RX 6700 XT, RX 7800 XT, Arc A770                          | Latency within budget per GPU tier, output bit-identical within FP16 tolerance |
-| Degraded inputs     | Missing MV (zero-filled), noisy depth ($\pm 5\%$ Gaussian), wrong exposure ($\pm 1$ EV) | Graceful degradation, no NaN/corruption, PSNR drop < 3 dB                      |
-
-### 11.6 Statistical Significance and Confidence Intervals
-
-- Report: mean $\pm$ standard deviation across test sequences for all metrics.
-- Paired t-test (or Wilcoxon signed-rank test if normality assumption fails via Shapiro-Wilk) for each metric comparing Ours vs FSR 3.1.
-- Bonferroni correction for multiple comparisons (13 metrics $\Rightarrow$ corrected $\alpha = 0.05 / 13 \approx 0.0038$).
-- 95% confidence intervals for all reported metric differences.
-- Effect size: Cohen's $d$ for primary comparisons.
-- Minimum sample: 5 test scenes $\times$ 300 frames = 1,500 frame-level measurements per metric.
-
-## 12. Ablation Matrix
-
-### 12.1 Architecture Ablations (SR)
-
-| ID  | Ablation            | Variants                                            | Expected Insight                                         |
-| :-- | :------------------ | :-------------------------------------------------- | :------------------------------------------------------- |
-| A1  | Channel width       | 16 / 20 / 24 / 32                                   | Quality vs latency Pareto frontier                       |
-| A2  | Block count         | 3 / 4 / 5 / 6 / 8                                   | Depth vs compute tradeoff                                |
-| A3  | Edge operators      | With vs without Sobel/Laplacian branches            | Contribution of differential operators to edge sharpness |
-| A4  | Input channels      | 9ch (v1) vs 12ch (v2: +depth, +confidence, +jitter) | Marginal value of additional input signals               |
-| A5  | Activation function | PReLU vs ReLU vs GELU vs SiLU                       | Activation choice impact on quality and inference speed  |
-| A6  | Upsampling init     | Random init vs ICNR PixelShuffle init               | Checkerboard artefact reduction                          |
-
-### 12.2 Architecture Ablations (FG)
-
-| ID  | Ablation              | Variants                                                      | Expected Insight                         |
-| :-- | :-------------------- | :------------------------------------------------------------ | :--------------------------------------- |
-| B1  | Processing resolution | 2x / 4x / 8x downsample                                       | Resolution vs quality tradeoff           |
-| B2  | Flow refinement       | Single-scale vs 2-level multi-scale pyramid                   | Large motion handling capability         |
-| B3  | Engine MV usage       | With engine MVs vs optical-flow-only                          | Value of engine geometric motion vectors |
-| B4  | Occlusion method      | Learned sigmoid weights vs forward-backward consistency check | Disocclusion quality                     |
-
-### 12.3 Loss Ablations
-
-| ID  | Configuration            | Losses Active                                                                                                                        |
-| :-- | :----------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
-| C1  | Charbonnier only         | $\mathcal{L}\_{\text{char}}$                                                                                                         |
-| C2  | + Edge                   | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}}$                                                                            |
-| C3  | + Perceptual             | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}} + \mathcal{L}\_{\text{perc}}$                                               |
-| C4  | + Temporal               | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}} + \mathcal{L}\_{\text{perc}} + \mathcal{L}\_{\text{temp}}$                  |
-| C5  | + Frequency (full)       | All 5 losses (proposed configuration)                                                                                                |
-| C6  | L1 replacing Charbonnier | $\mathcal{L}\_1 + \mathcal{L}\_{\text{edge}} + \mathcal{L}\_{\text{perc}} + \mathcal{L}\_{\text{temp}} + \mathcal{L}\_{\text{freq}}$ |
-| C7  | LPIPS as training loss   | Replace VGG perceptual with LPIPS                                                                                                    |
-
-### 12.4 Data Ablations
-
-| ID  | Configuration                                                           | Purpose                                           |
-| :-- | :---------------------------------------------------------------------- | :------------------------------------------------ |
-| D1  | UE5 data only (12 scenes)                                               | Baseline data quality                             |
-| D2  | UE5 + Sintel + TartanAir                                                | Cross-domain diversity impact                     |
-| D3  | Native LR renders vs bicubic-downsampled HR                             | Importance of realistic aliasing in training data |
-| D4  | With vs without degradation augmentation (MV noise, depth quantisation) | Robustness impact of degradation simulation       |
-| D5  | 6 scenes vs 12 scenes                                                   | Data scale requirements                           |
-
-### 12.5 Training Strategy Ablations
-
-| ID  | Configuration                                   | Purpose                   |
-| :-- | :---------------------------------------------- | :------------------------ |
-| E1  | No curriculum (all losses from iteration 0)     | Value of phased training  |
-| E2  | Curriculum (proposed 3-phase)                   | Proposed approach         |
-| E3  | Larger patches (128x128 LR) throughout          | Patch context size impact |
-| E4  | Adam vs AdamW vs SGD with momentum              | Optimiser comparison      |
-| E5  | Cosine annealing vs step decay vs warm restarts | Schedule comparison       |
-
-**Total ablations: ~30 experiments.** Each ~20 hours on 4x RTX 4090. Total ablation compute: ~600 GPU-hours.
-
-## 13. Failure Modes and Mitigation Strategies
-
-| Failure Mode                          | Root Cause                                                | Detection Method                                         | Mitigation Strategy                                                                                                                |
-| :------------------------------------ | :-------------------------------------------------------- | :------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
-| **Ghosting on fast motion**           | History clamping AABB too permissive                      | High $E\_{\text{warp}}$ in motion regions                | Tighten $\gamma$ (1.25 $\to$ 1.0); increase disocclusion mask sensitivity ($\alpha$ 10 $\to$ 15)                                   |
-| **Checkerboard artefacts**            | PixelShuffle random initialisation bias                   | Visual inspection of HR output at pixel level            | ICNR weight initialisation for final conv layer (ref: [ablation A6])                                                               |
-| **Temporal flicker on thin geometry** | Aliased LR input below Nyquist sampling frequency         | MAFD spikes on wire/fence test sequences                 | Increase jitter phase count $K$; add anti-flicker temporal post-filter                                                             |
-| **FG double-image on fast rotation**  | Optical flow quarter-resolution search range exceeded     | EPE > threshold on fast-rotation validation sequences    | Multi-scale pyramid refinement (2 levels) [ablation B2]; scene-cut detection bypass                                                |
-| **HUD/UI distortion in FG**           | UI composited before FG pass warps static elements        | Visual inspection with UI-heavy scenes                   | Enforce UI separation: separate overlay texture composited AFTER FG                                                                |
-| **Particle/transparency smearing**    | Missing MV for non-depth-writing geometry                 | Reactive mask coverage analysis on particle-heavy scenes | Train with reactive-mask-aware loss weighting (zero temporal loss in masked regions); fall back to current frame in masked regions |
-| **Colour shift in HDR scenes**        | Luminance compression roundtrip numerical error           | PSNR drop > 1 dB on HDR-bright test regions              | Higher precision $\epsilon$ in compress/decompress; FP32 for compress/decompress path                                              |
-| **Generalisation failure**            | Training data distribution mismatch with target game      | LPIPS degradation > 15% on held-out test set             | Expand training data diversity (more scenes, more engines); add style augmentation (colour transfer, contrast randomisation)       |
-| **NaN propagation in FP16**           | Unbounded input values exceeding FP16 range ($\pm 65504$) | Runtime NaN check on output tensor                       | Clamp all inputs to FP16 safe range before neural trunk; use FP32 for warp grid coordinates in FG                                  |
-| **Memory bandwidth saturation**       | Too many intermediate buffer reads/writes per frame       | GPU profiler memory utilisation > 90%                    | Fuse pre/post-processing with first/last neural layers in HLSL; eliminate intermediate buffer roundtrips                           |
-
-## 14. Claims for Meaningful Superiority over FSR 3.1
-
-The following claims, if supported by experimental evidence meeting the statistical requirements in Section 11.6, would constitute meaningful and defensible superiority:
-
-1. **Spatial quality**: PSNR improvement $\geq$ 1.5 dB AND LPIPS improvement $\geq$ 20% averaged across all 5 test scenes at Quality mode (67% scale), with $p \lt 0.01$ on paired test.
-
-2. **Temporal stability**: $E\_{\text{warp}}$ reduction $\geq$ 25% AND tOF reduction $\geq$ 20% averaged across all dynamic test scenes (City Chase, Forest Walk, SciFi Corridor), with $p \lt 0.01$.
-
-3. **Frame generation quality**: Interpolated frame PSNR improvement $\geq$ 2.0 dB AND LPIPS improvement $\geq$ 25% vs FSR 3.1 FG, with $p \lt 0.01$.
-
-4. **Latency parity**: Total pipeline latency within 120% of FSR 3.1 on the same hardware (allowing up to 20% overhead for neural inference cost).
-
-5. **Generalisation**: Quality metrics degrade by < 15% (relative LPIPS) on held-out unseen game content compared to training-distribution content.
-
-6. **Human preference**: $\geq$ 60% preference rate in 2AFC study with $\geq$ 20 participants, $p \lt 0.05$ (one-sided binomial).
-
-## 15. Reproducibility Checklist and Experiment Tracking
-
-### 15.1 Reproducibility Checklist
-
-- [ ] All random seeds fixed and documented (Python `random.seed(42)`, NumPy `np.random.seed(42)`, PyTorch `torch.manual_seed(42)`, CUDA `torch.cuda.manual_seed_all(42)`).
-- [ ] `CUBLAS_WORKSPACE_CONFIG=:16:8` set for deterministic cuBLAS operations.
-- [ ] Exact package versions pinned in `requirements.txt` (PyTorch, torchvision, lpips, torchmetrics, omegaconf, wandb, OpenEXR).
-- [ ] Dataset download scripts automated with SHA-256 checksum verification.
-- [ ] Training command reproducible with a single `torchrun` invocation and config file.
-- [ ] Checkpoint saves full state: model, optimiser, scheduler, AMP scaler, all RNG states, iteration counter, best metric.
-- [ ] Evaluation scripts produce deterministic results given identical model checkpoint and test data.
-- [ ] All metrics computed using specified library versions (not custom reimplementations unless documented).
-- [ ] Hardware specifications logged: GPU model, driver version, CUDA version, PyTorch version.
-- [ ] Git commit hash logged with each experiment run.
-
-### 15.2 Experiment Tracking Schema
-
-```yaml
-experiment:
-  id: "exp_YYYYMMDD_HHMMSS_{short_hash}"
-  git_commit: "abc123def456"
-  config_hash: "sha256:..."
-  config_path: "configs/sr_ultra.yaml"
-  hardware:
-    gpus: ["NVIDIA RTX 4090 x4"]
-    driver: "560.35.03"
-    cuda: "12.4"
-    pytorch: "2.4.0"
-    os: "Ubuntu 22.04"
-  training:
-    dataset: "ue5_12scene_v2"
-    model_variant: "sr_ultra_24ch_6blk"
-    total_iterations: 500000
-    batch_size_per_gpu: 16
-    effective_batch_size: 64
-    lr_initial: 5e-4
-    loss_config: "full_5loss_curriculum"
-    wall_clock_hours: 20.5
-    gpu_hours: 82.0
-  validation: # best validation result
-    iteration: 420000
-    psnr: 35.2
-    ssim: 0.953
-    lpips: 0.062
-    checkpoint: "ckpt_iter_420000.pth"
-  test: # final test set evaluation
-    psnr_mean: 35.1
-    psnr_std: 1.2
-    ssim_mean: 0.952
-    lpips_mean: 0.063
-    lpips_std: 0.008
-    ewarp_mean: 0.00178
-    tof_mean: 0.00285
-    vmaf_mean: 87.3
-    latency_p95_ms: 1.35
-```
-
-**Tracking tool**: [Weights & Biases](https://wandb.ai/) (free tier for personal/academic) or [MLflow](https://github.com/mlflow/mlflow) (Apache 2.0, self-hosted). W&B preferred for experiment comparison dashboards.
-
-## 16. Project Directory Structure
-
-```
+Twelve UE5 environments are captured with the pipeline in section 6. Scene roles are fixed in advance so that held-out scenes never enter training.
+
+| Role                        | Scenes                                                                                                 |
+| :-------------------------- | :----------------------------------------------------------------------------------------------------- |
+| Training and validation (9) | Bistro, Sun Temple, Valley, City Park, SciFi Corridor, Medieval, Stylised Forest, Industrial, Interior |
+| Held-out UE5 scenes (3)     | Desert Landscape, Underwater Reef, Cartoon Village                                                     |
+| Held-out engine (2)         | Unity HDRP Urban Street, Unity HDRP Architectural Interior                                             |
+| Direct FSR comparison       | FidelityFX SDK Bistro sample, frames dumped with RenderDoc                                             |
+
+Storage estimate: 12 scenes x 10,800 frames x about 2 MB per frame is about 260 GB raw, and about 80 GB of cached training patches.
+
+### 5.5 External Datasets (Priority 3)
+
+| Dataset                                                               | Content                                                          | Use                        |
+| :-------------------------------------------------------------------- | :--------------------------------------------------------------- | :------------------------- |
+| [ExtraSS](https://github.com/NJU-3DV/ExtraSS)                         | Rendered sequences with G-buffers, jitter and disocclusion masks | Academic cross-validation  |
+| [VIPER / Playing for Benchmarks](https://playing-for-benchmarks.org/) | GTA V sequences with flow and depth                              | Gaming generalisation      |
+| [TartanAir](https://theairlab.org/tartanair-dataset/)                 | Synthetic UE4 sequences with flow, depth and camera poses        | Data-diversity ablation D2 |
+
+### 5.6 Held-Out Test Sets
+
+Never used for training or model selection: the 3 held-out UE5 scenes, the 2 Unity HDRP scenes, the FidelityFX SDK Bistro sequence, Vid4, and the SR benchmarks (Set5, Set14, B100, Urban100, Manga109).
+
+### 5.7 Licences and Commercial Use
+
+Licences must be confirmed on each source page before any release. The table records what is known and the resulting policy.
+
+| Data                              | Licence as known                                                                                            | Commercial weights                        | Policy                                                        |
+| :-------------------------------- | :---------------------------------------------------------------------------------------------------------- | :---------------------------------------- | :------------------------------------------------------------ |
+| Custom UE5 captures               | Project-owned renders under the UE EULA                                                                     | Yes                                       | Primary commercial training data                              |
+| REDS                              | CC BY 4.0                                                                                                   | Yes, with attribution                     | Allowed                                                       |
+| MPI Sintel                        | Max Planck "PS:License 1.0" ([source](https://is.mpg.de/code/sintel-optical-flow-dataset)), not plain CC BY | Not until the licence terms are confirmed | Research only for now                                         |
+| Vimeo-90K                         | Release code under MIT ([toflow](https://github.com/anchen1011/toflow)); source videos carry no licence     | No                                        | Research and prototyping only                                 |
+| DIV2K, DF2K-OST, Flickr2K, RealSR | Academic use; Flickr2K images have mixed Flickr licences                                                    | No                                        | Research only                                                 |
+| FlyingChairs                      | Research use                                                                                                | No                                        | Pre-training experiments only; excluded from released weights |
+| Vid4, SR benchmarks               | Unclear or mixed                                                                                            | No                                        | Evaluation only                                               |
+
+Released commercial weights are trained only on custom UE5 captures, REDS and any dataset whose licence has been confirmed to allow it.
+
+## 6. Synthetic Data Capture (UE5)
+
+Capture runs through an [UnrealCV](https://unrealcv.org/) plugin or a custom capture actor. For every frame:
+
+- Inject sub-pixel jitter: take the Halton(2,3) point at index (t mod K) + 1, subtract 0.5, divide by the LR width and height, and add twice that offset to the projection matrix's third column. K = 9 phases for 3x, 8 for 2x.
+- Render LR colour point-sampled with no TAA or post-processing, and the HR reference with 16x supersampling (2x2 spatial and 4x temporal).
+- Export backward motion vectors (`R16G16_FLOAT`), forward motion vectors (needed for exact temporal-reversal augmentation), linear depth (`R32_FLOAT`), world normals and roughness, the auto-exposure value, and a JSON record of jitter offset, phase and camera matrices.
+- Compute ground-truth disocclusion by warping the previous depth with the motion vectors and marking pixels whose depth disagrees by more than 1 percent, or whose source falls outside the screen.
+- Export a reactive mask for particles, transparency and reflections, following the FSR 3.1 convention, and render UI to a separate overlay that never enters training.
+- For frame generation, re-render the middle frame t-0.5 by interpolating the camera and animation state, with its motion vectors.
+
+Each scene's camera paths cover static camera motion, skinned characters and vehicles, particles (fire, smoke, rain), alpha-tested foliage and fences, glass and water, dynamic lighting, screen-space and ray-traced reflections, and hard cuts.
+
+## 7. Preprocessing, Augmentation and Storage
+
+### 7.1 Preprocessing
+
+1. Multiply linear HDR colour by the engine exposure.
+2. Convert RGB to YCoCg (coefficients below). Compress luma with the reversible logarithmic curve used in v1: the log of one plus luma, divided by one plus that log. The curve maps [0, infinity) to [0, 1). Divide Co and Cg by the same denominator to keep chroma ratios in bright highlights. Convert back to RGB for the network.
+3. Normalise motion vectors by the LR width and height.
+4. Encode depth as inverse depth, normalised per frame to [0, 1].
+5. Encode the jitter phase as phase / K.
+6. Clamp every input to the FP16 safe range before the network.
+
+| RGB to YCoCg |   R   |  G   |   B   |
+| :----------- | :---: | :--: | :---: |
+| Y            | 0.25  | 0.50 | 0.25  |
+| Co           | 0.50  |  0   | -0.50 |
+| Cg           | -0.25 | 0.50 | -0.25 |
+
+| YCoCg to RGB |  Y  | Co  | Cg  |
+| :----------- | :-: | :-: | :-: |
+| R            |  1  |  1  | -1  |
+| G            |  1  |  0  |  1  |
+| B            |  1  | -1  | -1  |
+
+The post-processing pass restores luma with the exact inverse of the compression curve.
+
+### 7.2 Augmentation
+
+| Augmentation                   | Probability | Detail                                                                                             |
+| :----------------------------- | :---------- | :------------------------------------------------------------------------------------------------- |
+| Horizontal flip                | 0.5         | Negate MV x                                                                                        |
+| Vertical flip                  | 0.5         | Negate MV y                                                                                        |
+| 90, 180 or 270 degree rotation | 0.5         | Rotate the MV field and its components                                                             |
+| Random crop                    | 1.0         | 64x64 LR (192x192 HR at 3x); MVs, depth and masks cropped alike                                    |
+| Temporal reversal              | 0.3         | Swap frame order and use the exported forward MVs (negating backward MVs is only an approximation) |
+| Brightness jitter              | 0.2         | Multiply by a factor in [0.9, 1.1]                                                                 |
+| MV noise                       | 0.3         | Gaussian, sigma 0.3 px                                                                             |
+| Depth quantisation             | 0.1         | Reduce to 16-bit precision                                                                         |
+| Exposure walk                  | 0.1         | Random walk within 0.3 EV                                                                          |
+
+### 7.3 Storage
+
+Raw frames are half-float OpenEXR files, one folder per scene, sequence and frame. Training uses pre-cropped FP16 patch caches (memory-mapped, NCHW) generated offline. The DataLoader uses pinned memory, persistent workers and prefetching.
+
+## 8. Model Architecture
+
+### 8.1 Two Decoupled Networks
+
+SR and FG are separate networks with no shared backbone:
+
+1. **Different queues.** SR is on the critical path of the graphics queue, before post-processing and UI. FG can run on an asynchronous compute queue, overlapping the next frame's G-buffer pass.
+2. **Different domains.** SR works at LR resolution; FG must see display-resolution frames to avoid blurring detail.
+3. **Different temporal structure.** SR accumulates history over many frames; FG combines exactly two anchor frames.
+4. Separate networks can be ablated, shipped and mixed with other upscalers independently, as FSR 3.1 allows.
+
+Presentation order with FG: the interpolated frame t-0.5 is presented first, then frame t, at half the base frame interval. FG is disabled automatically when the base frame time exceeds 25 ms (below 40 FPS), where linear motion assumptions fail and latency grows.
+
+### 8.2 Rep-TNSR v2 (Super-Resolution)
+
+**Block.** During training, each block sums six parallel linear branches and applies PReLU. The branches are a 3x3 convolution, a 1x1 convolution, an identity (when input and output widths match), and fixed Sobel-x, Sobel-y and Laplacian filters, each applied per channel and followed by a learnable 1x1 projection. This follows ECBSR ([xindongzhang/ECBSR](https://github.com/xindongzhang/ECBSR), MIT). Because every branch is linear, each block folds offline into a single 3x3 convolution and bias. Applying the fixed filters before the 1x1 projection keeps the fold exact, including at padded borders. The deployed network is a plain chain of 3x3 convolutions.
+
+**Network.** N blocks at LR resolution, then a 3x3 projection to three channels per output sub-pixel (27 at 3x) and a pixel shuffle (depth-to-space) to HR. The current colour is repeated once per sub-pixel and added before the shuffle (nearest-neighbour residual, as in ECBSR), so the network learns only the correction. This add can be folded into the post-processing shader.
+
+**Input tensor (12 channels at LR resolution).**
+
+| Channels | Content                                                       |
+| :------- | :------------------------------------------------------------ |
+| 0 to 2   | Current colour, compressed                                    |
+| 3 to 5   | Reprojected, variance-clamped history colour                  |
+| 6, 7     | Dilated motion vectors, normalised                            |
+| 8        | Disocclusion validity mask                                    |
+| 9        | Linear depth, normalised                                      |
+| 10       | Temporal confidence (exponential decay of depth disagreement) |
+| 11       | Jitter phase / K                                              |
+
+Channels 9 to 11 are new relative to v1, which used 9 channels. A reactive-mask channel is evaluated as ablation SA4b.
+
+**Tiers** (fused parameters including PReLU slopes; cost per 640x360 input at 3x; latency estimates use the 65 percent assumption of section 4 and cover the trunk only):
+
+| Tier                              | Blocks | Width | Params | GMAC | GFLOP | GTX 1650M estimate         | RTX 3060 estimate                |
+| :-------------------------------- | :----- | :---- | :----- | :--- | :---- | :------------------------- | :------------------------------- |
+| v1 (existing, 9-channel input)    | 4      | 20    | 17,467 | 3.98 | 7.96  | 2.26 ms (measured 2.15 ms) | 0.96 ms                          |
+| Performance                       | 4      | 16    | 12,683 | 2.89 | 5.77  | 1.64 ms                    | 0.70 ms                          |
+| Quality                           | 4      | 20    | 18,007 | 4.11 | 8.21  | 2.33 ms                    | 0.99 ms                          |
+| Ultra                             | 6      | 24    | 34,659 | 7.91 | 15.83 | 4.48 ms (over budget)      | 1.91 ms (over the 1.5 ms target) |
+| Ultra, RGB only (Kaggle notebook) | 6      | 24    | 32,715 | 7.47 | 14.93 | not a deployment target    | not a deployment target          |
+
+Consequences: Performance and Quality fit the GTX 1650 Mobile 3 ms budget. Quality is the primary candidate for the RTX 3060 latency claim. Ultra meets it only if DirectML meta-commands put the convolutions on tensor cores, which is still to be measured.
+
+Ultra parameter breakdown: first block 12 x 24 x 9 + 24 = 2,616; five 24-to-24 blocks 5 x (24 x 24 x 9 + 24) = 26,040; projection 24 x 27 x 9 + 27 = 5,859; PReLU 6 x 24 = 144; total 34,659. Cost: 34,344 multiply-accumulates per LR pixel, times 230,400 pixels at 640x360, is 7.91 GMAC.
+
+### 8.3 NeuralFG (Frame Generation)
+
+**Input** (display resolution): frames t-1 and t (6 channels), plus in the engine build the motion vectors from t-1 to t (2) and depth at t-1 and t (2), for 10 channels.
+
+**Network.**
+
+1. Average-pool the input by 4.
+2. Apply three 3x3 convolutions of 32 channels with LeakyReLU(0.2), then a 3x3 head with 9 outputs: flow from t-0.5 to t-1, flow from t-0.5 to t, two blend logits, and an RGB residual.
+3. Upsample bilinearly to full resolution and scale the flows by 4 into full-resolution pixels.
+4. Backward-warp both frames with the flows, in FP32.
+5. Blend the warped frames with softmax-normalised weights (a convex combination) and add the residual.
+6. Zero-initialise the head, so training starts from the plain frame average.
+
+| Variant                                      | Params | Cost at 1080p (convolutions at 480x270)                                                                   |
+| :------------------------------------------- | :----- | :-------------------------------------------------------------------------------------------------------- |
+| Engine build, 10-channel input               | 24,009 | 3.10 GMAC (6.2 GFLOP), about 0.75 ms on RTX 3060 at 65 percent, plus bandwidth-bound warping and blending |
+| RGB build, 6-channel input (Kaggle notebook) | 22,857 | 2.95 GMAC                                                                                                 |
+
+**Alternative design for ablation FA5 (engine-guided splatting).** Forward-splat half the engine motion vectors to t-0.5 with an atomic depth test, then let a small reparameterised trunk predict a blend map and a residual. This avoids learned flow where engine vectors are reliable, but a 24-channel, 4-stage trunk at full 1080p costs about 39 GMAC, far over budget. It would have to run at half or quarter resolution, and its cost must be fixed before it is compared.
+
+### 8.4 Temporal State
+
+Neither network holds a recurrent hidden state. For SR, temporal information enters through the reprojected, variance-clamped history buffer, managed by ping-pong buffers outside the network, as in v1 and FSR 3.1. FG is stateless per interpolation. Reasons: state is fragile across cuts, resolution changes, frame drops and pause or resume; external history management is proven in production; and recurrent operators complicate ONNX and DirectML export. A learned recurrent aggregator is kept only as a later ablation (SA7).
+
+## 9. Loss Functions
+
+### 9.1 Super-Resolution
+
+| Term        | Definition                                                                                                               | Notes                                                                                                  |
+| :---------- | :----------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
+| Charbonnier | Mean of the square root of (error squared + epsilon squared), epsilon = 1e-3                                             | Smooth L1 with a non-zero gradient at zero error                                                       |
+| Edge        | Mean L1 difference of central-difference gradients in x and y between output and ground truth                            | Preserves sharp structure                                                                              |
+| Perceptual  | Mean squared difference of frozen VGG-19 activations at `relu3_3` (`torchvision` `features[:16]`)                        | Index 14 is `conv3_3`, 15 is `relu3_3`                                                                 |
+| Temporal    | Mean L1 difference between the current output and the previous output warped by the motion vectors, weighted by validity | Validity is zero at disocclusions and elsewhere decays exponentially with depth disagreement (rate 10) |
+| Frequency   | Mean L1 difference between the 2D FFT magnitudes of output and ground-truth luma                                         | Keeps fine texture                                                                                     |
+
+Loss weights by curriculum phase:
+
+| Phase                          | Iterations   | Charbonnier | Edge | Perceptual | Temporal | Frequency |
+| :----------------------------- | :----------- | :---------- | :--- | :--------- | :------- | :-------- |
+| 1. Spatial warm-up             | 0 to 100K    | 1.0         | 0.3  | 0          | 0        | 0         |
+| 2. Temporal integration        | 100K to 300K | 1.0         | 0.5  | 0.05       | 0.25     | 0.1       |
+| 3. Fine-tuning, larger patches | 300K to 500K | 1.0         | 0.5  | 0.05       | 0.25     | 0.1       |
+
+A differentiable FLIP term ([NVlabs/flip](https://github.com/NVlabs/flip)) is evaluated as ablation L8 rather than added by default.
+
+### 9.2 Frame Generation
+
+Charbonnier (weight 1.0) against the rendered middle frame, VGG-19 `relu3_3` perceptual loss (0.05), and a 7x7 soft ternary census loss (0.5). The census transform compares each pixel with its 7x7 neighbourhood on luma and passes each difference through a smooth sign function. Two transforms are compared with a saturating squared distance averaged over the window, using RIFE's constants of 0.81 and 0.1. Because only local orderings matter, the loss is robust to brightness changes between frames.
+
+### 9.3 What the Kaggle Notebooks Use
+
+SR: Charbonnier + 0.3 x edge (phase 1, single frame, no G-buffers). FG: Charbonnier + 0.5 x census. The VGG term is omitted because the notebooks run offline and torchvision's VGG weights must be downloaded.
+
+## 10. Training and Runtime Pipeline
+
+### 10.1 Training Configuration
+
+| Item            | Setting                                                                                                                       |
+| :-------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| Curriculum      | Phase 1: 64x64 LR patches, single frame. Phase 2: 64x64, frame pairs. Phase 3: 96x96, frame pairs.                            |
+| Optimiser       | AdamW, learning rate 5e-4, betas (0.9, 0.999), weight decay 1e-4, gradient clipping at 1.0                                    |
+| Schedule        | Cosine decay to 1e-6 over 500K iterations (SR) or 300K (FG), with a short warm-up                                             |
+| Precision       | FP16 autocast with dynamic loss scaling; FP32 for warp coordinates and losses                                                 |
+| Parallelism     | PyTorch DistributedDataParallel, one process per GPU, `find_unused_parameters=False`                                          |
+| Batch           | 16 frame pairs per GPU (workstation); probed per GPU on Kaggle                                                                |
+| Weights         | EMA of parameters (decay 0.999) used for validation and export                                                                |
+| Checkpoints     | Every 10K iterations and on best validation: model, optimiser, scheduler, scaler, EMA, all RNG states, iteration, best metric |
+| Reproducibility | Fixed seeds (42), `CUBLAS_WORKSPACE_CONFIG=:16:8` and deterministic algorithms for final runs                                 |
+
+Compute planning estimate: SR about 20 hours on 4 GPUs of the RTX 4090 class (about 80 GPU-hours); FG about 14 hours (about 56 GPU-hours); ablations at 200K iterations on one GPU, about 20 GPU-hours each.
+
+### 10.2 Runtime Passes (per frame, 1080p output)
+
+1. **Pre-processing compute shader (LR resolution).** Dilate depth and motion vectors (nearest depth in 3x3), reproject the history, convert to YCoCg and compress luma, clamp history to the 3x3 neighbourhood mean plus or minus 1.25 standard deviations, compute disocclusion and temporal confidence, and pack the 12-channel FP16 input.
+2. **SR trunk.** A DirectML compiled graph, or hand-written HLSL with weights in constant buffers.
+3. **Post-processing compute shader.** Pixel shuffle, YCoCg to RGB, luma decompression, inverse exposure, write the HR output and update the history.
+4. **Frame generation (optional, asynchronous compute queue).** Pool, flow, warp, blend; output t-0.5.
+5. **Present.** UI is composited last, onto both real and generated frames.
+
+Scene cuts: a tile-based colour histogram difference between frames resets history (SR runs in spatial-only mode for that frame) and bypasses FG.
+
+### 10.3 Memory Budget (1080p output from 640x360)
+
+| Resource                  | Format                              | Size        |
+| :------------------------ | :---------------------------------- | :---------- |
+| History ping and pong     | 2 x `R16G16B16A16_FLOAT`, 1920x1080 | 33.18 MB    |
+| LR colour                 | `R16G16B16A16_FLOAT`, 640x360       | 1.84 MB     |
+| Dilated motion vectors    | `R16G16_FLOAT`, 640x360             | 0.92 MB     |
+| Depth                     | `R32_FLOAT`, 640x360                | 0.92 MB     |
+| SR input                  | 12 channels FP16, 640x360           | 5.53 MB     |
+| SR activations, ping-pong | 2 x 24 channels FP16, 640x360       | 22.12 MB    |
+| SR projection output      | 27 channels FP16, 640x360           | 12.44 MB    |
+| FG activations, ping-pong | 2 x 32 channels FP16, 480x270       | 16.59 MB    |
+| SR and FG weights         | FP16                                | 0.12 MB     |
+| **Total**                 |                                     | **93.7 MB** |
+
+This is within the 100 MB criterion but above the earlier 61 MB estimate, which counted one SR activation buffer and omitted the projection output. Storing history as `R11G11B10_FLOAT` would save 16.6 MB (to about 77 MB) if quality allows. FG reads the HR frames through shader resource views, without copies.
+
+Weights: SR Ultra is 34,659 x 2 bytes = 67.7 KiB, which needs two 64 KiB constant buffers in the HLSL path. FG is 24,009 x 2 bytes = 46.9 KiB and fits in one.
+
+### 10.4 Deployment Paths
+
+| Path                                                                 | Platforms               | Vendors                      | Notes                                                                                                                      |
+| :------------------------------------------------------------------- | :---------------------- | :--------------------------- | :------------------------------------------------------------------------------------------------------------------------- |
+| [DirectML](https://github.com/microsoft/DirectML) (primary)          | Windows                 | AMD, NVIDIA, Intel, Qualcomm | Records into the engine's D3D12 command list; Conv, PReLU and DepthToSpace supported                                       |
+| Native HLSL compute (advanced)                                       | Windows D3D12           | All                          | Weights in constant buffers; pre- and post-processing fused with the first and last layers; DXC with `-enable-16bit-types` |
+| [ncnn](https://github.com/Tencent/ncnn) Vulkan                       | Windows, Linux, Android | All                          | Export through PNNX; mature FP16 Vulkan backend                                                                            |
+| TensorRT                                                             | Windows, Linux          | NVIDIA only                  | Fastest NVIDIA path; not cross-vendor                                                                                      |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) DirectML EP | Windows                 | AMD, NVIDIA, Intel           | Session dispatch and cross-queue synchronisation overhead; use for offline validation and parity tests only                |
+
+Export flow: fuse the branches, export ONNX (opset 17, dynamic height and width), check parity in ONNX Runtime, then compile for DirectML, export ncnn through PNNX, build a TensorRT engine with FP16, or extract FP16 weights for HLSL. Opset 17 includes `GridSample`, needed for FG.
+
+All pipeline resources are allocated once in a committed default heap at initialisation. History buffers swap roles each frame without copies, and passes are synchronised with fences or semaphores only.
+
+## 11. Baselines
+
+| Baseline                                                        | Type                      | Licence                      | Role                                           |
+| :-------------------------------------------------------------- | :------------------------ | :--------------------------- | :--------------------------------------------- |
+| FSR 3.1 (primary)                                               | Heuristic SR + FG         | MIT                          | Primary comparison at equal scale and hardware |
+| FSR 1.0                                                         | Spatial upscaler          | MIT                          | Lower-bound spatial reference                  |
+| Bicubic                                                         | Interpolation             | n/a                          | Trivial baseline                               |
+| XeSS 1.3 (DP4a path)                                            | Neural SR, closed weights | SDK Apache 2.0               | Cross-vendor neural reference                  |
+| DLSS 3.x                                                        | Neural SR + FG, closed    | Proprietary                  | Quality ceiling reference on RTX 40 only       |
+| [RIFE](https://github.com/hzwer/Practical-RIFE) v4.x            | Neural interpolation      | Newer weights non-commercial | FG quality ceiling                             |
+| [IFRNet](https://github.com/ltkong218/IFRNet)                   | Neural interpolation      | Apache 2.0                   | Commercially usable FG baseline                |
+| [BasicVSR++](https://github.com/ckkelvinchan/BasicVSR_PlusPlus) | Neural video SR           | Apache 2.0                   | Offline SR quality ceiling                     |
+| ECBSR                                                           | Lightweight SR            | MIT                          | Lightweight SR alternative                     |
+| Rep-TNSR v1                                                     | Lightweight temporal SR   | Project-owned                | Ablation baseline                              |
+
+## 12. Evaluation Protocol
+
+### 12.1 Configurations
+
+| Config | Input    | Output    | Scale | FG  | FSR 3.1 mode           | Purpose                  |
+| :----- | :------- | :-------- | :---- | :-- | :--------------------- | :----------------------- |
+| C1     | 640x360  | 1920x1080 | 3x    | No  | Ultra Performance      | Primary SR               |
+| C2     | 960x540  | 1920x1080 | 2x    | No  | Performance            | Medium scale             |
+| C3     | 1280x720 | 1920x1080 | 1.5x  | No  | Quality                | Low scale                |
+| C4     | 640x360  | 1920x1080 | 3x    | Yes | Ultra Performance + FG | Full pipeline            |
+| C5     | 1280x720 | 2560x1440 | 2x    | Yes | Performance + FG       | Higher output resolution |
+| C6     | 1280x720 | 3840x2160 | 3x    | No  | Ultra Performance      | 4K output                |
+
+### 12.2 Test Sequences
+
+Five sequences of 300 frames each. The first three use held-out camera paths in training scenes (in-distribution). The last two come from held-out scenes (out-of-distribution).
+
+| Sequence        | Scene                            | Stresses                                               |
+| :-------------- | :------------------------------- | :----------------------------------------------------- |
+| Bistro Interior | Bistro (held-out path)           | Static camera, fine detail, specular surfaces          |
+| City Chase      | City Park (held-out path)        | Fast motion, disocclusions, vehicles, reflections      |
+| SciFi Corridor  | SciFi Corridor (held-out path)   | Emissive materials, reflections, thin cables and pipes |
+| Reef Swim       | Underwater Reef (held-out scene) | Particles, translucency, caustics                      |
+| Village Walk    | Cartoon Village (held-out scene) | Stylised shading, outlines, foliage                    |
+
+### 12.3 Metrics
+
+| Category        | Metric                    | Implementation                                                                                                                                                                                                              |
+| :-------------- | :------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fidelity        | PSNR on luma, SSIM        | [torchmetrics](https://github.com/Lightning-AI/torchmetrics)                                                                                                                                                                |
+| Perceptual      | LPIPS (AlexNet)           | [richzhang/PerceptualSimilarity](https://github.com/richzhang/PerceptualSimilarity)                                                                                                                                         |
+| Perceptual      | FLIP                      | [NVlabs/flip](https://github.com/NVlabs/flip)                                                                                                                                                                               |
+| Video quality   | VMAF                      | [Netflix/vmaf](https://github.com/Netflix/vmaf) via ffmpeg                                                                                                                                                                  |
+| Temporal        | Warping error             | Mean L1 difference between each output frame and the previous output warped by ground-truth motion vectors, over valid (non-disoccluded) pixels, averaged over frames                                                       |
+| Temporal        | tOF                       | Mean L1 difference between RAFT flow on consecutive outputs and RAFT flow on consecutive ground-truth frames ([RAFT](https://github.com/princeton-vl/RAFT), reference code in [TecoGAN](https://github.com/thunil/TecoGAN)) |
+| Temporal        | tLP                       | LPIPS between consecutive warped frames, output against ground truth                                                                                                                                                        |
+| Flicker         | Temporal difference error | Mean absolute difference between the output's frame-to-frame change and the ground truth's, on luma (flow-free; also used by the notebooks)                                                                                 |
+| Ghosting        | Ghost ratio               | Share of disoccluded pixels whose warping error exceeds 0.05                                                                                                                                                                |
+| Disocclusion    | Masked LPIPS and PSNR     | Inside ground-truth disocclusion masks                                                                                                                                                                                      |
+| FG motion       | End-point error           | Predicted intermediate flow against ground-truth flow on Sintel                                                                                                                                                             |
+| Latency         | GPU time                  | D3D12 timestamp queries or CUDA events; P50 and P95                                                                                                                                                                         |
+| Display latency | Click-to-photon           | PresentMon, with and without FG                                                                                                                                                                                             |
+
+### 12.4 Human Evaluation
+
+A two-alternative forced choice study: 20 or more participants (gamers and non-gamers), 30 paired comparisons each (ours against FSR 3.1), 5-second clips at native resolution and refresh rate, randomised side, and double-blind. Each trial asks which clip has better detail, smoother motion and fewer artefacts. Report the preference rate with a 95 percent confidence interval and Bradley-Terry scores. Significance requires a preference above 60 percent on a one-sided binomial test, p < 0.05.
+
+### 12.5 Generalisation and Robustness
+
+| Test              | Condition                                                          | Pass criterion                                                  |
+| :---------------- | :----------------------------------------------------------------- | :-------------------------------------------------------------- |
+| Unseen content    | 3 held-out UE5 scenes                                              | LPIPS within 15 percent of in-distribution                      |
+| Unseen engine     | 2 Unity HDRP scenes                                                | LPIPS within 15 percent                                         |
+| Unseen style      | Cartoon, photorealistic, pixel art                                 | LPIPS within 20 percent                                         |
+| Unseen resolution | 4K output, not trained at 4K                                       | PSNR drop below 1.0 dB                                          |
+| Cross-GPU         | GTX 1650 Mobile, RTX 3060, RTX 4070, RX 6600, RX 7800 XT, Arc A770 | Latency within tier budget; outputs equal within FP16 tolerance |
+| Degraded inputs   | Zeroed MVs, depth noise of 5 percent, exposure off by 1 EV         | No NaN or corruption; PSNR drop below 3 dB                      |
+
+### 12.6 Statistics
+
+Report mean and standard deviation per sequence. Use a paired t-test, or a Wilcoxon signed-rank test when Shapiro-Wilk rejects normality, for every metric against FSR 3.1. Apply a Bonferroni correction over the 13 compared metrics (alpha 0.05 / 13, about 0.0038). Give 95 percent bootstrap confidence intervals and Cohen's d for the primary comparisons. The sample is 5 sequences x 300 frames = 1,500 frame-level measurements per metric.
+
+## 13. Kaggle Notebooks (Current Work)
+
+Both notebooks run end to end on Kaggle **GPU T4 x2** with Internet off, attach only the datasets in section 5.2, and stay inside an **8 hour** budget:
+
+| Stage                    | Budget                                                     |
+| :----------------------- | :--------------------------------------------------------- |
+| Setup, discovery and EDA | about 10 minutes                                           |
+| Cache build              | at most 25 minutes                                         |
+| Training                 | 5 hours, shortened automatically if earlier stages overrun |
+| Evaluation and export    | about 30 minutes, with 55 minutes reserved                 |
+| Total                    | about 6.5 hours, 8 hours hard ceiling                      |
+
+| Notebook                        | What it trains                                    | Evaluation                                                                                                                                                                                                                                                              |
+| :------------------------------ | :------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `neural-supersampling.ipynb`    | Rep-TNSR Ultra, RGB input, 3x, Charbonnier + edge | Set5, Set14, B100, Urban100, Manga109 and held-out frames (PSNR-Y and SSIM-Y with a 3-pixel shave, against bicubic); Vid4 per-frame and temporal difference error; fused-model parity; T4 latency fused against unfused; ONNX export                                    |
+| `neural-frame-generation.ipynb` | NeuralFG, RGB input, Charbonnier + census         | Vimeo-90K test (official list when present) and held-out REDS and Sintel frames against frame-average and copy baselines (PSNR, SSIM, interpolation error); error by motion size; Vid4 zero-shot; flow and blend-weight maps; T4 latency at 540p and 1080p; ONNX export |
+
+Shared design:
+
+- DistributedDataParallel with one process per GPU, launched from the notebook.
+- A memory-mapped uint8 cache so the 4 CPU cores never starve the GPUs, with augmentation and degradation on the GPU.
+- A batch size probed for the available VRAM, FP16 autocast and EMA weights.
+- A learning-rate schedule tied to wall-clock time, so the run always ends on time.
+- Live progress and training curves, with every metric and plot saved, and a final `outputs.zip`.
+
+What they establish: the architectures train stably, fusion is exact, and the RGB-only models beat bicubic and frame averaging on standard benchmarks. Results also show how throughput and VRAM scale on T4. What they cannot establish: anything about G-buffer conditioning, temporal accumulation or FSR 3.1, which needs the Priority 2 and 3 data.
+
+The previous supersampling run stopped after about 78 minutes, an hour into the first training epoch, without a recorded error. The rewrite removes the causes found in that version:
+
+- a 15-minute full directory walk;
+- a CPU-bound loader at about 210 images per second;
+- validation crops of different sizes, which cannot be batched;
+- LR and degraded copies mixed into training and test data;
+- DataParallel instead of DDP;
+- no time-based stopping.
+
+## 14. Ablations
+
+| ID       | Ablation                                   | Variants                                                          | Question                            |
+| :------- | :----------------------------------------- | :---------------------------------------------------------------- | :---------------------------------- |
+| SA1      | SR width                                   | 16 / 20 / 24 / 32                                                 | Quality against latency             |
+| SA2      | SR depth                                   | 3 / 4 / 5 / 6 / 8 blocks                                          | Depth against latency               |
+| SA3      | Edge branches                              | With and without Sobel and Laplacian                              | Value of fixed operators            |
+| SA4      | Inputs                                     | 9 (v1) / 12 (v2) / 12 + reactive mask (SA4b)                      | Value of extra signals              |
+| SA5      | Activation                                 | PReLU / ReLU / SiLU                                               | Quality and speed                   |
+| SA6      | Projection init                            | Default / ICNR                                                    | Checkerboard artefacts              |
+| SA7      | Temporal model                             | External history / learned recurrent aggregator                   | Value of recurrence                 |
+| FA1      | FG resolution                              | Pool by 2 / 4 / 8                                                 | Resolution against quality          |
+| FA2      | Flow refinement                            | One level / two-level pyramid                                     | Large motion                        |
+| FA3      | Engine MVs                                 | With / without                                                    | Value of engine motion              |
+| FA4      | Occlusion                                  | Learned blend / forward-backward consistency                      | Disocclusion quality                |
+| FA5      | Motion source                              | Learned flow / engine-MV forward splatting (section 8.3)          | Accuracy and cost                   |
+| FA6      | Flow pre-training                          | None / FlyingChairs and Sintel flow                               | Value of synthetic flow supervision |
+| L1 to L5 | SR loss build-up                           | Charbonnier; + edge; + perceptual; + temporal; + frequency (full) | Contribution of each term           |
+| L6       | L1 instead of Charbonnier                  | Full set                                                          | Robust loss choice                  |
+| L7       | LPIPS as training loss                     | Replaces VGG term                                                 | Perceptual loss choice              |
+| L8       | FLIP as training loss                      | Added to full set                                                 | Perceptual loss choice              |
+| D1       | UE5 only                                   | 9 training scenes                                                 | Baseline data                       |
+| D2       | UE5 + Sintel + TartanAir                   | Mixed                                                             | Domain diversity                    |
+| D3       | Native LR renders / bicubic-downsampled HR | Both                                                              | Realistic aliasing                  |
+| D4       | Degradation augmentation                   | With / without                                                    | Robustness                          |
+| D5       | Scene count                                | 5 / 9 scenes                                                      | Data scale                          |
+| T1       | Curriculum                                 | None / three-phase                                                | Value of phasing                    |
+| T2       | Patch size                                 | 64 / 128 LR throughout                                            | Context size                        |
+| T3       | Optimiser                                  | Adam / AdamW / SGD with momentum                                  | Optimiser choice                    |
+| T4       | Schedule                                   | Cosine / step / warm restarts                                     | Schedule choice                     |
+
+About 30 ablation runs at 200K iterations on one GPU, about 20 GPU-hours each, about 600 GPU-hours in total.
+
+## 15. Existing Evidence: Rep-TNSR v1
+
+The measurements below come from the earlier Rep-TNSR v1 project. They are reported here as context and have not been reproduced in this repository. Note that v1 was compared against FSR 1.0 (spatial only), not FSR 3.1.
+
+### 15.1 Latency on GTX 1650 Mobile
+
+Hardware: TU117, 896 CUDA cores, 4 GB GDDR5 at 128 GB/s, 50 W, Windows 11, driver 550.x, D3D12 timestamp queries.
+
+| Pass                            | Dispatch       | Memory traffic (read / write) | Work            | GPU time     |
+| :------------------------------ | :------------- | :---------------------------- | :-------------- | :----------- |
+| Dilation, reprojection, YCoCg   | 80 x 45 groups | 4.58 MB / 3.68 MB             | 0.052 GFLOP     | 0.282 ms     |
+| Fused FP16 trunk                | DirectML graph | 8.55 MB / 8.55 MB             | 7.962 GFLOP     | 2.145 ms     |
+| Pixel shuffle and decompression | 80 x 45 groups | 12.44 MB / 16.59 MB           | 0.015 GFLOP     | 0.184 ms     |
+| Barriers and queue              | D3D12 timeline | negligible                    | negligible      | 0.112 ms     |
+| **Total**                       |                | **54.39 MB**                  | **8.029 GFLOP** | **2.723 ms** |
+
+Memory traffic is 14 percent of the 384 MB that can move in 3 ms at 128 GB/s.
+
+### 15.2 Quality (360p to 1080p)
+
+| Method                 | PSNR (dB) | SSIM      | IF-SSIM (v1 report) | Warping error (x 1e-3) | GTX 1650M time |
+| :--------------------- | :-------- | :-------- | :------------------ | :--------------------- | :------------- |
+| Bicubic                | 27.34     | 0.812     | 0.892               | 8.42                   | 0.08 ms        |
+| FSR 1.0                | 28.12     | 0.835     | 0.901               | 7.91                   | 0.42 ms        |
+| QuickSRNet-Medium      | 31.05     | 0.884     | 0.914               | 6.84                   | 2.21 ms        |
+| **Rep-TNSR v1**        | **34.82** | **0.941** | **0.986**           | **1.72**               | 2.72 ms        |
+| Native 1080p reference | n/a       | 1.000     | 0.994               | 1.15                   | n/a            |
+
+v1 is 6.70 dB above FSR 1.0 and 3.77 dB above QuickSRNet-Medium. The gap to FSR 3.1, which accumulates jittered history, is unknown and is the subject of SR-001.
+
+## 16. Failure Modes and Mitigations
+
+| Failure                            | Cause                                           | Detection                                       | Mitigation                                                                                                  |
+| :--------------------------------- | :---------------------------------------------- | :---------------------------------------------- | :---------------------------------------------------------------------------------------------------------- |
+| Ghosting on fast motion            | History clamp too loose                         | High warping error in motion regions            | Tighten clamp (1.25 to 1.0 standard deviations); raise depth sensitivity of validity (10 to 15)             |
+| Checkerboard artefacts             | Pixel-shuffle initialisation                    | Pixel-level inspection                          | ICNR initialisation (SA6)                                                                                   |
+| Flicker on thin geometry           | Detail below the LR sampling rate               | Flicker spikes on wire and fence sequences      | More jitter phases; tighter clamp at depth edges; temporal loss weight                                      |
+| FG double images on fast rotation  | Motion beyond the quarter-resolution flow range | High end-point error on fast-rotation sequences | Two-level flow (FA2); engine MVs (FA3); cut detection bypass                                                |
+| UI distortion in FG                | UI composited before FG                         | UI-heavy test scenes                            | Composite UI after FG; for engines that cannot separate UI, extract a UI mask from pre- and post-UI buffers |
+| Particle and transparency smearing | No reliable MVs or depth                        | Reactive-mask coverage analysis                 | Zero temporal loss in reactive regions; favour the current frame there                                      |
+| Colour shift in HDR                | Compression round-trip error                    | PSNR drop on bright regions                     | FP32 for compression and decompression                                                                      |
+| Poor generalisation                | Training distribution mismatch                  | LPIPS degradation on held-out sets              | More scenes and engines; style and colour augmentation                                                      |
+| NaN in FP16                        | Inputs beyond the FP16 range (65,504)           | Runtime NaN check                               | Clamp inputs; FP32 warp coordinates                                                                         |
+| Bandwidth saturation               | Too many intermediate buffers                   | Profiler memory utilisation above 90 percent    | Fuse pre- and post-processing into the first and last layers                                                |
+| Judder at low frame rate           | Linear motion assumption breaks                 | Frame time above 25 ms                          | Disable FG below 40 FPS base rate                                                                           |
+
+## 17. Claims of Superiority over FSR 3.1
+
+If supported at the significance levels of section 12.6, the following claims would establish meaningful superiority:
+
+1. **Spatial quality.** PSNR at least 1.5 dB higher and LPIPS at least 20 percent lower, averaged over the 5 sequences at each configuration, p < 0.01.
+2. **Temporal stability.** Warping error at least 25 percent lower and tOF at least 20 percent lower on the dynamic sequences (City Chase, SciFi Corridor, Reef Swim), p < 0.01.
+3. **Frame generation.** PSNR at least 2.0 dB higher and LPIPS at least 25 percent lower than FSR 3.1 FG, p < 0.01.
+4. **Latency.** Total pipeline time within 120 percent of FSR 3.1 on the same GPU, and within the absolute targets of section 2.
+5. **Generalisation.** LPIPS degradation below 15 percent on held-out scenes and engines.
+6. **Human preference.** At least 60 percent preference with at least 20 participants, p < 0.05, one-sided binomial.
+
+## 18. Roadmap and Experiments
+
+### 18.1 Phases
+
+| Phase                | Weeks    | Deliverables                                                                                        | Acceptance                                                                       |
+| :------------------- | :------- | :-------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------- |
+| 0. Kaggle validation | 1 to 2   | Both notebooks run within 8 hours; RGB baselines on SR benchmarks, Vimeo-90K and Vid4               | Fusion parity below 1e-4; clear gains over bicubic and frame averaging           |
+| 1. Falsification     | 2 to 4   | Bistro capture; FSR 3.1 Ultra Performance dumps; v1 retrained; SR-001 report                        | SR-001 does not falsify H1                                                       |
+| 2. Rep-TNSR v2       | 4 to 8   | 12-channel pipeline; three tiers; full curriculum; 12-scene capture; SR ablations; temporal metrics | Section 2 SR targets met with significance                                       |
+| 3. NeuralFG          | 9 to 13  | Middle-frame captures; FG training; FG ablations; comparison with FSR 3.1 FG, RIFE, IFRNet          | Section 2 FG targets; FG P95 at most 2.5 ms on RTX 3060                          |
+| 4. Integration       | 14 to 18 | DirectML integration; ncnn and TensorRT exports; frame pacing; latency and VRAM profiling on 6 GPUs | Within 120 percent of FSR 3.1 latency; VRAM at most 100 MB; no NaN or corruption |
+| 5. Generalisation    | 19 to 22 | Unity and held-out UE5 evaluation; style and degraded-input tests; human study; final report        | All section 17 claims tested with confidence intervals and effect sizes          |
+
+### 18.2 Smallest Falsifying Experiment (SR-001)
+
+1. Train Rep-TNSR v1 (17.5K parameters, 4 blocks, 20 channels) on Bistro training paths only: 100K iterations, Charbonnier + edge, one GPU, about 6 hours.
+2. Capture FSR 3.1 **Ultra Performance** output (3x, 640x360 to 1920x1080) on a held-out 300-frame Bistro path with the FidelityFX SDK sample, dumping frames with RenderDoc.
+3. Compute luma PSNR, RGB SSIM and LPIPS (AlexNet) per frame on identical inputs.
+
+**Falsified if** FSR 3.1 has both higher PSNR and lower LPIPS. That would indicate that larger networks, a different architecture or more input signals are needed.
+
+**Expectation, unverified.** v1 beat FSR 1.0 by 6.7 dB, but FSR 3.1 accumulates jittered history, so the gap may be much smaller. This experiment decides whether the project continues as planned.
+
+### 18.3 Experiment Matrix
+
+| ID             | Model                           | Data                          | Losses               | Scale    | Purpose                        |
+| :------------- | :------------------------------ | :---------------------------- | :------------------- | :------- | :----------------------------- |
+| KG-SR          | Rep-TNSR Ultra, RGB             | Kaggle (section 5.2)          | Charbonnier + edge   | 3x       | Pipeline validation (notebook) |
+| KG-FG          | NeuralFG, RGB                   | Kaggle (section 5.2)          | Charbonnier + census | n/a      | Pipeline validation (notebook) |
+| SR-001         | Rep-TNSR v1                     | Bistro                        | Charbonnier + edge   | 3x       | Falsification                  |
+| SR-002         | Rep-TNSR v2 Ultra               | 9 training scenes             | Full curriculum      | 3x       | Primary SR quality result      |
+| SR-003         | Rep-TNSR v2 Performance         | 9 scenes                      | Full                 | 3x       | GTX 1650 tier                  |
+| SR-004         | Rep-TNSR v2 Quality             | 9 scenes                      | Full                 | 3x       | RTX 3060 latency claim         |
+| SR-S1, SR-S2   | Rep-TNSR v2 Quality             | 9 scenes                      | Full                 | 2x, 1.5x | Other scale factors            |
+| FG-001         | NeuralFG, 10-channel            | 9 scenes with middle frames   | Full                 | n/a      | Primary FG result              |
+| GEN-001 to 003 | SR-004 + FG-001                 | Held-out UE5, Unity, stylised | n/a                  | 3x       | Generalisation                 |
+| LAT-001        | All tiers and FSR 3.1           | Standard sequence             | n/a                  | 3x       | Latency on all GPUs            |
+| HUM-001        | SR-004 + FG-001 against FSR 3.1 | 5 test sequences              | n/a                  | 3x       | Human study                    |
+
+Ablation runs (section 14) are added to this matrix as SA, FA, L, D and T experiments.
+
+## 19. Assumptions and Risks
+
+### 19.1 Assumptions
+
+| ID  | Assumption                                                       | If wrong                         | Mitigation                                                       |
+| :-- | :--------------------------------------------------------------- | :------------------------------- | :--------------------------------------------------------------- |
+| AS1 | A sub-50K-parameter network can beat FSR 3.1's temporal upscaler | Quality targets missed           | SR-001 first; tiers up to 50K; consider 50K to 100K if justified |
+| AS2 | Engine MVs are accurate for geometric motion                     | FG errors on animated meshes     | Learned flow refines engine MVs (FA3)                            |
+| AS3 | DirectML matches hand-written HLSL speed                         | Latency targets missed           | HLSL path is designed in                                         |
+| AS4 | 9 training scenes give enough diversity                          | Generalisation fails             | More scenes; Sintel and TartanAir (D2)                           |
+| AS5 | FP16 is sufficient for all intermediate values                   | NaN or quality loss              | FP32 for warps and luma compression                              |
+| AS6 | Tensor cores are reachable through DirectML meta-commands        | Ultra misses the RTX 3060 target | Ship Quality tier as the default                                 |
+
+### 19.2 Unavailable Dependencies
+
+DLSS and XeSS weights are proprietary, so they are compared through captured frames only. DLSS frame generation needs RTX 40 hardware. Commercial game captures cannot be redistributed, so open UE5 scenes are used for all reproducible benchmarks. Unreal Engine cannot be redistributed; capture scripts and captured data can.
+
+### 19.3 Risks
+
+| Risk                                       | Severity | Likelihood         | Mitigation                                                        |
+| :----------------------------------------- | :------- | :----------------- | :---------------------------------------------------------------- |
+| Quality gap to FSR 3.1 too small           | High     | Medium             | More capacity, more inputs, bottleneck attention as a last resort |
+| Ultra tier over budget on GTX 1650 class   | High     | High (by estimate) | Performance and Quality tiers                                     |
+| Flicker worse than FSR 3.1                 | High     | Low                | Stronger temporal loss; tighter clamping                          |
+| FG disocclusion quality worse than FSR 3.1 | Medium   | Medium             | Disocclusion-heavy data; inpainting head; two-level flow          |
+| Poor generalisation                        | Medium   | Medium             | Data diversity; domain randomisation                              |
+| Export regression (ONNX, DirectML)         | Low      | Low                | Automated parity tests at every export                            |
+
+## 20. Planned Repository Layout
+
+The repository currently holds `RESEARCH.md` and the two Kaggle notebooks. The planned layout:
+
+```text
 neuralss/
-├── configs/
-│   ├── sr_performance.yaml          # 4 blocks, 16 channels, s=3
-│   ├── sr_quality.yaml              # 4 blocks, 20 channels, s=3
-│   ├── sr_ultra.yaml                # 6 blocks, 24 channels, s=3
-│   ├── fg_default.yaml              # Frame generation default
-│   ├── eval_fsr31.yaml              # FSR 3.1 baseline eval config
-│   └── ablations/                   # One YAML per ablation experiment
-│       ├── sr_a1_16ch.yaml
-│       ├── sr_a1_32ch.yaml
-│       ├── sr_c1_char_only.yaml
-│       └── ...
-├── neuralss/                        # Python package
-│   ├── __init__.py
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── repconv_block.py         # ReparameterizedConvBlock
-│   │   ├── sr_net.py                # RepTNSR v2 (all tiers)
-│   │   ├── fg_net.py                # NeuralFG
-│   │   └── fuse.py                  # Structural reparameterisation (branch collapse)
-│   ├── losses/
-│   │   ├── __init__.py
-│   │   ├── charbonnier.py
-│   │   ├── edge.py
-│   │   ├── perceptual.py            # VGG-19 feature extractor (frozen)
-│   │   ├── temporal.py              # Warp consistency loss with disocclusion mask
-│   │   ├── frequency.py             # FFT magnitude loss
-│   │   └── census.py                # Census transform loss (for FG)
-│   ├── data/
-│   │   ├── __init__.py
-│   │   ├── dataset.py               # GBufferDataset (EXR/binary loader)
-│   │   ├── augmentation.py          # Spatial + temporal augmentations with MV adjustment
-│   │   ├── preprocessing.py         # YCoCg, exposure, luminance compression
-│   │   └── cache.py                 # Memory-mapped pre-cropped patch cache
-│   ├── metrics/
-│   │   ├── __init__.py
-│   │   ├── spatial.py               # PSNR, SSIM wrappers
-│   │   ├── perceptual.py            # LPIPS wrapper
-│   │   ├── temporal.py              # E_warp, tOF, tLP, MAFD
-│   │   ├── vmaf.py                  # VMAF subprocess wrapper (calls ffmpeg)
-│   │   └── ghosting.py              # Ghost ratio metric
-│   ├── engine/
-│   │   ├── __init__.py
-│   │   ├── trainer.py               # Training loop (DDP-aware, AMP, curriculum)
-│   │   ├── evaluator.py             # Evaluation harness (all metrics)
-│   │   ├── curriculum.py            # Loss weight scheduling
-│   │   └── checkpoint.py            # Save/load with full RNG state
-│   └── export/
-│       ├── __init__.py
-│       ├── onnx_export.py           # Fused model -> ONNX
-│       ├── ncnn_export.py           # PNNX -> ncnn .param/.bin
-│       └── tensorrt_export.py       # ONNX -> TensorRT .engine
-├── scripts/
-│   ├── download_datasets.py         # Automated download + SHA-256 verify
-│   ├── capture_ue5.py               # UnrealCV G-buffer capture automation
-│   ├── generate_cache.py            # Pre-crop training patches to .bin
-│   ├── benchmark.py                 # All metrics, all baselines, all configs
-│   ├── ablation_sweep.py            # Launch ablation experiments (multi-GPU)
-│   ├── export_all.py                # Export to ONNX, ncnn, TRT
-│   └── profile_latency.py           # D3D12/CUDA latency profiling
-├── deploy/
-│   ├── directml/
-│   │   ├── SuperResolutionSystem.h
-│   │   ├── SuperResolutionSystem.cpp
-│   │   ├── PreProcessTemporal.hlsl
-│   │   ├── PostProcessReconstruct.hlsl
-│   │   └── CMakeLists.txt
-│   ├── ncnn_vulkan/
-│   │   ├── sr_pipeline.cpp
-│   │   ├── fg_pipeline.cpp
-│   │   └── CMakeLists.txt
-│   └── weights/                     # Exported model files
-│       ├── sr_quality_fused.onnx
-│       ├── sr_ultra_fused.onnx
-│       ├── fg_default.onnx
-│       ├── sr_quality.param / .bin  # ncnn format
-│       └── sr_quality_fp16.engine   # TensorRT format
-├── tests/
-│   ├── test_repconv_block.py        # Reparameterisation correctness
-│   ├── test_fuse.py                 # Fused == multi-branch numerical parity
-│   ├── test_losses.py               # Loss computation correctness
-│   ├── test_dataset.py              # Data loading, augmentation, MV adjustment
-│   ├── test_metrics.py              # Metric implementations vs reference
-│   ├── test_onnx_export.py          # ONNX export + inference parity
-│   ├── test_inference_parity.py     # PyTorch vs ONNX vs DirectML output match
-│   └── test_latency.py             # Sub-budget latency verification on target HW
-├── train.py                         # Entry: python train.py --config configs/sr_ultra.yaml
-├── evaluate.py                      # Entry: python evaluate.py --checkpoint ... --test_dir ...
-├── infer.py                         # Entry: python infer.py --model ... --input ...
-├── requirements.txt
-├── pyproject.toml
-├── RESEARCH.md                      # This document
-└── LICENSE
+  configs/            YAML per tier, FG, FSR evaluation and each ablation (OmegaConf)
+  neuralss/
+    models/           repconv_block, sr_net, fg_net, fuse
+    losses/           charbonnier, edge, perceptual, temporal, frequency, census
+    data/             G-buffer dataset, augmentation with MV handling, preprocessing, patch cache
+    metrics/          spatial, perceptual, temporal, VMAF wrapper, ghosting
+    engine/           DDP trainer, evaluator, curriculum, checkpointing
+    export/           ONNX, ncnn, TensorRT
+  scripts/            dataset download with checksums, UE5 capture, cache generation, benchmark, ablation sweep, latency profiling
+  deploy/
+    directml/         SuperResolutionSystem (C++), PreProcessTemporal.hlsl, PostProcessReconstruct.hlsl
+    ncnn_vulkan/      SR and FG pipelines
+  notebooks/          Kaggle notebooks
+  tests/              fusion parity, losses, dataset and MV augmentation, metrics, ONNX parity, latency
+  train.py, evaluate.py, infer.py
 ```
 
-## 17. Configuration System
-
-YAML-based with [OmegaConf](https://github.com/omry/omegaconf) (BSD 3-Clause) for hierarchical config merging and CLI overrides.
-
-```yaml
-# configs/sr_ultra.yaml
-model:
-  type: "RepTNSR"
-  in_channels: 12
-  base_channels: 24
-  num_blocks: 6
-  scale: 3
-  activation: "prelu"
-
-data:
-  train_dir: "data/ue5_train"
-  val_dir: "data/ue5_val"
-  patch_size_lr: 64
-  batch_size: 16
-  num_workers: 8
-  temporal_frames: 2
-  augmentation:
-    flip_h: true
-    flip_v: true
-    rotate: true
-    temporal_reverse: true
-    mv_noise_sigma: 0.3
-    brightness_jitter: 0.1
-
-loss:
-  charbonnier: { weight: 1.0, epsilon: 1.0e-3 }
-  edge: { weight: 0.5 }
-  perceptual: { weight: 0.05, layer: "conv3_3", network: "vgg19" }
-  temporal: { weight: 0.25, alpha: 10.0 }
-  frequency: { weight: 0.1 }
-
-training:
-  total_iterations: 500000
-  optimizer:
-    { type: "adamw", lr: 5.0e-4, betas: [0.9, 0.999], weight_decay: 1.0e-4 }
-  scheduler: { type: "cosine", T_max: 500000, eta_min: 1.0e-6 }
-  grad_clip: 1.0
-  mixed_precision: true
-  curriculum:
-    phase1_end: 100000
-    phase2_end: 300000
-    phase3_end: 500000
-    phase3_patch_size_lr: 96
-
-checkpoint:
-  save_interval: 10000
-  keep_last: 5
-  save_best: true
-  best_metric: "val/lpips"
-  best_mode: "min"
-
-logging:
-  backend: "wandb"
-  project: "neuralss"
-  log_interval: 100
-  val_interval: 5000
-```
-
-CLI override example: `python train.py --config configs/sr_ultra.yaml model.base_channels=32 training.total_iterations=200000`
-
-## 18. Commands
-
-```bash
-# Kaggle CLI: Download verified Kaggle-native MVP datasets (for local testing if required)
-kaggle datasets download -d artemmmtry/mpi-sintel-dataset -p data/sintel --unzip
-kaggle datasets download -d amithkesavmrajagiri/reds-dataset -p data/reds --unzip
-kaggle datasets download -d cookiemonsteryum/reds-video-superresolution-toy-dataset -p data/reds_toy --unzip
-kaggle datasets download -d soumikrakshit/div2k-high-resolution-images -p data/div2k --unzip
-kaggle datasets download -d itzloghotxd/df2k-ost -p data/df2k_ost --unzip
-kaggle datasets download -d uom200647r/vid4-dataset -p data/vid4 --unzip
-kaggle datasets download -d chenshu123/vimeo-triplet -p data/vimeo_triplet --unzip
-kaggle datasets download -d wangsally/vimeo-90k-7 -p data/vimeo_septuplet --unzip
-kaggle datasets download -d jesucristo/super-resolution-benchmarks -p data/sr_benchmarks --unzip
-
-# Kaggle Notebook: Push notebook and trigger remote GPU T4 x 2 execution
-kaggle kernels push -p .
-
-# Dataset download (external sources: Sintel, TartanAir, REDS via script)
-python scripts/download_datasets.py --datasets sintel tartanair reds --output data/
-
-# UE5 G-buffer capture (requires UnrealCV plugin installed)
-python scripts/capture_ue5.py \
-    --project /path/to/UE5/project \
-    --scenes bistro city_chase forest scifi_corridor stylised_village \
-    --output data/ue5_train/ \
-    --fps 60 --duration 60 --jitter_phases 9
-
-# Generate training cache (pre-crop patches)
-python scripts/generate_cache.py \
-    --input data/ue5_train/ --output data/cache/ \
-    --patch_size 64 --scale 3 --format fp16
-
-# Train SR (single GPU)
-python train.py --config configs/sr_ultra.yaml
-
-# Train SR (multi-GPU DDP, 4 GPUs)
-torchrun --nproc_per_node=4 train.py --config configs/sr_ultra.yaml --distributed
-
-# Train Frame Generation
-torchrun --nproc_per_node=4 train.py --config configs/fg_default.yaml --distributed
-
-# Evaluate SR
-python evaluate.py \
-    --checkpoint checkpoints/sr_ultra_best.pth \
-    --config configs/sr_ultra.yaml \
-    --test_dir data/ue5_test/ \
-    --output results/sr_ultra/
-
-# Full benchmark (all methods, all metrics)
-python scripts/benchmark.py \
-    --methods ours fsr31 fsr1 bicubic ecbsr rife ifrnet \
-    --test_dir data/ue5_test/ \
-    --output results/benchmark/ \
-    --configs C1 C2 C3 C4
-
-# Export to deployment formats
-python scripts/export_all.py \
-    --checkpoint checkpoints/sr_ultra_best.pth \
-    --config configs/sr_ultra.yaml \
-    --formats onnx ncnn tensorrt
-
-# Run ablation sweep
-python scripts/ablation_sweep.py \
-    --ablation_dir configs/ablations/ \
-    --gpus 0,1,2,3 \
-    --iterations 200000
-
-# Unit and integration tests
-pytest tests/ -v --tb=short
-
-# Latency profiling
-python scripts/profile_latency.py \
-    --model weights/sr_quality_fused.onnx \
-    --input_size 640 360 \
-    --backend directml \
-    --warmup 100 --iterations 1000
-```
-
-## 19. Unit and Integration Tests
-
-```python
-# tests/test_repconv_block.py
-def test_reparameterisation_equivalence():
-    """Fused 3x3 conv must produce identical output to multi-branch."""
-    block = ReparameterizedConvBlock(20, 20)
-    block.eval()
-    x = torch.randn(1, 20, 64, 64)
-    out_multi = block(x)
-    w_fused, b_fused = block.export_fused_weight()
-    out_fused = F.conv2d(x, w_fused, b_fused, padding=1)
-    out_fused = block.act(out_fused)
-    assert torch.allclose(out_multi, out_fused, atol=1e-5)
-
-# tests/test_fuse.py
-def test_full_model_fuse_parity():
-    """Full model output before and after fusion must match."""
-    model = RepTNSR(in_channels=12, base_channels=24, num_blocks=6, scale=3)
-    model.eval()
-    x = torch.randn(1, 12, 64, 64)
-    out_before = model(x)
-    fused_model = fuse_model(model)
-    out_after = fused_model(x)
-    assert torch.allclose(out_before, out_after, atol=1e-4)
-
-# tests/test_losses.py
-def test_charbonnier_gradient_at_zero():
-    """Charbonnier must have non-zero gradient when pred == target."""
-    pred = torch.zeros(1, 3, 8, 8, requires_grad=True)
-    target = torch.zeros(1, 3, 8, 8)
-    loss = charbonnier_loss(pred, target, eps=1e-3)
-    loss.backward()
-    assert pred.grad.abs().sum() > 0
-
-def test_temporal_loss_zero_in_disoccluded():
-    """Temporal loss must be zero where disocclusion mask is zero."""
-    # Construct mask that is zero everywhere
-    mask = torch.zeros(1, 1, 8, 8)
-    loss = temporal_consistency_loss(
-        pred=torch.randn(1, 3, 8, 8),
-        warped_prev=torch.randn(1, 3, 8, 8),
-        mask=mask
-    )
-    assert loss.item() == 0.0
-
-# tests/test_onnx_export.py
-def test_onnx_pytorch_parity():
-    """ONNX model output matches PyTorch within FP16 tolerance."""
-    model = RepTNSR(in_channels=12, base_channels=24, num_blocks=6, scale=3)
-    fused_model = fuse_model(model)
-    fused_model.eval()
-    x = torch.randn(1, 12, 64, 64)
-    pt_out = fused_model(x).detach().numpy()
-    # Export
-    torch.onnx.export(fused_model, x, "test_sr.onnx", opset_version=17)
-    # Verify
-    sess = ort.InferenceSession("test_sr.onnx")
-    ort_out = sess.run(None, {"input": x.numpy()})[0]
-    assert np.allclose(pt_out, ort_out, atol=1e-3)
-
-# tests/test_latency.py (integration, requires target GPU)
-def test_sr_latency_within_budget():
-    """SR inference must complete within 3 ms on target GPU."""
-    model_path = "weights/sr_quality_fused.onnx"
-    x = torch.randn(1, 9, 360, 640).half().cuda()  # Quality tier
-    # ... load and benchmark ...
-    # Assert P95 < 3.0 ms
-```
-
-## 20. Performance Characterisation (Existing Rep-TNSR v1 Profiling Data)
-
-Microarchitectural profiling was conducted on an NVIDIA GeForce GTX 1650 Mobile (TU117, 896 CUDA cores, 4 GB GDDR5 at 128 GB/s, 50W TGP) running under Windows 11 with driver branch 550.x. GPU execution timeline measured using D3D12 timestamp queries through `ID3D12QueryHeap`.
-
-| Execution Stage                            | Dispatch Dimensions          | Memory Traffic         | Arithmetic Workload | GPU Latency (TU117) |
-| :----------------------------------------- | :--------------------------- | :--------------------- | :------------------ | :------------------ |
-| Pass 1: Dilation, Temporal & YCoCg         | 80 $\times$ 45 thread groups | 4.58 MB / 3.68 MB      | 0.052 GFLOPs        | 0.282 ms            |
-| Pass 2: Fused FP16 Neural Trunk (L1 to L5) | DirectML compiled pipeline   | 8.55 MB / 8.55 MB      | 7.962 GFLOPs        | 2.145 ms            |
-| Pass 3: Sub-Pixel Shuffle & Decompression  | 80 $\times$ 45 thread groups | 12.44 MB / 16.59 MB    | 0.015 GFLOPs        | 0.184 ms            |
-| Pass 4: Resource Barriers & Command Queue  | D3D12 timeline               | Negligible             | Negligible          | 0.112 ms            |
-| **Complete SR System**                     |                              | **54.39 MB aggregate** | **8.029 GFLOPs**    | **2.723 ms**        |
-
-The complete v1 pipeline executes in 2.723 ms, within the 3.0 ms budget. Memory traffic of 54.39 MB corresponds to 14.16% of the 384 MB transfer limit in a 3.0 ms window on a 128 GB/s interface.
-
-Reconstruction quality (existing v1 evaluation against spatial-only and single-frame methods):
-
-| Method                 | Input            | PSNR (dB) | SSIM      | IF-SSIM   | $E\_{\text{warp}}$ ($\times 10^{-3}$) | GTX 1650 Runtime |
-| :--------------------- | :--------------- | :-------- | :-------- | :-------- | :------------------------------------ | :--------------- |
-| Bicubic Interpolation  | 360p $\to$ 1080p | 27.34     | 0.812     | 0.892     | 8.42                                  | 0.08 ms          |
-| AMD FSR 1.0 (Spatial)  | 360p $\to$ 1080p | 28.12     | 0.835     | 0.901     | 7.91                                  | 0.42 ms          |
-| QuickSRNet-Medium      | 360p $\to$ 1080p | 31.05     | 0.884     | 0.914     | 6.84                                  | 2.21 ms          |
-| **Rep-TNSR v1**        | 360p $\to$ 1080p | **34.82** | **0.941** | **0.986** | **1.72**                              | 2.72 ms          |
-| Native 1080p Reference | Native SSAA      | $\infty$  | 1.000     | 0.994     | 1.15                                  | 16.67 ms         |
-
-Rep-TNSR v1 improves by +6.70 dB over FSR 1.0 and +3.77 dB over QuickSRNet-Medium. These results are against FSR 1.0 (spatial only); the comparison against FSR 3.1 (temporal) is pending and is the core objective of this project.
-
-## 21. Implementation Roadmap
-
-### Phase 0: Minimum Viable Prototype and Hypothesis Falsification (Weeks 1 to 3)
-
-**Goal**: Validate H1 (neural SR beats FSR 3.1 spatial quality) with minimum effort.
-
-**Deliverables**:
-
-- [ ] Existing Rep-TNSR v1 (17.4K params) trained on 3 UE5 scenes (Bistro, Valley, City Chase).
-- [ ] Evaluation harness computing PSNR, SSIM, LPIPS.
-- [ ] FSR 3.1 baseline frame dumps from FidelityFX SDK sample app (Bistro scene, Quality mode).
-- [ ] Side-by-side quantitative comparison report.
-
-**Acceptance criteria**:
-
-- PSNR(ours) > PSNR(FSR 3.1) by $\geq$ 1.0 dB on $\geq$ 2/3 test scenes.
-- LPIPS(ours) < LPIPS(FSR 3.1) on $\geq$ 2/3 test scenes.
-- All evaluation code automated and reproducible.
-
-### Phase 1: Enhanced SR (Weeks 4 to 8)
-
-**Goal**: Rep-TNSR v2 with expanded inputs and full multi-objective training.
-
-**Deliverables**:
-
-- [ ] 12-channel input pipeline (add depth, temporal confidence, jitter phase).
-- [ ] Rep-TNSR v2 architecture (3 quality tiers implemented).
-- [ ] Full 5-loss training with curriculum.
-- [ ] Frequency loss implementation.
-- [ ] 12-scene UE5 dataset captured and cached.
-- [ ] Complete architecture + loss ablation matrix.
-- [ ] Temporal stability metrics ($E\_{\text{warp}}$, tOF, tLP).
-
-**Acceptance criteria**: SR meets all target metrics from Section 1.3. Ablations complete with statistical significance.
-
-### Phase 2: Frame Generation (Weeks 9 to 13)
-
-**Goal**: NeuralFG producing higher-quality interpolated frames than FSR 3.1 FG.
-
-**Deliverables**:
-
-- [ ] NeuralFG architecture implemented and trained.
-- [ ] Census transform loss.
-- [ ] FG-specific training data (GT mid-frames).
-- [ ] FG ablation matrix.
-- [ ] Comparison vs FSR 3.1 FG, RIFE v4, IFRNet.
-
-**Acceptance criteria**: FG meets target metrics. FG latency < 2.5 ms on RTX 3060.
-
-### Phase 3: Integration and Deployment (Weeks 14 to 18)
-
-**Goal**: Complete SR + FG pipeline deployable via DirectML, ncnn, and native HLSL.
-
-**Deliverables**:
-
-- [ ] DirectML C++ integration (updated from existing code for v2 + FG).
-- [ ] ncnn Vulkan export and benchmark.
-- [ ] TensorRT fast-path for NVIDIA.
-- [ ] Frame pacing implementation.
-- [ ] Multi-GPU latency profiling (6+ GPU models).
-- [ ] VRAM usage profiling.
-- [ ] Complete benchmark report (all configs, all baselines, all GPUs).
-
-**Acceptance criteria**: Latency within 120% of FSR 3.1 on all tested GPUs. VRAM < 100 MB. No NaN or visual corruption.
-
-### Phase 4: Generalisation and Hardening (Weeks 19 to 22)
-
-**Goal**: Cross-game/engine generalisation and robustness validation.
-
-**Deliverables**:
-
-- [ ] Unity HDRP test captures and evaluation.
-- [ ] Held-out UE5 scenes evaluation.
-- [ ] Art style diversity testing.
-- [ ] Degraded input robustness testing.
-- [ ] Human perceptual evaluation study (2AFC, $n \geq 20$).
-- [ ] Final benchmark report with confidence intervals and effect sizes.
-
-**Acceptance criteria**: All claims from Section 14 supported with $p \lt 0.05$.
-
-## 22. Smallest Experiment to Falsify the Core Hypothesis
-
-**Experiment SR-001:**
-
-1. Train existing Rep-TNSR v1 (17.4K params, 4 blocks, 20 channels) on the Bistro scene only.
-2. 100K iterations, Charbonnier + Edge loss only, single GPU, ~6 hours.
-3. Capture FSR 3.1 Quality mode output on the identical Bistro test sequence (300 frames, 360p $\to$ 1080p, $3\times$ scale) using the FidelityFX SDK sample app. Extract frame dumps via RenderDoc.
-4. Compute PSNR (Y-channel), SSIM (RGB), LPIPS (AlexNet) per-frame.
-
-**Falsification criterion**: If FSR 3.1 achieves higher PSNR AND lower LPIPS than Rep-TNSR v1 on this sequence, the hypothesis that a lightweight neural network can outperform FSR 3.1's hand-crafted temporal upscaler at this parameter scale is falsified. This would indicate the need for: (a) significantly larger networks (possibly contradicting real-time constraints), (b) fundamentally different architecture (attention-based), or (c) additional input signals not currently provided.
-
-**Expected outcome**: Based on existing v1 results (34.82 dB PSNR vs FSR 1.0's 28.12 dB), and FSR 3.1's estimated ~33.5 dB at Quality mode (significant improvement over FSR 1.0 due to temporal accumulation), we expect the neural approach to still win on both metrics. However, this has NOT been verified against FSR 3.1 specifically. The gap may be narrower than against FSR 1.0.
-
-**Required resources**: Kaggle Notebook (2x Tesla T4 GPUs, ~3 hours runtime, zero cloud cost) or workstation (1x RTX 3090, ~6 hours). Data requirement: ~2.5 GB to 10 GB attached under `/kaggle/input/`. This provides the fastest, zero-cost path to determine whether the project direction is viable.
-
-## 23. Exact Experiment Matrix
-
-| Exp ID      | Model              | Config              | Dataset                | Loss                | Scale | Metric Focus                   |
-| :---------- | :----------------- | :------------------ | :--------------------- | :------------------ | :---- | :----------------------------- |
-| **SR-001**  | RepTNSR v1 (17K)   | Quality (20ch/4blk) | Bistro only            | Char+Edge           | 3x    | **Falsification test**         |
-| SR-002      | RepTNSR v2 (35K)   | Ultra (24ch/6blk)   | 12 scenes              | Full 5-loss         | 3x    | Primary SR result              |
-| SR-003      | RepTNSR v2 (11K)   | Perf (16ch/4blk)    | 12 scenes              | Full 5-loss         | 3x    | Latency-constrained            |
-| SR-004      | RepTNSR v2 (17K)   | Quality (20ch/4blk) | 12 scenes              | Full 5-loss         | 3x    | Balanced tier                  |
-| SR-A1a      | RepTNSR v2         | 16ch/6blk           | 12 scenes              | Full                | 3x    | Ablation: width                |
-| SR-A1b      | RepTNSR v2         | 32ch/6blk           | 12 scenes              | Full                | 3x    | Ablation: width                |
-| SR-A2a      | RepTNSR v2         | 24ch/3blk           | 12 scenes              | Full                | 3x    | Ablation: depth                |
-| SR-A2b      | RepTNSR v2         | 24ch/8blk           | 12 scenes              | Full                | 3x    | Ablation: depth                |
-| SR-A3       | RepTNSR v2 no-edge | 24ch/6blk           | 12 scenes              | Full (no Sobel/Lap) | 3x    | Ablation: edge ops             |
-| SR-A4       | RepTNSR v2 9ch     | 24ch/6blk, 9ch in   | 12 scenes              | Full                | 3x    | Ablation: inputs               |
-| SR-A5a      | RepTNSR v2 ReLU    | 24ch/6blk           | 12 scenes              | Full                | 3x    | Ablation: activation           |
-| SR-C1       | RepTNSR v2         | Ultra               | 12 scenes              | Char only           | 3x    | Ablation: loss baseline        |
-| SR-C2       | RepTNSR v2         | Ultra               | 12 scenes              | Char+Edge           | 3x    | Ablation: +edge                |
-| SR-C3       | RepTNSR v2         | Ultra               | 12 scenes              | Char+Edge+Perc      | 3x    | Ablation: +perc                |
-| SR-C4       | RepTNSR v2         | Ultra               | 12 scenes              | Char+Edge+Perc+Temp | 3x    | Ablation: +temp                |
-| SR-D3       | RepTNSR v2         | Ultra               | 12 scenes (bicubic LR) | Full                | 3x    | Ablation: LR generation method |
-| SR-S1       | RepTNSR v2         | Ultra               | 12 scenes              | Full                | 2x    | Scale factor test              |
-| SR-S2       | RepTNSR v2         | Ultra               | 12 scenes              | Full                | 1.5x  | Scale factor test              |
-| **FG-001**  | NeuralFG (24K)     | Default             | 12 scenes              | Full 3-loss         | N/A   | Primary FG result              |
-| FG-B1a      | NeuralFG           | 2x downsample       | 12 scenes              | Full                | N/A   | Ablation: resolution           |
-| FG-B1b      | NeuralFG           | 8x downsample       | 12 scenes              | Full                | N/A   | Ablation: resolution           |
-| FG-B2       | NeuralFG 2-level   | Multi-scale pyramid | 12 scenes              | Full                | N/A   | Ablation: refinement           |
-| FG-B3       | NeuralFG no-MV     | No engine MVs       | 12 scenes              | Full                | N/A   | Ablation: MV contribution      |
-| **GEN-001** | SR-002 + FG-001    | Full pipeline       | Held-out UE5           | N/A                 | 3x    | Generalisation                 |
-| **GEN-002** | SR-002 + FG-001    | Full pipeline       | Unity HDRP             | N/A                 | 3x    | Cross-engine                   |
-| **GEN-003** | SR-002 + FG-001    | Full pipeline       | Cartoon scenes         | N/A                 | 3x    | Art style                      |
-| **LAT-001** | All tiers          | All GPUs            | Standard seq           | N/A                 | 3x    | Latency profiling              |
-| **HUM-001** | SR-002 vs FSR 3.1  | 2AFC study          | 5 test scenes          | N/A                 | 3x    | Human evaluation               |
-
-**Total: ~30 experiments.** Estimated compute: ~600 GPU-hours ≈ $3,000 cloud (4x A100).
-
-## 24. Assumptions, Risks, and Constraints
-
-### 24.1 Assumptions
-
-| #   | Assumption                                                                | Impact if Wrong                                   | Mitigation                                                  |
-| :-- | :------------------------------------------------------------------------ | :------------------------------------------------ | :---------------------------------------------------------- |
-| A1  | FSR 3.1 Quality mode achieves ~33.5 dB PSNR at 3x scale.                  | Target metrics may need recalibration.            | Run SR-001 falsification experiment first.                  |
-| A2  | 35K parameters is sufficient for competitive quality vs FSR 3.1 temporal. | Need to increase to 50K to 100K params.           | Quality tiers already provide scaling path.                 |
-| A3  | Engine-provided motion vectors are accurate for geometric motion.         | FG quality degrades on animated meshes.           | Fall back to optical flow for non-MV regions.               |
-| A4  | DirectML compiled operator performance matches hand-coded HLSL.           | May need full HLSL compute shader implementation. | HLSL path already designed as "advanced" deployment option. |
-| A5  | 12 UE5 scenes provide sufficient data diversity.                          | Generalisation failure on held-out data.          | Expand to 20+ scenes; add Sintel/TartanAir/VIPER.           |
-| A6  | FP16 precision is sufficient for all intermediate computations.           | NaN or quality regression in warp coordinates.    | Mixed FP16/FP32: FP32 for warp `grid_sample` coordinates.   |
-
-### 24.2 Unavailable/Proprietary Dependencies
-
-| Dependency                                    | Status                                       | Impact                                                | Mitigation                                                                 |
-| :-------------------------------------------- | :------------------------------------------- | :---------------------------------------------------- | :------------------------------------------------------------------------- |
-| DLSS 3 network weights                        | Proprietary (NVIDIA)                         | Cannot reproduce or directly compare architecturally. | Compare quality only via game captures (not architecture).                 |
-| DLSS 3 frame generation                       | Requires RTX 40 series OFA hardware.         | Cannot benchmark on non-RTX 40 hardware.              | Compare via published benchmarks and captured frames.                      |
-| XeSS network weights                          | Proprietary (Intel SDK open, models closed). | Cannot retrain or inspect.                            | Use SDK binary for baseline comparison on supported HW.                    |
-| Game-specific captures from commercial titles | Requires game licences.                      | Cannot distribute test data.                          | Use open UE5 scenes + Sintel for all reproducible benchmarks.              |
-| Unreal Engine 5                               | Free for development (royalty-based EULA).   | Engine itself is not distributable.                   | Capture data IS distributable. Provide capture scripts, not engine builds. |
-
-### 24.3 Research Risks
-
-| Risk                                                  | Severity | Likelihood              | Mitigation                                                                                       |
-| :---------------------------------------------------- | :------- | :---------------------- | :----------------------------------------------------------------------------------------------- |
-| Quality gap insufficient vs FSR 3.1 temporal upscaler | High     | Medium                  | Increase network capacity; add lightweight attention at bottleneck layer; expand input channels. |
-| Latency exceeds budget on GTX 1650 class              | High     | Medium (for Ultra tier) | Provide Performance/Quality tiers; optimise HLSL compute shaders.                                |
-| Temporal flickering worse than FSR 3.1                | High     | Low                     | Strengthen temporal loss weight; add anti-flicker post-filter; tighten variance clamping.        |
-| FG disocclusion quality worse than FSR 3.1            | Medium   | Medium                  | Train with diverse disocclusion scenarios; add inpainting refinement head; multi-scale pyramid.  |
-| Poor generalisation to unseen content                 | Medium   | Medium                  | Increase training data diversity; add domain randomisation augmentation.                         |
-| ONNX/DirectML export quality regression               | Low      | Low                     | Exhaustive parity testing; bit-level comparison; mixed precision profiling.                      |
-
-## 25. Production Architecture Specification: Rep-Graphics-Pipeline v1.0
-
-### 25.1 Research Objectives, Theoretical Hypotheses, and Measurable Success Criteria
-
-Modern real-time rendering pipelines face an acute computational bottleneck: rendering native high-resolution imagery with complex ray tracing and deferred shading frequently exceeds the frame budget of commodity graphics hardware. While hardware-locked deep learning approaches achieve high reconstruction quality by utilising dedicated matrix multiplication accelerators (e.g., NVIDIA Tensor Cores), cross-platform deployment across heterogeneous architectures requires a strictly GPU-agnostic solution.
-
-AMD FidelityFX Super Resolution 3.1 (FSR 3.1) represents the open-source industry baseline. Implemented purely via standard Direct3D 12 and Vulkan compute shaders, FSR 3.1 decouples spatial upscaling from frame generation. Its upscaler builds upon temporal anti-aliasing principles, utilising a heuristic accumulation pipeline that incorporates Lanczos resampling, colour variance clamping (refined to an ellipsoid colour clamp in v3.1), motion vector dilation, luminance instability tracking, and Robust Contrast-Adaptive Sharpening (RCAS). Its frame generation module inserts an intermediate frame synthesised through a hierarchical 7-pass block-matching optical flow pyramid evaluated on luminance downsamples, combined with a frame interpolation and swapchain pacing engine.
-
-Despite widespread compatibility, FSR 3.1 exhibits fundamental architectural deficiencies inherent to hand-crafted heuristic pipelines:
-
-- Heuristic accumulation cannot differentiate complex sub-pixel phase oscillations from geometric disocclusions, resulting in pixel shimmering across thin geometry and ghosting trails behind rapidly moving foreground silhouettes.
-- The hierarchical block-matching optical flow algorithm is constrained by fixed $8 \times 8$ search blocks over a $24 \times 24$ window, leading to block-boundary tearing, structural deformation around fine silhouettes, and motion estimation failure in scenes with complex specular highlights that violate optical brightness constancy.
-- The accumulation logic requires numerous heuristic passes, such as luminance Single Pass Downsamplers (SPD), shading-change SPD, and reactive mask generation, that consume substantial register files and bandwidth without attaining the representation capacity of deep convolutional priors.
-
-This research plan formulates and validates a neural, GPU-agnostic pipeline designed to measurably exceed AMD FSR 3.1 across image fidelity, temporal stability, execution latency, and generalisability. The system is divided into two decoupled neural engines: Reparameterised Temporal Neural Super-Resolution (Rep-TNSR) and Reparameterised Bilateral Frame Generation (Rep-BiFG).
-
-#### Theoretical Hypotheses
-
-The engineering plan tests three foundational hypotheses:
-
-- **Hypothesis 1 (Structural Reparameterisation for Bandwidth-Constrained SM ALUs)**: A multi-branch convolutional topology incorporating spatial edge and Laplacian differential operators during training can be collapsed offline into a single, homogeneous $3 \times 3$ convolutional kernel through associative linear transformations. This single-path inference topology eliminates the memory bandwidth overhead of intermediate residual concatenations, allowing the neural upscaler to execute within a strict latency budget ($\le 2.25\text{ ms}$ at 1080p, $\le 3.65\text{ ms}$ at 4K) on commodity GPUs lacking dedicated matrix hardware.
-- **Hypothesis 2 (Learned Recurrent Accumulation vs. Heuristic Clamping)**: Replacing hand-tuned ellipsoid colour clamping and history resetting with a compact recurrent neural feature aggregator trained under a disocclusion-aware Charbonnier and FLIP perceptual objective eliminates sub-pixel shimmering and ghosting, reducing Temporal Warping Error ($E\_{\text{warp}}$) by more than 35% relative to FSR 3.1.
-- **Hypothesis 3 (Bilateral Forward Splatting vs. Hierarchical Flow Pyramids)**: Generating intermediate motion fields via atomic, depth-tested bilateral forward splatting of native screen-space motion vectors, followed by a lightweight neural inpainting trunk, outperforms FSR 3.1's 7-pass block-matching optical flow in both structural accuracy and ALU runtime, lowering frame-generation compute latency by over 25% while eliminating block-edge motion tearing.
-
-#### Measurable Success Criteria
-
-| Target Dimension         | Core Metric                          | Baseline: AMD FSR 3.1                 | Proposed Target (Rep-TNSR + Rep-BiFG)          | Evaluation Protocol                            |
-| :----------------------- | :----------------------------------- | :------------------------------------ | :--------------------------------------------- | :--------------------------------------------- |
-| Spatial Image Quality    | PSNR (dB)                            | Baseline Reference                    | $\mathbf{\ge +1.50\text{ dB}}$ improvement     | Evaluated on unseen UE5 test scenes            |
-| Perceptual Similarity    | LPIPS (VGG)                          | Baseline Reference                    | $\mathbf{\ge 15.0\%}$ reduction                | Lower distance indicates superior fidelity     |
-| Perceptual Error         | Mean LDR-FLIP                        | Baseline Reference                    | $\mathbf{\le 0.038}$ (or $\ge 20\%$ reduction) | NVIDIA FLIP difference metric                  |
-| Temporal Stability       | $E\_{\text{warp}}\;(\times 10^{-3})$ | $\approx 2.80 - 3.50$                 | $\mathbf{\le 1.80}$ ($\gt 35\%$ reduction)     | Frame-to-frame warping error under motion      |
-| Disocclusion Fidelity    | Masked PSNR ($dB\_{\text{occ}}$)     | Baseline Reference                    | $\mathbf{\ge +2.20\text{ dB}}$ improvement     | Evaluated strictly within disocclusion regions |
-| Super-Resolution Latency | GPU Kernel Time                      | $1.42\text{ ms}$ (RX 6600, 1080p)     | $\mathbf{\le 1.35\text{ ms}}$ (RX 6600, FP16)  | Direct3D 12 timestamp query heap               |
-| Frame-Generation Latency | GPU Kernel Time                      | $2.15\text{ ms}$ (RX 6600, 1080p)     | $\mathbf{\le 1.60\text{ ms}}$ (RX 6600, FP16)  | Async compute execution timestamp              |
-| End-to-End Latency       | Display Latency                      | Baseline Reference                    | Parity ($\pm 1.0\text{ ms}$) with Anti-Lag     | PresentMon v2.x click-to-photon telemetry      |
-| Static VRAM Footprint    | Committed Memory Heap                | $\approx 65\text{ MB}$ (1080p Target) | $\mathbf{\le 55\text{ MB}}$ combined           | Direct3D 12 committed resource allocation      |
-
-### 25.2 System Architecture Decoupling: Super-Resolution versus Frame Generation
-
-A fundamental architectural question is whether the super-resolution and frame-generation pipelines should share a unified neural trunk or remain fully decoupled. Analysis of GPU microarchitecture, queue synchronisation, and dataflow dynamics proves that a shared backbone is fundamentally incompatible with the real-time constraints of production game engines.
-
-#### Technical Justification for Decoupling
-
-The execution lifecycles of super-resolution and frame generation operate on fundamentally different timelines, coordinate domains, and queue topologies:
-
-- **Queue Scheduling and Pipeline Parallelism**: Super-resolution is an in-line, synchronous graphics operation. It must execute on the primary graphics queue immediately following deferred lighting and shading, but prior to post-processing and User Interface (UI) composition. The host game engine requires the reconstructed high-resolution frame $I\_t$ to render UI elements and advance game simulation state. Frame generation, by contrast, interpolates an intermediate synthetic frame $I\_{t-0.5}$ between completed historical frames $I\_{t-1}$ and $I\_t$. Merging both tasks into a single neural network forces frame generation onto the critical path of the primary graphics queue, creating an execution bubble that blocks CPU command recording and stalls early graphics passes for the subsequent frame $t+1$. Decoupling permits the frame-generation pass to execute entirely on an independent, high-priority asynchronous compute queue (`D3D12_COMMAND_LIST_TYPE_COMPUTE`), completely overlapping with the host engine's G-buffer generation for frame $t+1$.
-- **Coordinate Domains and Memory Bandwidth**: Rep-TNSR operates strictly in the low-resolution domain ($H\_{\text{LR}} \times W\_{\text{LR}}$), extracting features at low compute cost and performing spatial expansion only at its terminal sub-pixel layer. Rep-BiFG must operate on reconstructed display-resolution inputs ($H\_{\text{HR}} \times W\_{\text{HR}}$) to avoid propagating interpolation blur into high-frequency details. Forcing a shared backbone requires processing high-dimensional feature tensors at display resolution, which saturates memory bandwidth on entry-level hardware (e.g., $128\text{ GB/s}$ on the NVIDIA GeForce GTX 1650 Mobile) and causes cache thrashing.
-- **Temporal Formulation and Sample Dynamics**: Rep-TNSR accumulates sub-pixel phase-shifted samples over an infinite-impulse response (IIR) temporal window driven by camera jitter sequences. Rep-BiFG is a finite-impulse response (FIR) bilateral synthesis problem conditioned on two discrete anchor frames ($t-1$ and $t$). Forcing unified latent representations across both tasks causes destructive gradient interference, degrading edge sharpness in the upscaler and introducing blur in the frame generator.
-
-#### Concurrency and Presentation Pipeline
-
-The execution sequence coordinates the two decoupled pipelines across the primary graphics queue, the asynchronous compute queue, and the presentation swapchain:
-
-1. On the primary graphics queue, the engine finishes active shading for frame $N$ at low resolution. The Rep-TNSR pipeline executes immediately, performing pre-processing, neural upscaling, and sub-pixel reconstruction to produce the full-resolution frame $N$. The engine renders the UI directly onto frame $N$, records a completion fence, and submits frame $N$ to the swapchain pacing proxy.
-2. Concurrently, the asynchronous compute queue waits on the completion fence of frame $N$. Once signalled, it launches Rep-BiFG, using un-jittered display inputs from frames $N-1$ and $N$, along with depth-tested motion vectors, to synthesise intermediate frame $N-0.5$. This compute workload executes in parallel with the primary graphics queue as it renders the G-buffer and early shadows for frame $N+1$.
-3. The presentation swapchain receives both frames and paces display delivery using high-precision waitable timers: frame $N-0.5$ is presented at $t = 8.33\text{ ms}$, followed by frame $N$ at $t = 16.67\text{ ms}$ (assuming a 60 FPS base target interpolating to 120 Hz).
-
-### 25.3 Data Engineering, Synthetic Capture, and Pre-Processing Pipeline
-
-Neural upscalers trained on photographic imagery generalise poorly to real-time graphics engines. Real camera captures contain natural motion blur, sensor noise, and lens aberrations, whereas game engines produce point-sampled, aliased pixel grids characterised by sub-pixel specular highlights, geometric discontinuities, and instant shading changes.
-
-| Dataset / Source               | Licensing Model            | Domain & Modality                    | Resolution                     | Channels Extracted                                      | Split Protocol              |
-| :----------------------------- | :------------------------- | :----------------------------------- | :----------------------------- | :------------------------------------------------------ | :-------------------------- |
-| TartanAir (AirSim / UE4)       | MIT Open Source            | Synthetic dynamic environments       | $640 \times 480$ native stereo | LDR RGB, Optical Flow, Depth, Camera Trajectory         | 25% Pre-training Warmup     |
-| MPI Sintel Benchmark           | CC-BY 3.0                  | 3D animated open-source sequences    | $1024 \times 436$ native       | Clean Pass, Final Pass, Ground-Truth Flow, Occlusion    | 10% Optical Flow Validation |
-| Vimeo-90K Triplet              | Research / Academic Use    | Diverse real-world video sequences   | $448 \times 256$ native        | RGB Triplets ($I\_{t-1}, I\_t, I\_{t+1}$)               | 15% BiFG Inpainting Warmup  |
-| UE5 Production Capture Harness | Custom / Apache 2.0 Plugin | CitySample, Lyra, Valley of Ancients | 4K SSAA $\to$ 1080p, 1440p, 4K | HDR Radiance, MVs, Linear Depth, Disocclusion, Reactive | 50% Primary Train/Val/Test  |
-
-Dataset splits enforce strict scene isolation: 70% training, 15% validation, and 15% test. Unseen environments (CitySample and custom architectural walkthroughs) are held back exclusively for out-of-distribution evaluation.
-
-#### Unreal Engine 5 Synthetic Generation Pipeline
-
-The primary training dataset is captured directly from Unreal Engine 5.4 using an automated capture harness integrated via `UGameViewportClient` and `FRenderTarget` hooks:
-
-**Sub-Pixel Camera Jitter**: For an upscaling ratio $s \in [1.5, 3.0]$, sub-pixel sampling is enforced by offsetting the camera projection matrix $P$ across a 2D Halton $(2, 3)$ low-discrepancy sequence:
-
-$$
-\delta x_t = \frac{\text{Halton}(t \pmod K + 1, 2) - 0.5}{W_{\text{LR}}}, \quad \delta y_t = \frac{\text{Halton}(t \pmod K + 1, 3) - 0.5}{H_{\text{LR}}}
-$$
-
-The sequence phase length is set to $K = 8$ for $2\times$ upscaling ($s=2$) and $K = 9$ or $16$ for $3\times$ upscaling ($s=3$). The offset is incorporated directly into the camera's perspective projection matrix:
-
-$$
-P_{\text{jittered}} = \begin{bmatrix} P_{00} & 0 & 2\,\delta x_t & 0 \\ 0 & P_{11} & 2\,\delta y_t & 0 \\ 0 & 0 & P_{22} & P_{23} \\ 0 & 0 & -1 & 0 \end{bmatrix}
-$$
-
-**Ground-Truth SSAA Generation**: Ground-truth reference frames $I\_t^{\text{GT}}$ are generated by rasterising the scene at $2\times$ native resolution per axis ($4\times$ spatial area) combined with $4\times$ temporal multi-sampling (effective $16\times$ SSAA), resolving sub-pixel geometry and foliage silhouettes.
-
-**Screen-Space Motion Vectors**: Engine motion vectors $V\_{t \to t-1} \in \mathbb{R}^{2 \times H\_{\text{LR}} \times W\_{\text{LR}}}$ are extracted directly from the G-buffer prior to tone-mapping. These contain 2D screen-space pixel displacements that account for both rigid camera transformations and dynamic skeletal mesh skinning:
-
-$$
-V_{t \to t-1}(p) = p - \pi_{t-1}(M_{t-1} M_t^{-1} \pi_t^{-1}(p, D_t(p)))
-$$
-
-where $\pi\_t$ represents the camera projection, $M\_t$ is the world transformation matrix, and $D\_t(p)$ is the linear depth.
-
-**Geometric Disocclusion Computation**: An exact disocclusion mask $M\_{\text{occ}} \in [0, 1]$ is generated during capture by backward-warping the previous linear depth buffer $D\_{t-1}$ using the motion field $V\_{t \to t-1}$ and evaluating depth consistency:
-
-$$
-\Delta D(p) = D_t(p) - \mathcal{W}(D_{t-1}, V_{t \to t-1})(p)
-$$
-
-$$
-M_{\text{occ}}(p) = \begin{cases} 1.0, & \text{if } \Delta D(p) \lt -\tau_D \cdot D_t(p) \text{ or } \mathcal{W}(p) \notin [0, 1]^2 \\ 0.0, & \text{otherwise} \end{cases}
-$$
-
-The depth tolerance threshold is parameterised to $\tau\_D = 0.01$ (1% relative depth deviation).
-
-**Reactivity and Transparency Handling**: Particles, alpha-tested hair, screen-space reflections, and translucent water surfaces do not write reliable motion vectors or linear depth. The engine extracts an auxiliary reactive mask $R\_t \in [0, 1]$:
-
-$$
-R_t(p) = \text{clamp}\left(\beta_1 |I_t^{\text{translucent}}(p) - I_t^{\text{opaque}}(p)| + \beta_2 \|\nabla_{\text{specular}}(p)\|_2, 0.0, 1.0\right)
-$$
-
-which signals the network to decrease historical temporal accumulation and rely on instantaneous spatial reconstruction.
-
-### 25.4 Pre-Processing, Dynamic Range Normalisation, and Storage
-
-Because real-time HDR pipelines produce unbounded linear radiance values ($[0.0, 10000.0]$ in specular glints and sun discs), feeding raw inputs into half-precision (FP16) neural layers causes numerical overflow (FP16 ceiling: 65,504.0) and gradient divergence.
-
-- **Pre-Exposure Normalisation**: Radiance is normalised using the dynamic camera exposure multiplier $S\_{\text{exp}}$ extracted from the engine's luminance histogram:
-
-$$
-C_{\text{exposed}} = C_{\text{linear}} \cdot S_{\text{exp}}
-$$
-
-- **Reversible Logarithmic YCoCg Compression**: The exposed RGB values are mapped into YCoCg space to decouple achromatic intensity ($Y$) from chromatic variance ($Co, Cg$):
-
-$$
-\begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix} = \begin{bmatrix} 0.25 & 0.50 & 0.25 \\ 0.50 & 0.00 & -0.50 \\ -0.25 & 0.50 & -0.25 \end{bmatrix} \begin{bmatrix} R \\ G \\ B \end{bmatrix}
-$$
-
-$$
-\begin{bmatrix} R \\ G \\ B \end{bmatrix} = \begin{bmatrix} 1 & 1 & -1 \\ 1 & 0 & 1 \\ 1 & -1 & -1 \end{bmatrix} \begin{bmatrix} Y \\ Co \\ Cg \end{bmatrix}
-$$
-
-Luminance compression maps the dynamic range monotonically into $[0, 1)$:
-
-$$
-Y_{\text{compressed}} = \frac{\ln(1.0 + Y)}{1.0 + \ln(1.0 + Y)}
-$$
-
-The chrominance components $Co$ and $Cg$ are scaled by $(1.0 + \ln(1.0 + Y))^{-1}$ to preserve chromatic ratios under extreme highlights.
-
-- **Data Augmentation and Storage**: Temporal sequences undergo random temporal reversal (inverting motion vector directions), $90^\circ$ spatial rotations, horizontal flips, Gaussian noise injection ($\sigma \in [0.001, 0.015]$), and simulated dynamic exposure steps ($\pm 0.5\text{ EV}$). The processed data is packed into WebDataset-compatible tar archives containing LZ4-compressed HDF5 chunks. Each chunk stores 50 contiguous frames at native resolution in FP16 precision, sustaining read throughput above $2.5\text{ GB/s}$ across distributed NVMe storage arrays.
-
-### 25.5 Proposed Model Architectures and Microarchitectural Resource Budgets
-
-#### Rep-TNSR: Super-Resolution Neural Trunk
-
-Rep-TNSR processes low-resolution spatial buffers and warped historical states, operating entirely within the low-resolution coordinate space ($H\_{\text{LR}} \times W\_{\text{LR}}$) before projecting to high-resolution display coordinates via sub-pixel convolution.
-
-##### Structural Reparameterisation Formulation
-
-During training, each intermediate block maintains parallel operations: a standard $3 \times 3$ convolution, a $1 \times 1$ point-wise projection, an identity residual connection, and fixed differential spatial filter convolutions (Sobel-X, Sobel-Y, Laplacian):
-
-$$
-Y = \text{Conv}_{3\times 3}(X) + \text{Conv}_{1\times 1}(X) + X + \sum_{p \in \{\text{Sx}, \text{Sy}, \text{Lap}\}} \text{Conv}_{1\times 1}^{p}(K_p * X)
-$$
-
-where the fixed differential kernels are defined as:
-
-$$
-K_{\text{Sx}} = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix}, \quad K_{\text{Sy}} = \begin{bmatrix} -1 & -2 & -1 \\ 0 & 0 & 0 \\ 1 & 2 & 1 \end{bmatrix}, \quad K_{\text{Lap}} = \begin{bmatrix} 0 & 1 & 0 \\ 1 & -4 & 1 \\ 0 & 1 & 0 \end{bmatrix}
-$$
-
-Discrete 2D spatial convolution is a linear, associative mapping. Convolving an input feature map with a fixed $3 \times 3$ spatial kernel and projecting the result through a learnable $1 \times 1$ point-wise convolution is mathematically equivalent to convolving the original input directly with an expanded $3 \times 3$ kernel formed by the tensor product of the $1 \times 1$ weights and the differential operator.
-
-Prior to engine deployment, all linear operations collapse into a single $3 \times 3$ convolutional kernel $W\_{\text{fused}} \in \mathbb{R}^{C\_{\text{out}} \times C\_{\text{in}} \times 3 \times 3}$ and bias $B\_{\text{fused}} \in \mathbb{R}^{C\_{\text{out}}}$:
-
-$$
-W_{\text{fused}} = W_{3\times 3} + \text{Pad}_{1\to 3}(W_{1\times 1}) + W_{\text{identity}} + \sum_{p \in \{\text{Sx}, \text{Sy}, \text{Lap}\}} (W_{1\times 1}^p \otimes K_p)
-$$
-
-$$
-B_{\text{fused}} = B_{3\times 3} + B_{1\times 1} + B_{\text{Sx}} + B_{\text{Sy}} + B_{\text{Lap}}
-$$
-
-This collapses the multi-branch training graph into an unbranched, sequential pipeline, avoiding activation caching, reducing global memory roundtrips, and maximising GPU L1/L2 cache locality.
-
-##### Layer Configurations and Tensor Dimensions
-
-For $2\times$ upscaling ($s = 2$, e.g., 1080p to 4K or 540p to 1080p), the input channel count is 11:
-
-1. Current LR Colour (3 channels: YCoCg compressed)
-2. Reprojected History Colour (3 channels: YCoCg clamped)
-3. Dilated Screen-Space Motion Vectors (2 channels: $\Delta u, \Delta v$)
-4. Linear Camera Depth (1 channel: normalised $D\_t$)
-5. Disocclusion Mask (1 channel: $M\_{\text{occ}}$)
-6. Reactive Mask (1 channel: $R\_t$)
-
-The network expands features to $C = 32$ intermediate channels across 5 fused reparameterised stages, followed by a sub-pixel projection to $3 \times s^2 = 12$ channels ($27$ channels for $s=3$):
-
-| Layer ID | Operation Type                | Input Dimensions (C×H×W)     | Output Dimensions (C×H×W)    | Fused Parameters | Computational Workload (1080p $\to$ 4K, $s=2$) |
-| :------- | :---------------------------- | :--------------------------- | :--------------------------- | :--------------- | :--------------------------------------------- |
-| L01      | Fused RepConv Stem + PReLU    | $11 \times 1080 \times 1920$ | $32 \times 1080 \times 1920$ | 3,200            | $6.57\text{ GMAC} \; (13.14\text{ GFLOPs})$    |
-| L02      | Fused RepConv Block 1 + PReLU | $32 \times 1080 \times 1920$ | $32 \times 1080 \times 1920$ | 9,248            | $19.18\text{ GMAC} \; (38.36\text{ GFLOPs})$   |
-| L03      | Fused RepConv Block 2 + PReLU | $32 \times 1080 \times 1920$ | $32 \times 1080 \times 1920$ | 9,248            | $19.18\text{ GMAC} \; (38.36\text{ GFLOPs})$   |
-| L04      | Fused RepConv Block 3 + PReLU | $32 \times 1080 \times 1920$ | $32 \times 1080 \times 1920$ | 9,248            | $19.18\text{ GMAC} \; (38.36\text{ GFLOPs})$   |
-| L05      | Fused RepConv Block 4 + PReLU | $32 \times 1080 \times 1920$ | $32 \times 1080 \times 1920$ | 9,248            | $19.18\text{ GMAC} \; (38.36\text{ GFLOPs})$   |
-| L06      | Linear $3\times 3$ Projection | $32 \times 1080 \times 1920$ | $12 \times 1080 \times 1920$ | 3,468            | $7.19\text{ GMAC} \; (14.38\text{ GFLOPs})$    |
-| L07      | Sub-Pixel Shuffle ($s=2$)     | $12 \times 1080 \times 1920$ | $3 \times 2160 \times 3840$  | 0                | $0.00\text{ GMAC}$ (Memory Layout Transpose)   |
-| Total    | Rep-TNSR Trunk                | -                            | -                            | 43,612           | 70.50 GMAC (141.00 GFLOPs)                     |
-
-**Execution Latency at 1080p Output** ($540\text{p} \to 1080\text{p}, s=2$): Input spatial area is $N = 540 \times 960 = 518,400\text{ pixels}$. Total computation scales to $17.62\text{ GMAC} \; (35.25\text{ GFLOPs})$. On an entry-level mobile GPU (such as the GTX 1650 Mobile with a sustained throughput of $3,529\text{ GFLOPS}$ in FP16), raw kernel execution consumes $1.85\text{ ms}$, satisfying the $2.50\text{ ms}$ real-time budget.
-
-#### Rep-BiFG: Bilateral Frame Generation Trunk
-
-Rep-BiFG replaces FSR 3.1's 7-pass block-matching optical flow pyramid with an engine-guided motion reconstruction scheme:
-
-**Splat-Based Intermediate Motion Field Reconstruction**: Screen-space motion vectors from frame $t$ describe displacement $V\_{t \to t-1}$. Assuming linear trajectory across a single frame interval ($16.6\text{ ms}$), the motion displacement fields from $t-0.5$ to $t$ and $t-1$ are formulated as:
-
-$$
-F_{t-0.5 \to t}(p + 0.5 \cdot V_{t \to t-1}(p)) = -0.5 \cdot V_{t \to t-1}(p)
-$$
-
-$$
-F_{t-0.5 \to t-1}(p + 0.5 \cdot V_{t \to t-1}(p)) = 0.5 \cdot V_{t \to t-1}(p)
-$$
-
-To resolve collisions where multiple source pixels project to the same coordinate at $t-0.5$, an atomic compute shader pass evaluates a 32-bit packed depth key (`InterlockedMin`), ensuring that foreground surfaces correctly occlude background geometry without bleeding motion vectors.
-
-**Reparameterised Inpainting and Blending Trunk**: The warped candidate buffers $W\_{\text{prev}} = \mathcal{W}(I\_{t-1}, F\_{t-0.5 \to t-1})$ and $W\_{\text{curr}} = \mathcal{W}(I\_t, F\_{t-0.5 \to t})$ are concatenated with the motion fields, depth, and disocclusion masks into an 11-channel input tensor. A 4-stage reparameterised convolutional trunk predicts a spatial blend map $\alpha \in [0, 1]$ and an HDR residual correction $\Delta I$:
-
-$$
-I_{t-0.5} = \alpha \odot W_{\text{prev}} + (1 - \alpha) \odot W_{\text{curr}} + \Delta I
-$$
-
-The trunk uses an intermediate channel depth of $C = 24$, totalling 32,448 fused parameters and $12.8\text{ GMACs}$ at 1080p, executing in $1.58\text{ ms}$ on an AMD Radeon RX 6600.
-
-### 25.6 Loss Functions, Optimisation Dynamics, and Training Curriculum
-
-To eliminate the visual blur caused by pure $L\_2$ regression while avoiding the temporal flickering introduced by unconstrained adversarial losses, the pipeline uses a multi-objective composite loss across consecutive frame sequences:
-
-$$
-\mathcal{L}_{\text{total}} = \lambda_{\text{char}} \mathcal{L}_{\text{char}} + \lambda_{\text{edge}} \mathcal{L}_{\text{edge}} + \lambda_{\text{FLIP}} \mathcal{L}_{\text{FLIP}} + \lambda_{\text{perc}} \mathcal{L}_{\text{perc}} + \lambda_{\text{temp}} \mathcal{L}_{\text{temp}}
-$$
-
-#### Mathematical Definitions of Loss Components
-
-- **Differentiable Charbonnier Reconstruction Loss**:
-
-$$
-\mathcal{L}_{\text{char}}(\hat{I}_t, I_t^{\text{GT}}) = \frac{1}{N} \sum_{i=1}^N \sqrt{(\hat{I}_t(i) - I_t^{\text{GT}}(i))^2 + \epsilon^2}
-$$
-
-where $N = C \times H \times W$ and $\epsilon = 10^{-3}$, preventing vanishing gradients in near-zero error regions.
-
-- **Structural Edge Gradient Loss**:
-
-$$
-\mathcal{L}_{\text{edge}} = \frac{1}{N} \sum_{i=1}^N \left( \left| \nabla_x \hat{I}_t(i) - \nabla_x I_t^{\text{GT}}(i) \right| + \left| \nabla_y \hat{I}_t(i) - \nabla_y I_t^{\text{GT}}(i) \right| \right)
-$$
-
-where $\nabla\_x I(x, y) = I(x+1, y) - I(x-1, y)$ and $\nabla\_y I(x, y) = I(x, y+1) - I(x, y-1)$.
-
-- **Perceptual FLIP Difference Loss**: Direct optimisation against the human visual system's spatio-chromatic sensitivity is achieved via a differentiable approximation of the NVIDIA FLIP metric:
-
-$$
-\mathcal{L}_{\text{FLIP}} = \frac{1}{H W} \sum_{p} \left( \left| \Delta Y_{\text{CSF}}(p) \right|^{0.8} + \left| \Delta C_{\text{opp}}(p) \right|^{0.8} \right)
-$$
-
-where $\Delta Y\_{\text{CSF}}$ denotes achromatic luminance differences filtered through the Contrast Sensitivity Function (CSF), and $\Delta C\_{\text{opp}}$ represents chrominance errors across opponent colour planes.
-
-- **Deep Feature Perceptual Loss**: High-level semantic feature consistency is enforced via a pre-trained, frozen VGG-19 network $\Phi$:
-
-$$
-\mathcal{L}_{\text{perc}} = \frac{1}{C_j H_j W_j} \left\| \Phi_{\text{conv3-3}}(\hat{I}_t) - \Phi_{\text{conv3-3}}(I_t^{\text{GT}}) \right\|_2^2
-$$
-
-- **Occlusion-Masked Temporal Consistency Loss**: Temporal stability is maintained by penalising deviations between the network output $\hat{I}\_t$ and the warped prior output $\hat{I}\_{t-1}$, modulated by a continuous geometric validity mask $M\_{\text{valid}}$:
-
-$$
-\mathcal{L}_{\text{temp}} = \frac{1}{N} \sum_{i=1}^N M_{\text{valid}}(i) \cdot \left| \hat{I}_t(i) - \mathcal{W}(\hat{I}_{t-1}, V_{t \to t-1})(i) \right|
-$$
-
-$$
-M_{\text{valid}}(p) = (1.0 - M_{\text{occ}}(p)) \cdot \exp\left( -\alpha \cdot \left| D_t(p) - \mathcal{W}(D_{t-1}, V_{t \to t-1})(p) \right| \right)
-$$
-
-where $\alpha = 10.0$ and $M\_{\text{occ}}$ is the binary disocclusion mask. This zeroes out loss gradients over disoccluded regions, preventing ghosting artefacts behind dynamic silhouettes.
-
-#### Training Curriculum and Scheduling
-
-The model is optimised using AdamW ($\beta\_1 = 0.9$, $\beta\_2 = 0.999$, weight decay $10^{-4}$) across 400,000 iterations:
-
-| Training Phase                | Iteration Range               | Sequence Length | Active Loss Weights                                                                    | Learning Rate Schedule                                  | Primary Optimization Target         |
-| :---------------------------- | :---------------------------- | :-------------- | :------------------------------------------------------------------------------------- | :------------------------------------------------------ | :---------------------------------- |
-| Stage 1: Spatial Warmup       | $0 \to 80\text{k}$            | 1 Frame         | $\lambda\_{\text{char}}=1.0, \lambda\_{\text{edge}}=0.5, \lambda\_{\text{temp}}=0.0$   | $\eta = 5 \times 10^{-4}$ (Constant)                    | High-frequency edge formation       |
-| Stage 2: Temporal Aggregation | $80\text{k} \to 240\text{k}$  | 5 Frames        | $\lambda\_{\text{char}}=1.0, \lambda\_{\text{edge}}=0.5, \lambda\_{\text{temp}}=0.30$  | $\eta = 5 \times 10^{-4} \to 1 \times 10^{-4}$ (Cosine) | History reprojection and stability  |
-| Stage 3: Perceptual Tuning    | $240\text{k} \to 400\text{k}$ | 10 Frames       | $\lambda\_{\text{char}}=1.0, \lambda\_{\text{FLIP}}=0.10, \lambda\_{\text{temp}}=0.35$ | $\eta = 1 \times 10^{-4} \to 1 \times 10^{-6}$ (Cosine) | Shimmer removal & FLIP optimization |
-
-Training executes in mixed-precision FP16 using PyTorch `torch.amp.autocast(dtype=torch.float16)` with dynamic gradient scaling. Distributed training is performed across an $8 \times$ NVIDIA RTX 4090 node (aggregate batch size of 32 sequences of 10 frames each, cropped to $256 \times 256$ patches). Total training requires 68 wall-clock hours, costing less than \$250 on spot cloud instances.
-
-### 25.7 Runtime Engine Integration, Asynchronous Scheduling, and Memory Layout
-
-To eliminate OS driver stalls and CPU-GPU synchronisation bubbles, all pipeline resources are pre-allocated during engine initialisation within committed memory heaps (`D3D12_HEAP_TYPE_DEFAULT` or Vulkan `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`). The memory footprint remains completely static throughout execution:
-
-| Surface Description        | Format Identifier    | Resolution Extent          | Bytes/Pixel | Static Allocation (1080p Target) | Static Allocation (4K Target) |
-| :------------------------- | :------------------- | :------------------------- | :---------- | :------------------------------- | :---------------------------- |
-| History Color Buffer Ping  | `R16G16B16A16_FLOAT` | $1920 \times 1080$         | 8           | $16.59\text{ MB}$                | $66.36\text{ MB}$             |
-| History Color Buffer Pong  | `R16G16B16A16_FLOAT` | $1920 \times 1080$         | 8           | $16.59\text{ MB}$                | $66.36\text{ MB}$             |
-| LR Color Input Texture     | `R16G16B16A16_FLOAT` | $960 \times 540$           | 8           | $4.15\text{ MB}$                 | $16.59\text{ MB}$             |
-| Dilated Motion Vectors     | `R16G16_FLOAT`       | $960 \times 540$           | 4           | $2.07\text{ MB}$                 | $8.29\text{ MB}$              |
-| Linear Depth Texture       | `R32_FLOAT`          | $960 \times 540$           | 4           | $2.07\text{ MB}$                 | $8.29\text{ MB}$              |
-| Rep-TNSR Intermediate Ring | Linear Packed FP16   | $32 \times 540 \times 960$ | 2           | $6.64\text{ MB}$                 | $26.54\text{ MB}$             |
-| Rep-BiFG Splat Depth Key   | `R32_UINT`           | $1920 \times 1080$         | 4           | $8.29\text{ MB}$                 | $33.18\text{ MB}$             |
-| Model Parameter Weights    | Flat FP16 Arrays     | 76,060 Elements            | 2           | $0.15\text{ MB}$                 | $0.15\text{ MB}$              |
-| Total Committed VRAM       | -                    | -                          | -           | 56.55 MB                         | 225.76 MB                     |
-
-The 1080p aggregate footprint of $56.55\text{ MB}$ consumes 1.38% of VRAM on a 4 GB frame buffer, avoiding memory pressure that could cause texture thrashing in the host game engine.
-
-#### Asynchronous Queue Overlap and Swapchain Pacing
-
-Frame interpolation inevitably introduces presentation delay because synthesising intermediate frame $I\_{t-0.5}$ requires waiting for the primary queue to complete rendering frame $I\_t$. To mitigate this display latency:
-
-- **Async Compute Queue Execution**: When frame $t$ completes upscaling, a cross-queue synchronisation fence (`ID3D12Fence` / `VkSemaphore`) triggers Rep-BiFG on the asynchronous compute queue. While Rep-BiFG generates frame $t-0.5$, the primary graphics queue immediately begins rendering the G-buffer and early shadow passes for frame $t+1$. This masks the entire execution cost of frame generation behind the subsequent frame's early graphics pipeline.
-- **Swapchain Frame Pacing Engine**: The display pipeline replaces the standard flip model with an `IDXGISwapChain4` pacing proxy. Frames are presented at exact $1 / (2 \times \text{FPS})$ intervals using waitable timer objects (`CreateWaitableObjectEx`). If the primary rendering framerate drops below 40 FPS, the pacing engine dynamically disables frame generation to prevent presentation judder and excessive input lag.
-
-### 25.8 Comprehensive Benchmarking, Objective Metrics, and Comparative Analysis
-
-The evaluation protocol measures spatial fidelity, temporal consistency, and execution latency across three hardware tiers representing diverse microarchitectures:
-
-- **Tier A**: NVIDIA GeForce GTX 1650 Mobile (TU117, 896 ALUs, 0 Tensor Cores, 4 GB GDDR5 at 128 GB/s).
-- **Tier B**: AMD Radeon RX 6600 (Navi 23, 1792 Shaders, 0 ML Accelerators, 8 GB GDDR6 at 204 GB/s).
-- **Tier C**: Intel Arc A770 (Alchemist ACM-G10, 4096 ALUs, 512 XMX Engines, 16 GB GDDR6 at 560 GB/s).
-
-Baselines include AMD FSR 3.1.4 (FidelityFX SDK v1.1.4), Intel XeSS 1.3 (DP4a non-tensor fallback), NVIDIA DLSS 3.7 (proprietary hardware reference ceiling), and Bicubic spatial interpolation. Tests are evaluated across 10 production Unreal Engine 5 scenes (including CitySample, Lyra, and Valley of the Ancients).
-
-| Architecture / Technique   | Target Resolution | PSNR ↑ (dB) | Spatial SSIM ↑ | LPIPS (VGG) ↓ | Mean LDR-FLIP ↓ | $E\_{\text{warp}}\;(\times 10^{-3})$ | GPU Time: SR (Navi 23) | GPU Time: FG (Navi 23) | End-to-End Display Latency |
-| :------------------------- | :---------------- | :---------- | :------------- | :------------ | :-------------- | :----------------------------------- | :--------------------- | :--------------------- | :------------------------- |
-| Bicubic Interpolation      | 1080p ($2\times$) | 28.45       | 0.834          | 0.285         | 0.082           | 7.65                                 | $0.05\text{ ms}$       | -                      | $16.8\text{ ms}$           |
-| AMD FSR 3.1.4              | 1080p ($2\times$) | 33.10       | 0.918          | 0.142         | 0.054           | 2.94                                 | $1.42\text{ ms}$       | $2.15\text{ ms}$       | $31.2\text{ ms}$           |
-| Intel XeSS 1.3 (DP4a)      | 1080p ($2\times$) | 34.25       | 0.932          | 0.118         | 0.046           | 2.10                                 | $2.65\text{ ms}$       | -                      | $32.4\text{ ms}$           |
-| Proposed (Rep-TNSR + BiFG) | 1080p ($2\times$) | 35.45       | 0.952          | 0.094         | 0.038           | 1.62                                 | 1.35 ms                | 1.58 ms                | 29.8 ms                    |
-| Reference: NVIDIA DLSS 3.7 | 1080p ($2\times$) | 36.10       | 0.961          | 0.082         | 0.032           | 1.45                                 | $1.15\text{ ms}$       | $1.40\text{ ms}$       | $28.5\text{ ms}$           |
-| AMD FSR 3.1.4              | 4K ($2\times$)    | 34.20       | 0.925          | 0.125         | 0.049           | 2.45                                 | $3.85\text{ ms}$       | $5.40\text{ ms}$       | $36.5\text{ ms}$           |
-| Proposed (Rep-TNSR + BiFG) | 4K ($2\times$)    | 36.80       | 0.964          | 0.078         | 0.031           | 1.38                                 | 3.65 ms                | 3.95 ms                | 34.2 ms                    |
-
-**Statistical Rigor**: Metric improvements over FSR 3.1.4 are statistically significant under a two-tailed Wilcoxon signed-rank test ($p \lt 0.001, N = 1{,}200$ test frames across 10 scenes) with 95% bootstrap confidence intervals.
-
-#### Perceptual Double-Blind Evaluation
-
-To confirm visual superiority, an automated 2-Alternative Forced Choice (2AFC) study was conducted with 30 observers:
-
-- **Test Stimuli**: 10-second video sequences rendered at native display refresh rates comparing FSR 3.1.4 against the proposed pipeline under identical dynamic camera orbits.
-- **Protocol**: Display panels were calibrated to sRGB at 120 Hz. Participants identified the clip showing superior edge stability, detail preservation, and minimal artefacting.
-- **Result**: Observers preferred the proposed pipeline in 78.4% of pairwise comparisons ($p \lt 10^{-6}$), noting improved foliage stability, preserved chain-link fence geometry, and the absence of block-edge tearing under rapid motion.
-
-### 25.9 Comprehensive Ablation Matrix and Architectural Sensitivity
-
-Ablations were conducted on the CitySample benchmark ($1080\text{p} \to 4\text{K}, s=2$) to isolate the impact of individual architectural components:
-
-| Ablation Identifier       | Structural Variation Evaluated                                                      | PSNR ↑ (dB) | LPIPS ↓ | Mean FLIP ↓ | $E\_{\text{warp}}\;(\times 10^{-3})$ | Kernel Time (Navi 23) | Architectural Finding                                   |
-| :------------------------ | :---------------------------------------------------------------------------------- | :---------- | :------ | :---------- | :----------------------------------- | :-------------------- | :------------------------------------------------------ |
-| A0: Full Pipeline         | Complete Rep-TNSR + Rep-BiFG                                                        | 36.80       | 0.078   | 0.031       | 1.38                                 | 3.65 ms               | Optimal configuration                                   |
-| A1: No Reparameterization | Sequential $3 \times 3$ Conv (no training branches)                                 | 34.60       | 0.115   | 0.048       | 1.85                                 | $3.65\text{ ms}$      | Multi-branch training essential for detail              |
-| A2: No Differential Ops   | RepConv without Sobel and Laplacian branches                                        | 35.85       | 0.092   | 0.039       | 1.54                                 | $3.65\text{ ms}$      | Differential operators boost edges by $+0.95\text{ dB}$ |
-| A3: No Temporal Loss      | Model trained strictly on $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}}$ | 36.10       | 0.089   | 0.042       | 4.82                                 | $3.65\text{ ms}$      | Severe temporal instability & shimmering                |
-| A4: No FLIP Metric Loss   | Trained without $\mathcal{L}\_{\text{FLIP}}$ objective                              | 36.45       | 0.098   | 0.045       | 1.45                                 | $3.65\text{ ms}$      | Perceptual sensitivity drops without CSF                |
-| A5: Heuristic Clamping    | Learned aggregation replaced by FSR ellipsoid clamp                                 | 34.90       | 0.108   | 0.046       | 2.65                                 | $3.40\text{ ms}$      | Heuristics fail to resolve complex sub-pixel motion     |
-| A6: Shared Backbone       | Monolithic network handling both SR and FG                                          | 35.10       | 0.102   | 0.044       | 2.10                                 | $6.85\text{ ms}$      | Stalls primary queue; memory bandwidth saturated        |
-| A7: 7-Pass Optical Flow   | Forward splatting replaced by FSR 3.1 block search                                  | 35.20       | 0.106   | 0.047       | 2.30                                 | $5.10\text{ ms}$      | Introduces block tearing; ALU runtime up by 30%         |
-
-### 25.10 Edge Cases, Failure Modes, and Production Mitigations
-
-- **Abrupt Scene Cuts**: Reprojecting history across cuts pollutes the frame with invalid scene contents. The temporal pre-pass calculates a normalised scene change metric across 9 screen tiles. If the histogram divergence exceeds $\tau\_{\text{scene}} = 0.45$, a temporal reset flag is set, bypassing the history buffer and running Rep-TNSR in spatial fallback mode for that frame.
-- **Sub-Pixel Geometry and Shimmering**: Fine structures (such as power lines and chain-link fences) can fall between low-resolution samples across frames. A $3 \times 3$ nearest-depth dilation pass identifies silhouette boundaries, where history accumulation is constrained by a tightened variance bounding box in YCoCg space to prevent background sample bleeding.
-- **User Interface (UI) Corruption**: Passing rendered 2D UI elements through frame interpolation causes severe smearing and double-image artefacts. The engine isolates the UI into an off-screen render target, composing it onto the upscaled frame after super-resolution. For engines that cannot separate UI rendering, a difference pre-pass extracts the UI alpha mask by comparing pre-UI and post-UI colour buffers, directly re-compositing the unwarped UI onto the final interpolated frame.
-- **Low Framerate Collapses ($\lt 40\text{ FPS}$)**: At low baseline framerates, large inter-frame pixel displacements violate linear trajectory assumptions. The swapchain pacing proxy monitors frame presentation intervals; if the rendering duration exceeds $25.0\text{ ms}$, the system blends the Rep-BiFG output back to the original rendered frame ($I\_t$), avoiding visual judder.
-
-### 25.11 Implementation Artifacts, Configuration, and Codebase Skeleton
-
-The repository layout establishes a modular workspace separating engine shaders, DirectML dispatchers, training scripts, and export pipelines:
-
-- `configs/`: Pipeline parameters (`engine_pipeline.yaml`), model configurations (`model_rep_tnsr.yaml`, `model_rep_bifg.yaml`).
-- `scripts/`: Shell scripts for data acquisition (`download_datasets.sh`), distributed execution (`train_distributed.sh`), model export (`export_onnx_directml.py`), and automated testing (`automated_benchmark.py`).
-- `src/cpp/`: DirectML and swapchain implementation headers and source files (`DirectMLDispatcher.h`, `DirectMLDispatcher.cpp`, `FramePacingSwapchain.h`, `FramePacingSwapchain.cpp`).
-- `src/python/`: Data pipelines, model definitions, loss functions, and training entry points (`datasets/`, `models/rep_tnsr.py`, `models/rep_bifg.py`, `losses/composite_loss.py`, `train.py`).
-- `src/shaders/`: HLSL compute shaders for temporal pre-processing, bilateral splatting, and sub-pixel reconstruction (`PreProcessTemporal.hlsl`, `BilateralSplat.hlsl`, `SubPixelReconstruct.hlsl`).
-- `tests/`: Automated unit and numerical parity tests (`test_reparameterization.py`, `test_directml_equivalence.py`, `test_numerical_stability.py`).
-
-#### Pipeline Configuration: configs/engine_pipeline.yaml
-
-```yaml
-system:
-  gpu_backend: "DirectML"
-  precision: "FP16"
-  enable_async_compute: true
-
-super_resolution:
-  scale_factor: 2.0
-  in_channels: 11
-  base_channels: 32
-  num_blocks: 4
-  pre_exposure_correction: true
-  color_space: "YCoCg_Logarithmic"
-  gamma_threshold: 1.25
-
-frame_generation:
-  mode: "BilateralSplatInpainting"
-  motion_vector_scale: 0.5
-  depth_rejection_epsilon: 0.01
-  inpainting_channels: 24
-  low_fps_threshold_ms: 25.0
-
-training:
-  seed: 42
-  batch_size: 32
-  sequence_length: 10
-  lr_initial: 0.0005
-  lr_min: 0.000001
-  total_iterations: 400000
-  weight_decay: 0.0001
-  mixed_precision: true
-  loss_weights:
-    charbonnier: 1.0
-    edge: 0.5
-    flip: 0.10
-    perceptual: 0.05
-    temporal: 0.35
-```
-
-#### Dataset Download Script: scripts/download_datasets.sh
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-DATASET_ROOT="./data"
-mkdir -p "${DATASET_ROOT}"
-
-echo "Fetching TartanAir environment subsets..."
-python -m pip install tartanair-wrapper
-python -c "
-import tartanair as ta
-ta.download(env='abandonedfactory', data_type=['image', 'depth', 'flow'], root='${DATASET_ROOT}/tartanair')
-ta.download(env='neighborhood', data_type=['image', 'depth', 'flow'], root='${DATASET_ROOT}/tartanair')
-"
-
-echo "Downloading MPI Sintel Benchmark dataset..."
-wget -c http://files.is.tue.mpg.de/sintel/MPI-Sintel-complete.zip -P "${DATASET_ROOT}"
-unzip -q "${DATASET_ROOT}/MPI-Sintel-complete.zip" -d "${DATASET_ROOT}/sintel"
-rm "${DATASET_ROOT}/MPI-Sintel-complete.zip"
-
-echo "Validating captured Unreal Engine 5 production datasets..."
-mkdir -p "${DATASET_ROOT}/ue5_custom_captures"
-python -c "
-import os
-path = '${DATASET_ROOT}/ue5_custom_captures'
-if not os.listdir(path):
-    print('NOTICE: Place captured UE5 HDF5 shards in', path)
-else:
-    print('UE5 capture shards validated successfully.')
-"
-
-echo "Dataset pipeline initialization complete."
-```
-
-#### Distributed Training Command: scripts/train_distributed.sh
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export OMP_NUM_THREADS=4
-
-torchrun \
-    --nproc_per_node=8 \
-    --nnodes=1 \
-    --rdzv_id=4566 \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=localhost:29500 \
-    src/python/train.py \
-    --config configs/engine_pipeline.yaml \
-    --output_dir ./checkpoints/rep_tnsr_production
-```
-
-#### PyTorch Model and Reparameterization Module: src/python/models/rep_tnsr.py
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class RepConv3x3Block(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-        self.conv3x3 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=True)
-        self.conv1x1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0, bias=True)
-
-        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
-        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
-        laplacian = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=torch.float32).view(1, 1, 3, 3)
-
-        self.register_buffer("sobel_x", sobel_x)
-        self.register_buffer("sobel_y", sobel_y)
-        self.register_buffer("laplacian", laplacian)
-
-        self.conv_sobel_x = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True)
-        self.conv_sobel_y = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True)
-        self.conv_laplacian = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=True)
-
-        self.act = nn.PReLU(num_parameters=out_channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.conv3x3(x) + self.conv1x1(x)
-
-        sx = F.conv2d(x, self.sobel_x.repeat(self.in_channels, 1, 1, 1), padding=1, groups=self.in_channels)
-        sy = F.conv2d(x, self.sobel_y.repeat(self.in_channels, 1, 1, 1), padding=1, groups=self.in_channels)
-        lap = F.conv2d(x, self.laplacian.repeat(self.in_channels, 1, 1, 1), padding=1, groups=self.in_channels)
-
-        out += self.conv_sobel_x(sx) + self.conv_sobel_y(sy) + self.conv_laplacian(lap)
-        if self.in_channels == self.out_channels:
-            out += x
-        return self.act(out)
-
-    @torch.no_grad()
-    def export_fused_conv(self) -> nn.Conv2d:
-        w_fused = self.conv3x3.weight.clone()
-        b_fused = self.conv3x3.bias.clone()
-
-        w_fused += F.pad(self.conv1x1.weight, (1, 1, 1, 1), mode="constant", value=0)
-        b_fused += self.conv1x1.bias
-
-        w_sobel_x_fused = self.conv_sobel_x.weight * self.sobel_x
-        w_sobel_y_fused = self.conv_sobel_y.weight * self.sobel_y
-        w_lap_fused = self.conv_laplacian.weight * self.laplacian
-
-        w_fused += (w_sobel_x_fused + w_sobel_y_fused + w_lap_fused)
-        b_fused += (self.conv_sobel_x.bias + self.conv_sobel_y.bias + self.conv_laplacian.bias)
-
-        if self.in_channels == self.out_channels:
-            id_kernel = torch.zeros_like(w_fused)
-            for i in range(self.in_channels):
-                id_kernel[i, i, 1, 1] = 1.0
-            w_fused += id_kernel
-
-        fused_layer = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=3, padding=1, bias=True)
-        fused_layer.weight.copy_(w_fused)
-        fused_layer.bias.copy_(b_fused)
-        return fused_layer
-
-class RepTNSRNet(nn.Module):
-    def __init__(self, in_channels: int = 11, base_channels: int = 32, scale: int = 2):
-        super().__init__()
-        self.scale = scale
-        self.stem = RepConv3x3Block(in_channels, base_channels)
-        self.block1 = RepConv3x3Block(base_channels, base_channels)
-        self.block2 = RepConv3x3Block(base_channels, base_channels)
-        self.block3 = RepConv3x3Block(base_channels, base_channels)
-        self.block4 = RepConv3x3Block(base_channels, base_channels)
-
-        self.conv_out = nn.Conv2d(base_channels, 3 * (scale ** 2), kernel_size=3, padding=1)
-        self.pixel_shuffle = nn.PixelShuffle(scale)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        feat = self.stem(x)
-        feat = self.block1(feat)
-        feat = self.block2(feat)
-        feat = self.block3(feat)
-        feat = self.block4(feat)
-        shuffled = self.conv_out(feat)
-        return self.pixel_shuffle(shuffled)
-
-    def export_deployable_model(self) -> nn.Sequential:
-        fused_stem = self.stem.export_fused_conv()
-        fused_b1 = self.block1.export_fused_conv()
-        fused_b2 = self.block2.export_fused_conv()
-        fused_b3 = self.block3.export_fused_conv()
-        fused_b4 = self.block4.export_fused_conv()
-
-        return nn.Sequential(
-            fused_stem, self.stem.act,
-            fused_b1, self.block1.act,
-            fused_b2, self.block2.act,
-            fused_b3, self.block3.act,
-            fused_b4, self.block4.act,
-            self.conv_out,
-            self.pixel_shuffle
-        )
-```
-
-#### Unit Test Suite: tests/test_reparameterization.py
-
-```python
-import pytest
-import torch
-from src.python.models.rep_tnsr import RepConv3x3Block, RepTNSRNet
-
-def test_repconv_exact_equivalence():
-    torch.manual_seed(42)
-    in_channels, out_channels = 32, 32
-    h, w = 64, 64
-    x = torch.randn(2, in_channels, h, w, dtype=torch.float32)
-
-    block = RepConv3x3Block(in_channels, out_channels)
-    block.eval()
-
-    with torch.no_grad():
-        out_train = block(x)
-        fused_conv = block.export_fused_conv()
-        out_fused = block.act(fused_conv(x))
-
-    max_diff = torch.max(torch.abs(out_train - out_fused)).item()
-    assert max_diff < 1e-5, f"Reparameterization error exceeds numerical tolerance: {max_diff}"
-
-def test_full_model_export_parity():
-    torch.manual_seed(42)
-    net = RepTNSRNet(in_channels=11, base_channels=32, scale=2)
-    net.eval()
-    x = torch.randn(1, 11, 128, 128, dtype=torch.float32)
-
-    with torch.no_grad():
-        y_multi_branch = net(x)
-        deployable_net = net.export_deployable_model()
-        y_fused = deployable_net(x)
-
-    max_diff = torch.max(torch.abs(y_multi_branch - y_fused)).item()
-    assert max_diff < 1e-4, f"Deployable model export mismatch: {max_diff}"
-```
-
-#### HLSL Pre-Processing Compute Shader: src/shaders/PreProcessTemporal.hlsl
-
-```hlsl
-#define THREAD_GROUP_SIZE_X 8
-#define THREAD_GROUP_SIZE_Y 8
-
-cbuffer Constants : register(b0)
-{
-    uint2 g_LRResolution;
-    uint2 g_HRResolution;
-    float2 g_JitterOffset;
-    float g_ExposureMultiplier;
-    float g_InvExposureMultiplier;
-    float g_GammaThreshold;
-    float g_Padding;
-};
-
-Texture2D<float4> g_CurrentColorTexture : register(t0);
-Texture2D<float2> g_MotionVectorTexture : register(t1);
-Texture2D<float>  g_LinearDepthTexture  : register(t2);
-Texture2D<float4> g_HistoryColorTexture : register(t3);
-Texture2D<float>  g_ReactiveMaskTexture : register(t4);
-
-SamplerState g_LinearSampler : register(s0);
-SamplerState g_PointSampler  : register(s1);
-
-RWStructuredBuffer<float16_t> g_PackedInputBuffer : register(u0);
-
-float3 RGB_to_YCoCg(float3 c)
-{
-    return float3(
-        0.25f * c.r + 0.50f * c.g + 0.25f * c.b,
-        0.50f * c.r + 0.00f * c.g - 0.50f * c.b,
-       -0.25f * c.r + 0.50f * c.g - 0.25f * c.b
-    );
-}
-
-float3 YCoCg_to_RGB(float3 c)
-{
-    return float3(
-        c.x + c.y - c.z,
-        c.x + c.z,
-        c.x - c.y - c.z
-    );
-}
-
-float CompressLuma(float y)
-{
-    return log(1.0f + max(y, 0.0f)) / (1.0f + log(1.0f + max(y, 0.0f)));
-}
-
-[numthreads(THREAD_GROUP_SIZE_X, THREAD_GROUP_SIZE_Y, 1)]
-void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
-{
-    if (dispatchThreadId.x >= g_LRResolution.x || dispatchThreadId.y >= g_LRResolution.y)
-        return;
-
-    int2 currentCoord = int2(dispatchThreadId.xy);
-    float2 invRes = 1.0f / float2(g_LRResolution);
-    float2 centerUV = (float2(currentCoord) + 0.5f) * invRes;
-
-    // 1. Dilate Motion Vectors by Nearest Depth in a 3x3 Window
-    float nearestDepth = 1e8f;
-    int2 bestOffset = int2(0, 0);
-
-    [unroll]
-    for (int dy = -1; dy <= 1; ++dy)
-    {
-        [unroll]
-        for (int dx = -1; dx <= 1; ++dx)
-        {
-            int2 sc = clamp(currentCoord + int2(dx, dy), int2(0, 0), int2(g_LRResolution) - 1);
-            float d = g_LinearDepthTexture.Load(int3(sc, 0)).r;
-            if (d < nearestDepth)
-            {
-                nearestDepth = d;
-                bestOffset = int2(dx, dy);
-            }
-        }
-    }
-
-    float2 dilatedMV = g_MotionVectorTexture.Load(int3(currentCoord + bestOffset, 0)).xy;
-    float2 historyUV = centerUV - dilatedMV - g_JitterOffset;
-
-    // 2. Compute 3x3 Moments in YCoCg Space for Variance Clamping
-    float3 m1 = 0.0f;
-    float3 m2 = 0.0f;
-    float3 centerLinearRGB = 0.0f;
-
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            int2 sc = clamp(currentCoord + int2(x, y), int2(0, 0), int2(g_LRResolution) - 1);
-            float3 col = g_CurrentColorTexture.Load(int3(sc, 0)).rgb * g_ExposureMultiplier;
-            float3 ycocg = RGB_to_YCoCg(col);
-            if (x == 0 && y == 0)
-                centerLinearRGB = col;
-            m1 += ycocg;
-            m2 += ycocg * ycocg;
-        }
-    }
-
-    float3 mean = m1 / 9.0f;
-    float3 stdDev = sqrt(abs((m2 / 9.0f) - (mean * mean)));
-    float3 aabbMin = mean - g_GammaThreshold * stdDev;
-    float3 aabbMax = mean + g_GammaThreshold * stdDev;
-
-    // 3. Sample and Clamp Temporal History
-    float3 rawHistRGB = g_HistoryColorTexture.SampleLevel(g_LinearSampler, historyUV, 0.0f).rgb * g_ExposureMultiplier;
-    float3 histYCoCg = clamp(RGB_to_YCoCg(rawHistRGB), aabbMin, aabbMax);
-    float3 clampedHistRGB = YCoCg_to_RGB(histYCoCg);
-
-    // 4. Validate History Boundary Conditions
-    float disocclusion = 1.0f;
-    if (historyUV.x < 0.0f || historyUV.x > 1.0f || historyUV.y < 0.0f || historyUV.y > 1.0f)
-    {
-        disocclusion = 0.0f;
-        clampedHistRGB = centerLinearRGB;
-    }
-
-    // 5. Compress Luminance for Dynamic Range Regularization
-    float3 currYCoCg = RGB_to_YCoCg(centerLinearRGB);
-    currYCoCg.x = CompressLuma(currYCoCg.x);
-    float3 normCurr = YCoCg_to_RGB(currYCoCg);
-
-    float3 histNormYCoCg = RGB_to_YCoCg(clampedHistRGB);
-    histNormYCoCg.x = CompressLuma(histNormYCoCg.x);
-    float3 normHist = YCoCg_to_RGB(histNormYCoCg);
-
-    float reactive = g_ReactiveMaskTexture.Load(int3(currentCoord, 0)).r;
-
-    // 6. Write Planar Tensor to Input Buffer [11, H, W]
-    uint spatialIdx = currentCoord.y * g_LRResolution.x + currentCoord.x;
-    uint planeStride = g_LRResolution.x * g_LRResolution.y;
-
-    g_PackedInputBuffer[0 * planeStride + spatialIdx] = float16_t(normCurr.r);
-    g_PackedInputBuffer[1 * planeStride + spatialIdx] = float16_t(normCurr.g);
-    g_PackedInputBuffer[2 * planeStride + spatialIdx] = float16_t(normCurr.b);
-    g_PackedInputBuffer[3 * planeStride + spatialIdx] = float16_t(normHist.r);
-    g_PackedInputBuffer[4 * planeStride + spatialIdx] = float16_t(normHist.g);
-    g_PackedInputBuffer[5 * planeStride + spatialIdx] = float16_t(normHist.b);
-    g_PackedInputBuffer[6 * planeStride + spatialIdx] = float16_t(dilatedMV.x);
-    g_PackedInputBuffer[7 * planeStride + spatialIdx] = float16_t(dilatedMV.y);
-    g_PackedInputBuffer[8 * planeStride + spatialIdx] = float16_t(nearestDepth);
-    g_PackedInputBuffer[9 * planeStride + spatialIdx] = float16_t(disocclusion);
-    g_PackedInputBuffer[10 * planeStride + spatialIdx] = float16_t(reactive);
-}
-```
-
-#### DirectML Dispatcher Interface: src/cpp/DirectMLDispatcher.h
-
-```cpp
-#pragma once
-#include <d3d12.h>
-#include <DirectML.h>
-#include <wrl/client.h>
-#include <cstdint>
-
-using Microsoft::WRL::ComPtr;
-
-struct PipelineConstants
-{
-    uint32_t LRWidth;
-    uint32_t LRHeight;
-    uint32_t HRWidth;
-    uint32_t HRHeight;
-    float JitterOffsetX;
-    float JitterOffsetY;
-    float ExposureMultiplier;
-    float InvExposureMultiplier;
-    float GammaThreshold;
-    float LowFpsThresholdMs;
-    float Padding[2];
-};
-
-class DirectMLPipelineManager
-{
-public:
-    DirectMLPipelineManager(ID3D12Device* device, IDMLDevice* dmlDevice);
-    ~DirectMLPipelineManager() = default;
-
-    void InitializeResources(uint32_t lrW, uint32_t lrH, uint32_t hrW, uint32_t hrH);
-
-    void DispatchSuperResolution(
-        ID3D12GraphicsCommandList4* cmdList,
-        ID3D12Resource* lrColor,
-        ID3D12Resource* motionVectors,
-        ID3D12Resource* depth,
-        ID3D12Resource* reactiveMask,
-        ID3D12Resource* hrOutputTarget,
-        const PipelineConstants& constants);
-
-    void DispatchFrameGenerationAsync(
-        ID3D12GraphicsCommandList4* asyncComputeCmdList,
-        ID3D12Resource* prevFrameHR,
-        ID3D12Resource* currFrameHR,
-        ID3D12Resource* motionVectors,
-        ID3D12Resource* depth,
-        ID3D12Resource* generatedFrameTarget,
-        const PipelineConstants& constants);
-
-private:
-    ComPtr<ID3D12Device>         m_d3d12Device;
-    ComPtr<IDMLDevice>           m_dmlDevice;
-    ComPtr<IDMLCommandRecorder>  m_dmlRecorder;
-    ComPtr<IDMLCompiledOperator> m_tnsrCompiledOperator;
-    ComPtr<IDMLCompiledOperator> m_bifgCompiledOperator;
-    ComPtr<IDMLBindingTable>     m_tnsrBindingTable;
-    ComPtr<IDMLBindingTable>     m_bifgBindingTable;
-
-    ComPtr<ID3D12Resource>       m_historyPing;
-    ComPtr<ID3D12Resource>       m_historyPong;
-    ComPtr<ID3D12Resource>       m_tnsrPackedInput;
-    ComPtr<ID3D12Resource>       m_tnsrIntermediate;
-    ComPtr<ID3D12Resource>       m_bifgSplatDepth;
-};
-```
-
-### 25.12 Final Synthesis and Execution Plan
-
-#### 1. Recommended Final Architecture
-
-The complete system, designated **Rep-Graphics-Pipeline v1.0**, consists of two fully decoupled components:
-
-- **Rep-TNSR (Upscaler)**: A 5-stage structurally reparameterised convolutional network operating on an 11-channel low-resolution input tensor ($C=32$, 43,612 fused parameters, $17.62\text{ GMACs}$ at 1080p output), collapsing into a single-path sequence of plain $3 \times 3$ convolutions at deployment and terminating in a sub-pixel shuffle layer.
-- **Rep-BiFG (Frame Generator)**: An atomic depth-tested bilateral forward splatting compute pass that reconstructs intermediate motion fields ($t-0.5$), coupled with an async 4-stage reparameterised inpainting trunk ($C=24$, 32,448 parameters, $12.8\text{ GMACs}$ at 1080p), fully decoupled from the primary render queue.
-
-#### 2. Exact Experiment Matrix
-
-The validation matrix evaluates five distinct model checkpoints against FSR 3.1 across three hardware configurations:
-
-| Exp ID | Architecture Configuration   | Objective Formulation                                       | Target Hardware         | Primary Validation Gate                        |
-| :----- | :--------------------------- | :---------------------------------------------------------- | :---------------------- | :--------------------------------------------- |
-| EXP-01 | Rep-TNSR (Spatial Baseline)  | $\mathcal{L}\_{\text{char}} + \mathcal{L}\_{\text{edge}}$   | GTX 1650 Mobile (TU117) | Kernel Latency $\le 2.25\text{ ms}$ (1080p)    |
-| EXP-02 | Rep-TNSR + Recurrent History | $+ \mathcal{L}\_{\text{temp}} (M\_{\text{valid}})$          | GTX 1650 Mobile (TU117) | $E\_{\text{warp}} \le 1.80 \times 10^{-3}$     |
-| EXP-03 | Rep-TNSR Production          | $+ \mathcal{L}\_{\text{FLIP}} + \mathcal{L}\_{\text{perc}}$ | RX 6600 (Navi 23)       | $\text{PSNR} \ge +1.50\text{ dB}$ over FSR 3.1 |
-| EXP-04 | Rep-BiFG Splatting Alone     | Heuristic Blending                                          | RX 6600 (Navi 23)       | FG Kernel Time $\le 1.60\text{ ms}$            |
-| EXP-05 | Full Combined Pipeline       | Full Composite Loss                                         | Arc A770 / RTX 4070     | Zero-tear presentation, FLIP $\le 0.038$       |
-
-#### 3. Minimum Reproducible Benchmark
-
-The benchmark harness validates the core claims on a single GPU without requiring game engine installation:
-
-1. Clone the repository and run `scripts/download_datasets.sh` to fetch the synthetic validation bundle ($1,000$ paired sequences from TartanAir and UE5 captures).
-2. Execute `python scripts/automated_benchmark.py --model_checkpoint ./checkpoints/rep_tnsr_production.pt --device cuda:0`.
-3. The harness loads native FP16 weights, runs 1,000 warm-up iterations at $960 \times 540 \to 1920 \times 1080$, records Direct3D 12/Vulkan timestamp queries, evaluates PSNR, SSIM, LPIPS, FLIP, and $E\_{\text{warp}}$, and reports pass/fail verification against the hard-coded AMD FSR 3.1 baseline.
-
-#### 4. Phased Implementation Plan
-
-- **Phase 1: Foundations and Capture Pipeline (Weeks 01 to 04)**: Deliver the Unreal Engine 5 automated capture plugin, the dataset sharding pipeline, and the baseline verification harness. Acceptance gate: $\ge 50,000$ valid sequence frames captured with ground-truth SSAA and G-buffers.
-- **Phase 2: Rep-TNSR Training and Export (Weeks 05 to 08)**: Train the multi-branch model, implement structural reparameterisation export scripts, and deploy via DirectML. Acceptance gate: Numerical parity between the training graph and fused model ($\lt 10^{-4}$); Kernel latency $\le 2.25\text{ ms}$ on GTX 1650 Mobile.
-- **Phase 3: Rep-BiFG Bilateral Synthesis (Weeks 09 to 12)**: Implement the atomic min-depth splatting compute shader, train the bilateral inpainting trunk, and configure async compute dispatch. Acceptance gate: FG latency $\le 2.40\text{ ms}$ on TU117; complete elimination of block-edge tearing artefacts.
-- **Phase 4: Swapchain Integration and Validation (Weeks 13 to 16)**: Build the Direct3D 12/Vulkan proxy swapchain, set up the PresentMon latency profiling harness, and conduct the double-blind human study. Acceptance gate: Pipeline outperforms FSR 3.1 across $\ge 75\%$ of perceptual comparisons.
-
-#### 5. Complete Repository and Code Skeleton
-
-The source files provided throughout this specification constitute the core functional skeleton:
-
-- Configuration schema: `configs/engine_pipeline.yaml`
-- Ingestion scripts: `scripts/download_datasets.sh`
-- Training automation: `scripts/train_distributed.sh`
-- PyTorch network & reparameterisation engine: `src/python/models/rep_tnsr.py`
-- Test suite: `tests/test_reparameterization.py`
-- Production HLSL shader: `src/shaders/PreProcessTemporal.hlsl`
-- C++ DirectML runtime dispatcher: `src/cpp/DirectMLDispatcher.h`
-
-#### 6. Smallest Experiment Capable of Falsifying the Core Hypothesis
-
-To test the core hypothesis that a structurally reparameterised single-path convolution can match the reconstruction fidelity of a multi-branch residual network within a 2.5 ms latency budget on an entry-level GPU without matrix cores:
-
-1. Train a 5-layer Rep-TNSR block against a baseline 5-layer Residual CNN with identical parameter counts (43.6k) on 5,000 frames of the CitySample dataset for 20,000 iterations using $\mathcal{L}\_{\text{char}}$.
-2. If the fused Rep-TNSR model fails to achieve within $0.20\text{ dB}$ PSNR of the multi-branch residual network while executing in under $2.25\text{ ms}$ on a TU117 GPU (where the residual baseline stalls due to memory bandwidth overhead from skip concatenations), the structural reparameterisation hypothesis is falsified.
-3. If the model satisfies this latency-accuracy gate, full production scaling across the complete curriculum is statistically and architecturally justified.
+## 21. Reproducibility Checklist
+
+- [ ] Seeds fixed (Python, NumPy, PyTorch, CUDA) and recorded with each run.
+- [ ] `CUBLAS_WORKSPACE_CONFIG=:16:8` and deterministic algorithms for final runs.
+- [ ] Package versions pinned (PyTorch, torchvision, lpips, torchmetrics, OmegaConf, OpenEXR).
+- [ ] Dataset downloads verified by SHA-256.
+- [ ] One `torchrun` command plus one config file reproduces each training run.
+- [ ] Checkpoints hold model, optimiser, scheduler, scaler, EMA, RNG states, iteration and best metric.
+- [ ] Evaluation is deterministic for a given checkpoint and data.
+- [ ] Metrics use the listed libraries, or documented reimplementations.
+- [ ] GPU, driver, CUDA, PyTorch versions and git commit logged with every run.
+- [ ] Unit tests: fused block and full-model parity, Charbonnier gradient at zero, temporal loss zero where the mask is zero, ONNX parity, latency within budget on target hardware.
+- [ ] Runs tracked in [Weights & Biases](https://wandb.ai/) or [MLflow](https://github.com/mlflow/mlflow), with configuration hash, hardware, dataset version, and validation and test metrics.
