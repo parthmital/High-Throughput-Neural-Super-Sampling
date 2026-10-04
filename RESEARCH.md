@@ -1,678 +1,473 @@
-# NeuralSS: Neural Super-Sampling and Frame Generation
-
-Research plan for a GPU-agnostic, real-time neural upscaler (Rep-TNSR) and frame generator (NeuralFG) intended to measurably outperform AMD FSR 3.1 in image quality, temporal stability, latency and generalisation.
-
-**Status (October 2026).** This repository contains this plan and two Kaggle notebooks that train and evaluate RGB-only versions of both networks on public datasets (section 13). No result in this document comes from the proposed G-buffer system yet. Every number is labelled as one of: a target, an arithmetic estimate, or a measurement carried over from the earlier Rep-TNSR v1 project (section 15).
-
-## 1. Objective and Hypotheses
-
-**Objective.** Build two small, decoupled networks, Rep-TNSR for upscaling and NeuralFG for frame interpolation. They consume engine G-buffers (colour, motion vectors, depth, exposure), run through vendor-neutral APIs (DirectML, Vulkan, plain compute shaders), and beat FSR 3.1 at the same scale factor on the same GPU.
-
-**Core hypothesis.** A lightweight convolutional network conditioned on G-buffers produces sharper and more temporally stable upscaled frames, and more accurate interpolated frames, than FSR 3.1's hand-tuned heuristics, within the same latency and memory envelope and without vendor-specific hardware.
-
-| ID  | Hypothesis                                                                                                                                    | Falsified if                                                                                                              |
-| :-- | :-------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
-| H1  | Neural SR with G-buffer conditioning and structural reparameterisation gives higher perceptual quality than FSR 3.1 at the same scale factor. | Our LPIPS is not lower than FSR 3.1's on at least 3 of the 5 test sequences.                                              |
-| H2  | Learned temporal accumulation with variance-clamped history reduces ghosting and flicker below FSR 3.1.                                       | Our warping error or tOF is not lower than FSR 3.1's.                                                                     |
-| H3  | Learned intermediate flow with occlusion-aware blending produces fewer disocclusion artefacts than FSR 3.1 frame generation.                  | Human preference for ours is below 55 percent on the disocclusion test set.                                               |
-| H4  | The full SR + FG pipeline fits FSR 3.1's latency envelope.                                                                                    | Our P95 latency exceeds FSR 3.1's by more than 20 percent on any tested GPU, or misses the absolute targets in section 2. |
-| H5  | Training on diverse synthetic G-buffer data generalises to unseen games and engines without fine-tuning.                                      | LPIPS degrades by more than 15 percent on any held-out game set relative to in-distribution content.                      |
-
-## 2. Success Criteria
-
-Comparisons use the FSR 3.1 mode with the same scale factor. FSR 3.1 presets are Quality 1.5x, Balanced 1.7x, Performance 2.0x and Ultra Performance 3.0x per axis ([AMD FSR 3.1 manual](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/super-resolution-upscaler/)). The primary configuration, 640x360 to 1920x1080, is 3x and is therefore compared against **Ultra Performance**, not Quality.
-
-FSR 3.1 baseline values are not assumed. They are measured on the identical test sequences in experiment SR-001 and LAT-001, and the targets below are relative to those measurements.
-
-| Metric                                    | Target                                                   | Measurement                                                     |
-| :---------------------------------------- | :------------------------------------------------------- | :-------------------------------------------------------------- |
-| PSNR, luma (dB)                           | at least +1.5 dB over FSR 3.1                            | Per-frame mean over the test sequences                          |
-| SSIM                                      | at least +0.015 over FSR 3.1                             | Full RGB, per-frame mean                                        |
-| LPIPS (AlexNet)                           | at least 20 percent lower                                | Per-frame mean                                                  |
-| Warping error                             | at least 25 percent lower                                | Ground-truth motion-vector warp, valid pixels only (section 12) |
-| tOF                                       | at least 20 percent lower                                | RAFT flow on outputs against RAFT flow on ground truth          |
-| VMAF                                      | at least +5 points                                       | Per-sequence, Netflix VMAF via ffmpeg                           |
-| FG PSNR (dB)                              | at least +2.0 dB over FSR 3.1 FG                         | Interpolated frame against the rendered middle frame            |
-| FG LPIPS                                  | at least 25 percent lower                                | Interpolated frame                                              |
-| SR latency, 1080p output, RTX 3060        | P95 at most 1.5 ms and at most 120 percent of FSR 3.1    | D3D12 timestamp queries                                         |
-| FG latency, 1080p, RTX 3060               | P95 at most 2.5 ms and at most 120 percent of FSR 3.1 FG | D3D12 timestamp queries                                         |
-| SR latency, 1080p output, GTX 1650 Mobile | P95 at most 3.0 ms (Performance or Quality tier)         | D3D12 timestamp queries                                         |
-| Pipeline VRAM, 1080p                      | at most 100 MB                                           | Committed resources (section 10.3)                              |
-| Parameters                                | SR at most 50K, FG at most 200K                          | Fused model parameter count                                     |
-
-## 3. Baseline: AMD FSR 3.1
-
-FSR 3.1 ([FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), MIT licence) is the open, cross-vendor baseline. Neither its upscaler nor its frame generator uses neural inference.
-
-**Temporal upscaler.** Sub-pixel camera jitter from a Halton(2,3) sequence; reprojection of history with dilated motion vectors and depth; history rectification by colour-space variance clamping; Lanczos-style reconstruction of jittered samples; reactive and transparency masks to reduce history weight; sharpening (RCAS). Version 3.1 decoupled the upscaler from frame generation and reworked accumulation to reduce shimmering on thin geometry.
-
-**Frame generation.** Hierarchical optical flow on luminance between frames t-1 and t, fused with dilated engine motion vectors; bidirectional warping to t-0.5; disocclusion hole filling; scene-cut detection by luminance change; UI composited separately through a swapchain proxy. Interpolation adds at least one frame of display latency, mitigated by latency-reduction SDKs (AMD Anti-Lag 2, NVIDIA Reflex).
-
-**Required engine inputs.** LR colour, screen-space motion vectors (`R16G16_FLOAT`), depth (preferably inverted `R32_FLOAT`), exposure, optional reactive and transparency masks, and a separate HUD texture for frame generation.
-
-**Known failure modes.** Smearing at disocclusions during fast camera motion, ghosting on thin geometry, double images when flow fails on fast rotation, HUD distortion without UI separation, particle and transparency smearing without reactive masks, and a sluggish feel below 50 to 60 FPS base rate.
-
-**Other upscalers (reference only, not reproducible baselines).** NVIDIA DLSS 3.x: neural SR on Tensor Cores, frame generation on the RTX 40 optical flow accelerator, closed weights. Intel XeSS 1.3: neural SR on XMX with a DP4a fallback, open SDK (Apache 2.0), closed weights, no frame generation in that version. FSR 3.1 is the only fully open SR plus FG suite.
-
-## 4. Hardware Targets and Compute Budget
-
-Two hardware tiers are targeted. Estimates below assume 65 percent of peak arithmetic throughput, which matches the earlier v1 measurement (section 15.1: 7.96 GFLOP in 2.145 ms on a GTX 1650 Mobile, about 3.7 TFLOPS sustained).
-
-| Quantity                           | GTX 1650 Mobile (TU117)                                   | RTX 3060 (GA106)                                                |
-| :--------------------------------- | :-------------------------------------------------------- | :-------------------------------------------------------------- |
-| Shader cores and clock             | 896 CUDA cores, 1.515 GHz boost (varies by laptop)        | 3,584 CUDA cores, 1.777 GHz boost                               |
-| Peak FP32 (cores x 2 FLOP x clock) | 2.72 TFLOPS                                               | 12.74 TFLOPS                                                    |
-| Peak FP16 without tensor cores     | 5.43 TFLOPS (dedicated FP16 units at twice the FP32 rate) | about 12.74 TFLOPS (same rate as FP32)                          |
-| Sustained FP16 at 65 percent       | 3.53 TFLOPS                                               | 8.28 TFLOPS                                                     |
-| Tensor cores                       | none                                                      | yes; usable only through DirectML meta-commands or vendor paths |
-| Memory bandwidth                   | 128 GB/s (GDDR5) or 192 GB/s (GDDR6)                      | 360 GB/s                                                        |
-| SR budget at 1080p, 60 FPS         | 3.0 ms of the 16.67 ms frame                              | 1.5 ms (success criterion)                                      |
-| Compute in that budget             | 10.6 GFLOP, about 5.3 GMAC                                | 12.4 GFLOP, about 6.2 GMAC                                      |
-| Data movable in that budget        | 384 MB at 128 GB/s                                        | 540 MB                                                          |
-
-Design consequences: no attention, no multi-scale feature pyramids, no wide skip concatenations; all non-linear work happens at LR resolution; one plain 3x3 convolution chain at inference; FP16 storage and arithmetic.
-
-## 5. Datasets
-
-### 5.1 Strategy
-
-1. **Priority 1: Kaggle-hosted public datasets.** Mounted read-only under `/kaggle/input`, used now by the two notebooks to validate architectures, training code and evaluation on standard benchmarks. RGB only.
-2. **Priority 2: Kaggle G-buffer pack (planned).** 300 to 600 consecutive frames of the UE5 Bistro scene with full G-buffers, LR jittered renders and SSAA references, about 2.5 GB compressed, to be uploaded as a private Kaggle dataset. It does not exist yet.
-3. **Priority 3: full UE5 captures and external datasets** on a workstation or cluster (sections 5.4 and 5.5).
-
-### 5.2 Kaggle Datasets (Priority 1)
-
-Contents were checked against the September 2026 notebook run, which listed 539,147 image files in total. Mirrors also contain degraded copies (LR, bicubic, blurred) and non-colour passes; the notebooks drop these by path token before use.
-
-| Dataset             | Kaggle slug                                               | Observed content                                                                                | Used by                                                                               |
-| :------------------ | :-------------------------------------------------------- | :---------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------ |
-| DIV2K               | `soumikrakshit/div2k-high-resolution-images`              | 900 images (800 train, 100 validation), 2K                                                      | SR training                                                                           |
-| Flickr2K            | `daehoyang/flickr2k`                                      | 2,650 images, 2K                                                                                | SR training                                                                           |
-| DF2K-OST            | `itzloghotxd/df2k-ost`                                    | 96,818 files; overlaps DIV2K and Flickr2K                                                       | SR training (duplicates removed by name)                                              |
-| RealSR V3           | `yashchoudhary/realsr-v3`                                 | 3,130 files, paired camera LR/HR                                                                | SR training (HR side only)                                                            |
-| REDS                | `amithkesavmrajagiri/reds-dataset`                        | 48,000 files, 720p sequences, including degraded copies                                         | SR and FG training                                                                    |
-| REDS VSR toy        | `cookiemonsteryum/reds-video-superresolution-toy-dataset` | 48,000 small paired patches                                                                     | Not used (patches smaller than the training crops)                                    |
-| Vimeo-90K septuplet | `wangsally/vimeo-90k-7`                                   | 65,009 frames (about 9,300 septuplets, a subset of the 91,701 in the original release), 448x256 | SR and FG training                                                                    |
-| Vimeo-90K triplet   | `chenshu123/vimeo-triplet`                                | 219,573 frames (about 73,000 triplets), 448x256                                                 | FG training and test (official test list when present), SR training                   |
-| MPI Sintel          | `artemmmtry/mpi-sintel-dataset`                           | 7,466 image files: clean and final passes plus flow visualisations and masks                    | SR and FG training (clean and final only)                                             |
-| FlyingChairs        | `craljimenez/flyingchairs`                                | 22,872 image pairs with `.flo` flow                                                             | Not used by the notebooks (no middle frame); reserved for flow pre-training ablations |
-| Vid4                | `uom200647r/vid4-dataset`                                 | 513 files: the 171 ground-truth frames of 4 sequences plus degraded copies                      | Test only (SR video metrics, FG zero-shot)                                            |
-| SR benchmarks       | `jesucristo/super-resolution-benchmarks`                  | 1,344 files: Set5, Set14, B100, Urban100, Manga109 with LR copies                               | SR test only                                                                          |
-
-**Mount paths.** Kaggle mounts a dataset at `/kaggle/input/<slug>` or, in the newer layout seen in the last run, at `/kaggle/input/datasets/<owner>/<slug>`. The notebooks look up datasets by slug under both layouts and never hard-code inner folder names.
-
-### 5.3 Kaggle Data Pipeline
-
-- **Discovery.** A randomised, capped directory walk per dataset (at most 40,000 to 60,000 files). A full recursive walk of the mounts took 15 minutes in the last run.
-- **Filtering.** Path-token rules drop LR, bicubic, `x2`/`x3`/`x4`, blurred and compressed copies, other methods' outputs, and Sintel flow, occlusion, depth and albedo passes. For test sets, files marked HR or GT are preferred.
-- **Splits.** A deterministic hash of the image, sequence or video id sends about 3 percent of groups to validation, so no sequence is split across train and validation. Benchmarks and Vid4 are test-only.
-- **Caching.** Images are decoded once by all CPU cores into a uint8 patch cache in `/kaggle/working/cache`. The cache is memory-mapped and shared by both GPU processes, then deleted at the end. The last run was limited by JPEG and PNG decoding on 4 cores (about 210 images per second), not by the GPUs.
-- **Degradation.** For SR, LR inputs are made on the GPU with anti-aliased bicubic downsampling to an exact size. This differs slightly from MATLAB `imresize`, so notebook numbers are compared against the bicubic baseline computed in the same way, not against published tables.
-
-### 5.4 Custom UE5 Captures (Priority 3)
-
-Twelve UE5 environments are captured with the pipeline in section 6. Scene roles are fixed in advance so that held-out scenes never enter training.
-
-| Role                        | Scenes                                                                                                 |
-| :-------------------------- | :----------------------------------------------------------------------------------------------------- |
-| Training and validation (9) | Bistro, Sun Temple, Valley, City Park, SciFi Corridor, Medieval, Stylised Forest, Industrial, Interior |
-| Held-out UE5 scenes (3)     | Desert Landscape, Underwater Reef, Cartoon Village                                                     |
-| Held-out engine (2)         | Unity HDRP Urban Street, Unity HDRP Architectural Interior                                             |
-| Direct FSR comparison       | FidelityFX SDK Bistro sample, frames dumped with RenderDoc                                             |
-
-Storage estimate: 12 scenes x 10,800 frames x about 2 MB per frame is about 260 GB raw, and about 80 GB of cached training patches.
-
-### 5.5 External Datasets (Priority 3)
-
-| Dataset                                                               | Content                                                          | Use                        |
-| :-------------------------------------------------------------------- | :--------------------------------------------------------------- | :------------------------- |
-| [ExtraSS](https://github.com/NJU-3DV/ExtraSS)                         | Rendered sequences with G-buffers, jitter and disocclusion masks | Academic cross-validation  |
-| [VIPER / Playing for Benchmarks](https://playing-for-benchmarks.org/) | GTA V sequences with flow and depth                              | Gaming generalisation      |
-| [TartanAir](https://theairlab.org/tartanair-dataset/)                 | Synthetic UE4 sequences with flow, depth and camera poses        | Data-diversity ablation D2 |
-
-### 5.6 Held-Out Test Sets
-
-Never used for training or model selection: the 3 held-out UE5 scenes, the 2 Unity HDRP scenes, the FidelityFX SDK Bistro sequence, Vid4, and the SR benchmarks (Set5, Set14, B100, Urban100, Manga109).
-
-### 5.7 Licences and Commercial Use
-
-Licences must be confirmed on each source page before any release. The table records what is known and the resulting policy.
-
-| Data                              | Licence as known                                                                                            | Commercial weights                        | Policy                                                        |
-| :-------------------------------- | :---------------------------------------------------------------------------------------------------------- | :---------------------------------------- | :------------------------------------------------------------ |
-| Custom UE5 captures               | Project-owned renders under the UE EULA                                                                     | Yes                                       | Primary commercial training data                              |
-| REDS                              | CC BY 4.0                                                                                                   | Yes, with attribution                     | Allowed                                                       |
-| MPI Sintel                        | Max Planck "PS:License 1.0" ([source](https://is.mpg.de/code/sintel-optical-flow-dataset)), not plain CC BY | Not until the licence terms are confirmed | Research only for now                                         |
-| Vimeo-90K                         | Release code under MIT ([toflow](https://github.com/anchen1011/toflow)); source videos carry no licence     | No                                        | Research and prototyping only                                 |
-| DIV2K, DF2K-OST, Flickr2K, RealSR | Academic use; Flickr2K images have mixed Flickr licences                                                    | No                                        | Research only                                                 |
-| FlyingChairs                      | Research use                                                                                                | No                                        | Pre-training experiments only; excluded from released weights |
-| Vid4, SR benchmarks               | Unclear or mixed                                                                                            | No                                        | Evaluation only                                               |
-
-Released commercial weights are trained only on custom UE5 captures, REDS and any dataset whose licence has been confirmed to allow it.
-
-## 6. Synthetic Data Capture (UE5)
-
-Capture runs through an [UnrealCV](https://unrealcv.org/) plugin or a custom capture actor. For every frame:
-
-- Inject sub-pixel jitter: take the Halton(2,3) point at index (t mod K) + 1, subtract 0.5, divide by the LR width and height, and add twice that offset to the projection matrix's third column. K = 9 phases for 3x, 8 for 2x.
-- Render LR colour point-sampled with no TAA or post-processing, and the HR reference with 16x supersampling (2x2 spatial and 4x temporal).
-- Export backward motion vectors (`R16G16_FLOAT`), forward motion vectors (needed for exact temporal-reversal augmentation), linear depth (`R32_FLOAT`), world normals and roughness, the auto-exposure value, and a JSON record of jitter offset, phase and camera matrices.
-- Compute ground-truth disocclusion by warping the previous depth with the motion vectors and marking pixels whose depth disagrees by more than 1 percent, or whose source falls outside the screen.
-- Export a reactive mask for particles, transparency and reflections, following the FSR 3.1 convention, and render UI to a separate overlay that never enters training.
-- For frame generation, re-render the middle frame t-0.5 by interpolating the camera and animation state, with its motion vectors.
-
-Each scene's camera paths cover static camera motion, skinned characters and vehicles, particles (fire, smoke, rain), alpha-tested foliage and fences, glass and water, dynamic lighting, screen-space and ray-traced reflections, and hard cuts.
-
-## 7. Preprocessing, Augmentation and Storage
-
-### 7.1 Preprocessing
-
-1. Multiply linear HDR colour by the engine exposure.
-2. Convert RGB to YCoCg (coefficients below). Compress luma with the reversible logarithmic curve used in v1: the log of one plus luma, divided by one plus that log. The curve maps [0, infinity) to [0, 1). Divide Co and Cg by the same denominator to keep chroma ratios in bright highlights. Convert back to RGB for the network.
-3. Normalise motion vectors by the LR width and height.
-4. Encode depth as inverse depth, normalised per frame to [0, 1].
-5. Encode the jitter phase as phase / K.
-6. Clamp every input to the FP16 safe range before the network.
-
-| RGB to YCoCg |   R   |  G   |   B   |
-| :----------- | :---: | :--: | :---: |
-| Y            | 0.25  | 0.50 | 0.25  |
-| Co           | 0.50  |  0   | -0.50 |
-| Cg           | -0.25 | 0.50 | -0.25 |
-
-| YCoCg to RGB |  Y  | Co  | Cg  |
-| :----------- | :-: | :-: | :-: |
-| R            |  1  |  1  | -1  |
-| G            |  1  |  0  |  1  |
-| B            |  1  | -1  | -1  |
-
-The post-processing pass restores luma with the exact inverse of the compression curve.
-
-### 7.2 Augmentation
-
-| Augmentation                   | Probability | Detail                                                                                             |
-| :----------------------------- | :---------- | :------------------------------------------------------------------------------------------------- |
-| Horizontal flip                | 0.5         | Negate MV x                                                                                        |
-| Vertical flip                  | 0.5         | Negate MV y                                                                                        |
-| 90, 180 or 270 degree rotation | 0.5         | Rotate the MV field and its components                                                             |
-| Random crop                    | 1.0         | 64x64 LR (192x192 HR at 3x); MVs, depth and masks cropped alike                                    |
-| Temporal reversal              | 0.3         | Swap frame order and use the exported forward MVs (negating backward MVs is only an approximation) |
-| Brightness jitter              | 0.2         | Multiply by a factor in [0.9, 1.1]                                                                 |
-| MV noise                       | 0.3         | Gaussian, sigma 0.3 px                                                                             |
-| Depth quantisation             | 0.1         | Reduce to 16-bit precision                                                                         |
-| Exposure walk                  | 0.1         | Random walk within 0.3 EV                                                                          |
-
-### 7.3 Storage
-
-Raw frames are half-float OpenEXR files, one folder per scene, sequence and frame. Training uses pre-cropped FP16 patch caches (memory-mapped, NCHW) generated offline. The DataLoader uses pinned memory, persistent workers and prefetching.
-
-## 8. Model Architecture
-
-### 8.1 Two Decoupled Networks
-
-SR and FG are separate networks with no shared backbone:
-
-1. **Different queues.** SR is on the critical path of the graphics queue, before post-processing and UI. FG can run on an asynchronous compute queue, overlapping the next frame's G-buffer pass.
-2. **Different domains.** SR works at LR resolution; FG must see display-resolution frames to avoid blurring detail.
-3. **Different temporal structure.** SR accumulates history over many frames; FG combines exactly two anchor frames.
-4. Separate networks can be ablated, shipped and mixed with other upscalers independently, as FSR 3.1 allows.
-
-Presentation order with FG: the interpolated frame t-0.5 is presented first, then frame t, at half the base frame interval. FG is disabled automatically when the base frame time exceeds 25 ms (below 40 FPS), where linear motion assumptions fail and latency grows.
-
-### 8.2 Rep-TNSR v2 (Super-Resolution)
-
-**Block.** During training, each block sums six parallel linear branches and applies PReLU. The branches are a 3x3 convolution, a 1x1 convolution, an identity (when input and output widths match), and fixed Sobel-x, Sobel-y and Laplacian filters, each applied per channel and followed by a learnable 1x1 projection. This follows ECBSR ([xindongzhang/ECBSR](https://github.com/xindongzhang/ECBSR), MIT). Because every branch is linear, each block folds offline into a single 3x3 convolution and bias. Applying the fixed filters before the 1x1 projection keeps the fold exact, including at padded borders. The deployed network is a plain chain of 3x3 convolutions.
-
-**Network.** N blocks at LR resolution, then a 3x3 projection to three channels per output sub-pixel (27 at 3x) and a pixel shuffle (depth-to-space) to HR. The current colour is repeated once per sub-pixel and added before the shuffle (nearest-neighbour residual, as in ECBSR), so the network learns only the correction. This add can be folded into the post-processing shader.
-
-**Input tensor (12 channels at LR resolution).**
-
-| Channels | Content                                                       |
-| :------- | :------------------------------------------------------------ |
-| 0 to 2   | Current colour, compressed                                    |
-| 3 to 5   | Reprojected, variance-clamped history colour                  |
-| 6, 7     | Dilated motion vectors, normalised                            |
-| 8        | Disocclusion validity mask                                    |
-| 9        | Linear depth, normalised                                      |
-| 10       | Temporal confidence (exponential decay of depth disagreement) |
-| 11       | Jitter phase / K                                              |
-
-Channels 9 to 11 are new relative to v1, which used 9 channels. A reactive-mask channel is evaluated as ablation SA4b.
-
-**Tiers** (fused parameters including PReLU slopes; cost per 640x360 input at 3x; latency estimates use the 65 percent assumption of section 4 and cover the trunk only):
-
-| Tier                              | Blocks | Width | Params | GMAC | GFLOP | GTX 1650M estimate         | RTX 3060 estimate                |
-| :-------------------------------- | :----- | :---- | :----- | :--- | :---- | :------------------------- | :------------------------------- |
-| v1 (existing, 9-channel input)    | 4      | 20    | 17,467 | 3.98 | 7.96  | 2.26 ms (measured 2.15 ms) | 0.96 ms                          |
-| Performance                       | 4      | 16    | 12,683 | 2.89 | 5.77  | 1.64 ms                    | 0.70 ms                          |
-| Quality                           | 4      | 20    | 18,007 | 4.11 | 8.21  | 2.33 ms                    | 0.99 ms                          |
-| Ultra                             | 6      | 24    | 34,659 | 7.91 | 15.83 | 4.48 ms (over budget)      | 1.91 ms (over the 1.5 ms target) |
-| Ultra, RGB only (Kaggle notebook) | 6      | 24    | 32,715 | 7.47 | 14.93 | not a deployment target    | not a deployment target          |
-
-Consequences: Performance and Quality fit the GTX 1650 Mobile 3 ms budget. Quality is the primary candidate for the RTX 3060 latency claim. Ultra meets it only if DirectML meta-commands put the convolutions on tensor cores, which is still to be measured.
-
-Ultra parameter breakdown: first block 12 x 24 x 9 + 24 = 2,616; five 24-to-24 blocks 5 x (24 x 24 x 9 + 24) = 26,040; projection 24 x 27 x 9 + 27 = 5,859; PReLU 6 x 24 = 144; total 34,659. Cost: 34,344 multiply-accumulates per LR pixel, times 230,400 pixels at 640x360, is 7.91 GMAC.
-
-### 8.3 NeuralFG (Frame Generation)
-
-**Input** (display resolution): frames t-1 and t (6 channels), plus in the engine build the motion vectors from t-1 to t (2) and depth at t-1 and t (2), for 10 channels.
-
-**Network.**
-
-1. Average-pool the input by 4.
-2. Apply three 3x3 convolutions of 32 channels with LeakyReLU(0.2), then a 3x3 head with 9 outputs: flow from t-0.5 to t-1, flow from t-0.5 to t, two blend logits, and an RGB residual.
-3. Upsample bilinearly to full resolution and scale the flows by 4 into full-resolution pixels.
-4. Backward-warp both frames with the flows, in FP32.
-5. Blend the warped frames with softmax-normalised weights (a convex combination) and add the residual.
-6. Zero-initialise the head, so training starts from the plain frame average.
-
-| Variant                                      | Params | Cost at 1080p (convolutions at 480x270)                                                                   |
-| :------------------------------------------- | :----- | :-------------------------------------------------------------------------------------------------------- |
-| Engine build, 10-channel input               | 24,009 | 3.10 GMAC (6.2 GFLOP), about 0.75 ms on RTX 3060 at 65 percent, plus bandwidth-bound warping and blending |
-| RGB build, 6-channel input (Kaggle notebook) | 22,857 | 2.95 GMAC                                                                                                 |
-
-**Alternative design for ablation FA5 (engine-guided splatting).** Forward-splat half the engine motion vectors to t-0.5 with an atomic depth test, then let a small reparameterised trunk predict a blend map and a residual. This avoids learned flow where engine vectors are reliable, but a 24-channel, 4-stage trunk at full 1080p costs about 39 GMAC, far over budget. It would have to run at half or quarter resolution, and its cost must be fixed before it is compared.
-
-### 8.4 Temporal State
-
-Neither network holds a recurrent hidden state. For SR, temporal information enters through the reprojected, variance-clamped history buffer, managed by ping-pong buffers outside the network, as in v1 and FSR 3.1. FG is stateless per interpolation. Reasons: state is fragile across cuts, resolution changes, frame drops and pause or resume; external history management is proven in production; and recurrent operators complicate ONNX and DirectML export. A learned recurrent aggregator is kept only as a later ablation (SA7).
-
-## 9. Loss Functions
-
-### 9.1 Super-Resolution
-
-| Term        | Definition                                                                                                               | Notes                                                                                                  |
-| :---------- | :----------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
-| Charbonnier | Mean of the square root of (error squared + epsilon squared), epsilon = 1e-3                                             | Smooth L1 with a non-zero gradient at zero error                                                       |
-| Edge        | Mean L1 difference of central-difference gradients in x and y between output and ground truth                            | Preserves sharp structure                                                                              |
-| Perceptual  | Mean squared difference of frozen VGG-19 activations at `relu3_3` (`torchvision` `features[:16]`)                        | Index 14 is `conv3_3`, 15 is `relu3_3`                                                                 |
-| Temporal    | Mean L1 difference between the current output and the previous output warped by the motion vectors, weighted by validity | Validity is zero at disocclusions and elsewhere decays exponentially with depth disagreement (rate 10) |
-| Frequency   | Mean L1 difference between the 2D FFT magnitudes of output and ground-truth luma                                         | Keeps fine texture                                                                                     |
-
-Loss weights by curriculum phase:
-
-| Phase                          | Iterations   | Charbonnier | Edge | Perceptual | Temporal | Frequency |
-| :----------------------------- | :----------- | :---------- | :--- | :--------- | :------- | :-------- |
-| 1. Spatial warm-up             | 0 to 100K    | 1.0         | 0.3  | 0          | 0        | 0         |
-| 2. Temporal integration        | 100K to 300K | 1.0         | 0.5  | 0.05       | 0.25     | 0.1       |
-| 3. Fine-tuning, larger patches | 300K to 500K | 1.0         | 0.5  | 0.05       | 0.25     | 0.1       |
-
-A differentiable FLIP term ([NVlabs/flip](https://github.com/NVlabs/flip)) is evaluated as ablation L8 rather than added by default.
-
-### 9.2 Frame Generation
-
-Charbonnier (weight 1.0) against the rendered middle frame, VGG-19 `relu3_3` perceptual loss (0.05), and a 7x7 soft ternary census loss (0.5). The census transform compares each pixel with its 7x7 neighbourhood on luma and passes each difference through a smooth sign function. Two transforms are compared with a saturating squared distance averaged over the window, using RIFE's constants of 0.81 and 0.1. Because only local orderings matter, the loss is robust to brightness changes between frames.
-
-### 9.3 What the Kaggle Notebooks Use
-
-SR: Charbonnier + 0.3 x edge (phase 1, single frame, no G-buffers). FG: Charbonnier + 0.5 x census. The VGG term is omitted because the notebooks run offline and torchvision's VGG weights must be downloaded.
-
-## 10. Training and Runtime Pipeline
-
-### 10.1 Training Configuration
-
-| Item            | Setting                                                                                                                       |
-| :-------------- | :---------------------------------------------------------------------------------------------------------------------------- |
-| Curriculum      | Phase 1: 64x64 LR patches, single frame. Phase 2: 64x64, frame pairs. Phase 3: 96x96, frame pairs.                            |
-| Optimiser       | AdamW, learning rate 5e-4, betas (0.9, 0.999), weight decay 1e-4, gradient clipping at 1.0                                    |
-| Schedule        | Cosine decay to 1e-6 over 500K iterations (SR) or 300K (FG), with a short warm-up                                             |
-| Precision       | FP16 autocast with dynamic loss scaling; FP32 for warp coordinates and losses                                                 |
-| Parallelism     | PyTorch DistributedDataParallel, one process per GPU, `find_unused_parameters=False`                                          |
-| Batch           | 16 frame pairs per GPU (workstation); probed per GPU on Kaggle                                                                |
-| Weights         | EMA of parameters (decay 0.999) used for validation and export                                                                |
-| Checkpoints     | Every 10K iterations and on best validation: model, optimiser, scheduler, scaler, EMA, all RNG states, iteration, best metric |
-| Reproducibility | Fixed seeds (42), `CUBLAS_WORKSPACE_CONFIG=:16:8` and deterministic algorithms for final runs                                 |
-
-Compute planning estimate: SR about 20 hours on 4 GPUs of the RTX 4090 class (about 80 GPU-hours); FG about 14 hours (about 56 GPU-hours); ablations at 200K iterations on one GPU, about 20 GPU-hours each.
-
-### 10.2 Runtime Passes (per frame, 1080p output)
-
-1. **Pre-processing compute shader (LR resolution).** Dilate depth and motion vectors (nearest depth in 3x3), reproject the history, convert to YCoCg and compress luma, clamp history to the 3x3 neighbourhood mean plus or minus 1.25 standard deviations, compute disocclusion and temporal confidence, and pack the 12-channel FP16 input.
-2. **SR trunk.** A DirectML compiled graph, or hand-written HLSL with weights in constant buffers.
-3. **Post-processing compute shader.** Pixel shuffle, YCoCg to RGB, luma decompression, inverse exposure, write the HR output and update the history.
-4. **Frame generation (optional, asynchronous compute queue).** Pool, flow, warp, blend; output t-0.5.
-5. **Present.** UI is composited last, onto both real and generated frames.
-
-Scene cuts: a tile-based colour histogram difference between frames resets history (SR runs in spatial-only mode for that frame) and bypasses FG.
-
-### 10.3 Memory Budget (1080p output from 640x360)
-
-| Resource                  | Format                              | Size        |
-| :------------------------ | :---------------------------------- | :---------- |
-| History ping and pong     | 2 x `R16G16B16A16_FLOAT`, 1920x1080 | 33.18 MB    |
-| LR colour                 | `R16G16B16A16_FLOAT`, 640x360       | 1.84 MB     |
-| Dilated motion vectors    | `R16G16_FLOAT`, 640x360             | 0.92 MB     |
-| Depth                     | `R32_FLOAT`, 640x360                | 0.92 MB     |
-| SR input                  | 12 channels FP16, 640x360           | 5.53 MB     |
-| SR activations, ping-pong | 2 x 24 channels FP16, 640x360       | 22.12 MB    |
-| SR projection output      | 27 channels FP16, 640x360           | 12.44 MB    |
-| FG activations, ping-pong | 2 x 32 channels FP16, 480x270       | 16.59 MB    |
-| SR and FG weights         | FP16                                | 0.12 MB     |
-| **Total**                 |                                     | **93.7 MB** |
-
-This is within the 100 MB criterion but above the earlier 61 MB estimate, which counted one SR activation buffer and omitted the projection output. Storing history as `R11G11B10_FLOAT` would save 16.6 MB (to about 77 MB) if quality allows. FG reads the HR frames through shader resource views, without copies.
-
-Weights: SR Ultra is 34,659 x 2 bytes = 67.7 KiB, which needs two 64 KiB constant buffers in the HLSL path. FG is 24,009 x 2 bytes = 46.9 KiB and fits in one.
-
-### 10.4 Deployment Paths
-
-| Path                                                                 | Platforms               | Vendors                      | Notes                                                                                                                      |
-| :------------------------------------------------------------------- | :---------------------- | :--------------------------- | :------------------------------------------------------------------------------------------------------------------------- |
-| [DirectML](https://github.com/microsoft/DirectML) (primary)          | Windows                 | AMD, NVIDIA, Intel, Qualcomm | Records into the engine's D3D12 command list; Conv, PReLU and DepthToSpace supported                                       |
-| Native HLSL compute (advanced)                                       | Windows D3D12           | All                          | Weights in constant buffers; pre- and post-processing fused with the first and last layers; DXC with `-enable-16bit-types` |
-| [ncnn](https://github.com/Tencent/ncnn) Vulkan                       | Windows, Linux, Android | All                          | Export through PNNX; mature FP16 Vulkan backend                                                                            |
-| TensorRT                                                             | Windows, Linux          | NVIDIA only                  | Fastest NVIDIA path; not cross-vendor                                                                                      |
-| [ONNX Runtime](https://github.com/microsoft/onnxruntime) DirectML EP | Windows                 | AMD, NVIDIA, Intel           | Session dispatch and cross-queue synchronisation overhead; use for offline validation and parity tests only                |
-
-Export flow: fuse the branches, export ONNX (opset 17, dynamic height and width), check parity in ONNX Runtime, then compile for DirectML, export ncnn through PNNX, build a TensorRT engine with FP16, or extract FP16 weights for HLSL. Opset 17 includes `GridSample`, needed for FG.
-
-All pipeline resources are allocated once in a committed default heap at initialisation. History buffers swap roles each frame without copies, and passes are synchronised with fences or semaphores only.
-
-## 11. Baselines
-
-| Baseline                                                        | Type                      | Licence                      | Role                                           |
-| :-------------------------------------------------------------- | :------------------------ | :--------------------------- | :--------------------------------------------- |
-| FSR 3.1 (primary)                                               | Heuristic SR + FG         | MIT                          | Primary comparison at equal scale and hardware |
-| FSR 1.0                                                         | Spatial upscaler          | MIT                          | Lower-bound spatial reference                  |
-| Bicubic                                                         | Interpolation             | n/a                          | Trivial baseline                               |
-| XeSS 1.3 (DP4a path)                                            | Neural SR, closed weights | SDK Apache 2.0               | Cross-vendor neural reference                  |
-| DLSS 3.x                                                        | Neural SR + FG, closed    | Proprietary                  | Quality ceiling reference on RTX 40 only       |
-| [RIFE](https://github.com/hzwer/Practical-RIFE) v4.x            | Neural interpolation      | Newer weights non-commercial | FG quality ceiling                             |
-| [IFRNet](https://github.com/ltkong218/IFRNet)                   | Neural interpolation      | Apache 2.0                   | Commercially usable FG baseline                |
-| [BasicVSR++](https://github.com/ckkelvinchan/BasicVSR_PlusPlus) | Neural video SR           | Apache 2.0                   | Offline SR quality ceiling                     |
-| ECBSR                                                           | Lightweight SR            | MIT                          | Lightweight SR alternative                     |
-| Rep-TNSR v1                                                     | Lightweight temporal SR   | Project-owned                | Ablation baseline                              |
-
-## 12. Evaluation Protocol
-
-### 12.1 Configurations
-
-| Config | Input    | Output    | Scale | FG  | FSR 3.1 mode           | Purpose                  |
-| :----- | :------- | :-------- | :---- | :-- | :--------------------- | :----------------------- |
-| C1     | 640x360  | 1920x1080 | 3x    | No  | Ultra Performance      | Primary SR               |
-| C2     | 960x540  | 1920x1080 | 2x    | No  | Performance            | Medium scale             |
-| C3     | 1280x720 | 1920x1080 | 1.5x  | No  | Quality                | Low scale                |
-| C4     | 640x360  | 1920x1080 | 3x    | Yes | Ultra Performance + FG | Full pipeline            |
-| C5     | 1280x720 | 2560x1440 | 2x    | Yes | Performance + FG       | Higher output resolution |
-| C6     | 1280x720 | 3840x2160 | 3x    | No  | Ultra Performance      | 4K output                |
-
-### 12.2 Test Sequences
-
-Five sequences of 300 frames each. The first three use held-out camera paths in training scenes (in-distribution). The last two come from held-out scenes (out-of-distribution).
-
-| Sequence        | Scene                            | Stresses                                               |
-| :-------------- | :------------------------------- | :----------------------------------------------------- |
-| Bistro Interior | Bistro (held-out path)           | Static camera, fine detail, specular surfaces          |
-| City Chase      | City Park (held-out path)        | Fast motion, disocclusions, vehicles, reflections      |
-| SciFi Corridor  | SciFi Corridor (held-out path)   | Emissive materials, reflections, thin cables and pipes |
-| Reef Swim       | Underwater Reef (held-out scene) | Particles, translucency, caustics                      |
-| Village Walk    | Cartoon Village (held-out scene) | Stylised shading, outlines, foliage                    |
-
-### 12.3 Metrics
-
-| Category        | Metric                    | Implementation                                                                                                                                                                                                              |
-| :-------------- | :------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fidelity        | PSNR on luma, SSIM        | [torchmetrics](https://github.com/Lightning-AI/torchmetrics)                                                                                                                                                                |
-| Perceptual      | LPIPS (AlexNet)           | [richzhang/PerceptualSimilarity](https://github.com/richzhang/PerceptualSimilarity)                                                                                                                                         |
-| Perceptual      | FLIP                      | [NVlabs/flip](https://github.com/NVlabs/flip)                                                                                                                                                                               |
-| Video quality   | VMAF                      | [Netflix/vmaf](https://github.com/Netflix/vmaf) via ffmpeg                                                                                                                                                                  |
-| Temporal        | Warping error             | Mean L1 difference between each output frame and the previous output warped by ground-truth motion vectors, over valid (non-disoccluded) pixels, averaged over frames                                                       |
-| Temporal        | tOF                       | Mean L1 difference between RAFT flow on consecutive outputs and RAFT flow on consecutive ground-truth frames ([RAFT](https://github.com/princeton-vl/RAFT), reference code in [TecoGAN](https://github.com/thunil/TecoGAN)) |
-| Temporal        | tLP                       | LPIPS between consecutive warped frames, output against ground truth                                                                                                                                                        |
-| Flicker         | Temporal difference error | Mean absolute difference between the output's frame-to-frame change and the ground truth's, on luma (flow-free; also used by the notebooks)                                                                                 |
-| Ghosting        | Ghost ratio               | Share of disoccluded pixels whose warping error exceeds 0.05                                                                                                                                                                |
-| Disocclusion    | Masked LPIPS and PSNR     | Inside ground-truth disocclusion masks                                                                                                                                                                                      |
-| FG motion       | End-point error           | Predicted intermediate flow against ground-truth flow on Sintel                                                                                                                                                             |
-| Latency         | GPU time                  | D3D12 timestamp queries or CUDA events; P50 and P95                                                                                                                                                                         |
-| Display latency | Click-to-photon           | PresentMon, with and without FG                                                                                                                                                                                             |
-
-### 12.4 Human Evaluation
-
-A two-alternative forced choice study: 20 or more participants (gamers and non-gamers), 30 paired comparisons each (ours against FSR 3.1), 5-second clips at native resolution and refresh rate, randomised side, and double-blind. Each trial asks which clip has better detail, smoother motion and fewer artefacts. Report the preference rate with a 95 percent confidence interval and Bradley-Terry scores. Significance requires a preference above 60 percent on a one-sided binomial test, p < 0.05.
-
-### 12.5 Generalisation and Robustness
-
-| Test              | Condition                                                          | Pass criterion                                                  |
-| :---------------- | :----------------------------------------------------------------- | :-------------------------------------------------------------- |
-| Unseen content    | 3 held-out UE5 scenes                                              | LPIPS within 15 percent of in-distribution                      |
-| Unseen engine     | 2 Unity HDRP scenes                                                | LPIPS within 15 percent                                         |
-| Unseen style      | Cartoon, photorealistic, pixel art                                 | LPIPS within 20 percent                                         |
-| Unseen resolution | 4K output, not trained at 4K                                       | PSNR drop below 1.0 dB                                          |
-| Cross-GPU         | GTX 1650 Mobile, RTX 3060, RTX 4070, RX 6600, RX 7800 XT, Arc A770 | Latency within tier budget; outputs equal within FP16 tolerance |
-| Degraded inputs   | Zeroed MVs, depth noise of 5 percent, exposure off by 1 EV         | No NaN or corruption; PSNR drop below 3 dB                      |
-
-### 12.6 Statistics
-
-Report mean and standard deviation per sequence. Use a paired t-test, or a Wilcoxon signed-rank test when Shapiro-Wilk rejects normality, for every metric against FSR 3.1. Apply a Bonferroni correction over the 13 compared metrics (alpha 0.05 / 13, about 0.0038). Give 95 percent bootstrap confidence intervals and Cohen's d for the primary comparisons. The sample is 5 sequences x 300 frames = 1,500 frame-level measurements per metric.
-
-## 13. Kaggle Notebooks (Current Work)
-
-Both notebooks run end to end on Kaggle **GPU T4 x2** with Internet off, attach only the datasets in section 5.2, and stay inside an **8 hour** budget:
-
-| Stage                    | Budget                                                     |
-| :----------------------- | :--------------------------------------------------------- |
-| Setup, discovery and EDA | about 10 minutes                                           |
-| Cache build              | at most 25 minutes                                         |
-| Training                 | 5 hours, shortened automatically if earlier stages overrun |
-| Evaluation and export    | about 30 minutes, with 55 minutes reserved                 |
-| Total                    | about 6.5 hours, 8 hours hard ceiling                      |
-
-| Notebook                        | What it trains                                    | Evaluation                                                                                                                                                                                                                                                              |
-| :------------------------------ | :------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `neural-supersampling.ipynb`    | Rep-TNSR Ultra, RGB input, 3x, Charbonnier + edge | Set5, Set14, B100, Urban100, Manga109 and held-out frames (PSNR-Y and SSIM-Y with a 3-pixel shave, against bicubic); Vid4 per-frame and temporal difference error; fused-model parity; T4 latency fused against unfused; ONNX export                                    |
-| `neural-frame-generation.ipynb` | NeuralFG, RGB input, Charbonnier + census         | Vimeo-90K test (official list when present) and held-out REDS and Sintel frames against frame-average and copy baselines (PSNR, SSIM, interpolation error); error by motion size; Vid4 zero-shot; flow and blend-weight maps; T4 latency at 540p and 1080p; ONNX export |
-
-Shared design:
-
-- DistributedDataParallel with one process per GPU, launched from the notebook.
-- A memory-mapped uint8 cache so the 4 CPU cores never starve the GPUs, with augmentation and degradation on the GPU.
-- A batch size probed for the available VRAM, FP16 autocast and EMA weights.
-- A learning-rate schedule tied to wall-clock time, so the run always ends on time.
-- Live progress and training curves, with every metric and plot saved, and a final `outputs.zip`.
-
-What they establish: the architectures train stably, fusion is exact, and the RGB-only models beat bicubic and frame averaging on standard benchmarks. Results also show how throughput and VRAM scale on T4. What they cannot establish: anything about G-buffer conditioning, temporal accumulation or FSR 3.1, which needs the Priority 2 and 3 data.
-
-The previous supersampling run stopped after about 78 minutes, an hour into the first training epoch, without a recorded error. The rewrite removes the causes found in that version:
-
-- a 15-minute full directory walk;
-- a CPU-bound loader at about 210 images per second;
-- validation crops of different sizes, which cannot be batched;
-- LR and degraded copies mixed into training and test data;
-- DataParallel instead of DDP;
-- no time-based stopping.
-
-## 14. Ablations
-
-| ID       | Ablation                                   | Variants                                                          | Question                            |
-| :------- | :----------------------------------------- | :---------------------------------------------------------------- | :---------------------------------- |
-| SA1      | SR width                                   | 16 / 20 / 24 / 32                                                 | Quality against latency             |
-| SA2      | SR depth                                   | 3 / 4 / 5 / 6 / 8 blocks                                          | Depth against latency               |
-| SA3      | Edge branches                              | With and without Sobel and Laplacian                              | Value of fixed operators            |
-| SA4      | Inputs                                     | 9 (v1) / 12 (v2) / 12 + reactive mask (SA4b)                      | Value of extra signals              |
-| SA5      | Activation                                 | PReLU / ReLU / SiLU                                               | Quality and speed                   |
-| SA6      | Projection init                            | Default / ICNR                                                    | Checkerboard artefacts              |
-| SA7      | Temporal model                             | External history / learned recurrent aggregator                   | Value of recurrence                 |
-| FA1      | FG resolution                              | Pool by 2 / 4 / 8                                                 | Resolution against quality          |
-| FA2      | Flow refinement                            | One level / two-level pyramid                                     | Large motion                        |
-| FA3      | Engine MVs                                 | With / without                                                    | Value of engine motion              |
-| FA4      | Occlusion                                  | Learned blend / forward-backward consistency                      | Disocclusion quality                |
-| FA5      | Motion source                              | Learned flow / engine-MV forward splatting (section 8.3)          | Accuracy and cost                   |
-| FA6      | Flow pre-training                          | None / FlyingChairs and Sintel flow                               | Value of synthetic flow supervision |
-| L1 to L5 | SR loss build-up                           | Charbonnier; + edge; + perceptual; + temporal; + frequency (full) | Contribution of each term           |
-| L6       | L1 instead of Charbonnier                  | Full set                                                          | Robust loss choice                  |
-| L7       | LPIPS as training loss                     | Replaces VGG term                                                 | Perceptual loss choice              |
-| L8       | FLIP as training loss                      | Added to full set                                                 | Perceptual loss choice              |
-| D1       | UE5 only                                   | 9 training scenes                                                 | Baseline data                       |
-| D2       | UE5 + Sintel + TartanAir                   | Mixed                                                             | Domain diversity                    |
-| D3       | Native LR renders / bicubic-downsampled HR | Both                                                              | Realistic aliasing                  |
-| D4       | Degradation augmentation                   | With / without                                                    | Robustness                          |
-| D5       | Scene count                                | 5 / 9 scenes                                                      | Data scale                          |
-| T1       | Curriculum                                 | None / three-phase                                                | Value of phasing                    |
-| T2       | Patch size                                 | 64 / 128 LR throughout                                            | Context size                        |
-| T3       | Optimiser                                  | Adam / AdamW / SGD with momentum                                  | Optimiser choice                    |
-| T4       | Schedule                                   | Cosine / step / warm restarts                                     | Schedule choice                     |
-
-About 30 ablation runs at 200K iterations on one GPU, about 20 GPU-hours each, about 600 GPU-hours in total.
-
-## 15. Existing Evidence: Rep-TNSR v1
-
-The measurements below come from the earlier Rep-TNSR v1 project. They are reported here as context and have not been reproduced in this repository. Note that v1 was compared against FSR 1.0 (spatial only), not FSR 3.1.
-
-### 15.1 Latency on GTX 1650 Mobile
-
-Hardware: TU117, 896 CUDA cores, 4 GB GDDR5 at 128 GB/s, 50 W, Windows 11, driver 550.x, D3D12 timestamp queries.
-
-| Pass                            | Dispatch       | Memory traffic (read / write) | Work            | GPU time     |
-| :------------------------------ | :------------- | :---------------------------- | :-------------- | :----------- |
-| Dilation, reprojection, YCoCg   | 80 x 45 groups | 4.58 MB / 3.68 MB             | 0.052 GFLOP     | 0.282 ms     |
-| Fused FP16 trunk                | DirectML graph | 8.55 MB / 8.55 MB             | 7.962 GFLOP     | 2.145 ms     |
-| Pixel shuffle and decompression | 80 x 45 groups | 12.44 MB / 16.59 MB           | 0.015 GFLOP     | 0.184 ms     |
-| Barriers and queue              | D3D12 timeline | negligible                    | negligible      | 0.112 ms     |
-| **Total**                       |                | **54.39 MB**                  | **8.029 GFLOP** | **2.723 ms** |
-
-Memory traffic is 14 percent of the 384 MB that can move in 3 ms at 128 GB/s.
-
-### 15.2 Quality (360p to 1080p)
-
-| Method                 | PSNR (dB) | SSIM      | IF-SSIM (v1 report) | Warping error (x 1e-3) | GTX 1650M time |
-| :--------------------- | :-------- | :-------- | :------------------ | :--------------------- | :------------- |
-| Bicubic                | 27.34     | 0.812     | 0.892               | 8.42                   | 0.08 ms        |
-| FSR 1.0                | 28.12     | 0.835     | 0.901               | 7.91                   | 0.42 ms        |
-| QuickSRNet-Medium      | 31.05     | 0.884     | 0.914               | 6.84                   | 2.21 ms        |
-| **Rep-TNSR v1**        | **34.82** | **0.941** | **0.986**           | **1.72**               | 2.72 ms        |
-| Native 1080p reference | n/a       | 1.000     | 0.994               | 1.15                   | n/a            |
-
-v1 is 6.70 dB above FSR 1.0 and 3.77 dB above QuickSRNet-Medium. The gap to FSR 3.1, which accumulates jittered history, is unknown and is the subject of SR-001.
-
-## 16. Failure Modes and Mitigations
-
-| Failure                            | Cause                                           | Detection                                       | Mitigation                                                                                                  |
-| :--------------------------------- | :---------------------------------------------- | :---------------------------------------------- | :---------------------------------------------------------------------------------------------------------- |
-| Ghosting on fast motion            | History clamp too loose                         | High warping error in motion regions            | Tighten clamp (1.25 to 1.0 standard deviations); raise depth sensitivity of validity (10 to 15)             |
-| Checkerboard artefacts             | Pixel-shuffle initialisation                    | Pixel-level inspection                          | ICNR initialisation (SA6)                                                                                   |
-| Flicker on thin geometry           | Detail below the LR sampling rate               | Flicker spikes on wire and fence sequences      | More jitter phases; tighter clamp at depth edges; temporal loss weight                                      |
-| FG double images on fast rotation  | Motion beyond the quarter-resolution flow range | High end-point error on fast-rotation sequences | Two-level flow (FA2); engine MVs (FA3); cut detection bypass                                                |
-| UI distortion in FG                | UI composited before FG                         | UI-heavy test scenes                            | Composite UI after FG; for engines that cannot separate UI, extract a UI mask from pre- and post-UI buffers |
-| Particle and transparency smearing | No reliable MVs or depth                        | Reactive-mask coverage analysis                 | Zero temporal loss in reactive regions; favour the current frame there                                      |
-| Colour shift in HDR                | Compression round-trip error                    | PSNR drop on bright regions                     | FP32 for compression and decompression                                                                      |
-| Poor generalisation                | Training distribution mismatch                  | LPIPS degradation on held-out sets              | More scenes and engines; style and colour augmentation                                                      |
-| NaN in FP16                        | Inputs beyond the FP16 range (65,504)           | Runtime NaN check                               | Clamp inputs; FP32 warp coordinates                                                                         |
-| Bandwidth saturation               | Too many intermediate buffers                   | Profiler memory utilisation above 90 percent    | Fuse pre- and post-processing into the first and last layers                                                |
-| Judder at low frame rate           | Linear motion assumption breaks                 | Frame time above 25 ms                          | Disable FG below 40 FPS base rate                                                                           |
-
-## 17. Claims of Superiority over FSR 3.1
-
-If supported at the significance levels of section 12.6, the following claims would establish meaningful superiority:
-
-1. **Spatial quality.** PSNR at least 1.5 dB higher and LPIPS at least 20 percent lower, averaged over the 5 sequences at each configuration, p < 0.01.
-2. **Temporal stability.** Warping error at least 25 percent lower and tOF at least 20 percent lower on the dynamic sequences (City Chase, SciFi Corridor, Reef Swim), p < 0.01.
-3. **Frame generation.** PSNR at least 2.0 dB higher and LPIPS at least 25 percent lower than FSR 3.1 FG, p < 0.01.
-4. **Latency.** Total pipeline time within 120 percent of FSR 3.1 on the same GPU, and within the absolute targets of section 2.
-5. **Generalisation.** LPIPS degradation below 15 percent on held-out scenes and engines.
-6. **Human preference.** At least 60 percent preference with at least 20 participants, p < 0.05, one-sided binomial.
-
-## 18. Roadmap and Experiments
-
-### 18.1 Phases
-
-| Phase                | Weeks    | Deliverables                                                                                        | Acceptance                                                                       |
-| :------------------- | :------- | :-------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------- |
-| 0. Kaggle validation | 1 to 2   | Both notebooks run within 8 hours; RGB baselines on SR benchmarks, Vimeo-90K and Vid4               | Fusion parity below 1e-4; clear gains over bicubic and frame averaging           |
-| 1. Falsification     | 2 to 4   | Bistro capture; FSR 3.1 Ultra Performance dumps; v1 retrained; SR-001 report                        | SR-001 does not falsify H1                                                       |
-| 2. Rep-TNSR v2       | 4 to 8   | 12-channel pipeline; three tiers; full curriculum; 12-scene capture; SR ablations; temporal metrics | Section 2 SR targets met with significance                                       |
-| 3. NeuralFG          | 9 to 13  | Middle-frame captures; FG training; FG ablations; comparison with FSR 3.1 FG, RIFE, IFRNet          | Section 2 FG targets; FG P95 at most 2.5 ms on RTX 3060                          |
-| 4. Integration       | 14 to 18 | DirectML integration; ncnn and TensorRT exports; frame pacing; latency and VRAM profiling on 6 GPUs | Within 120 percent of FSR 3.1 latency; VRAM at most 100 MB; no NaN or corruption |
-| 5. Generalisation    | 19 to 22 | Unity and held-out UE5 evaluation; style and degraded-input tests; human study; final report        | All section 17 claims tested with confidence intervals and effect sizes          |
-
-### 18.2 Smallest Falsifying Experiment (SR-001)
-
-1. Train Rep-TNSR v1 (17.5K parameters, 4 blocks, 20 channels) on Bistro training paths only: 100K iterations, Charbonnier + edge, one GPU, about 6 hours.
-2. Capture FSR 3.1 **Ultra Performance** output (3x, 640x360 to 1920x1080) on a held-out 300-frame Bistro path with the FidelityFX SDK sample, dumping frames with RenderDoc.
-3. Compute luma PSNR, RGB SSIM and LPIPS (AlexNet) per frame on identical inputs.
-
-**Falsified if** FSR 3.1 has both higher PSNR and lower LPIPS. That would indicate that larger networks, a different architecture or more input signals are needed.
-
-**Expectation, unverified.** v1 beat FSR 1.0 by 6.7 dB, but FSR 3.1 accumulates jittered history, so the gap may be much smaller. This experiment decides whether the project continues as planned.
-
-### 18.3 Experiment Matrix
-
-| ID             | Model                           | Data                          | Losses               | Scale    | Purpose                        |
-| :------------- | :------------------------------ | :---------------------------- | :------------------- | :------- | :----------------------------- |
-| KG-SR          | Rep-TNSR Ultra, RGB             | Kaggle (section 5.2)          | Charbonnier + edge   | 3x       | Pipeline validation (notebook) |
-| KG-FG          | NeuralFG, RGB                   | Kaggle (section 5.2)          | Charbonnier + census | n/a      | Pipeline validation (notebook) |
-| SR-001         | Rep-TNSR v1                     | Bistro                        | Charbonnier + edge   | 3x       | Falsification                  |
-| SR-002         | Rep-TNSR v2 Ultra               | 9 training scenes             | Full curriculum      | 3x       | Primary SR quality result      |
-| SR-003         | Rep-TNSR v2 Performance         | 9 scenes                      | Full                 | 3x       | GTX 1650 tier                  |
-| SR-004         | Rep-TNSR v2 Quality             | 9 scenes                      | Full                 | 3x       | RTX 3060 latency claim         |
-| SR-S1, SR-S2   | Rep-TNSR v2 Quality             | 9 scenes                      | Full                 | 2x, 1.5x | Other scale factors            |
-| FG-001         | NeuralFG, 10-channel            | 9 scenes with middle frames   | Full                 | n/a      | Primary FG result              |
-| GEN-001 to 003 | SR-004 + FG-001                 | Held-out UE5, Unity, stylised | n/a                  | 3x       | Generalisation                 |
-| LAT-001        | All tiers and FSR 3.1           | Standard sequence             | n/a                  | 3x       | Latency on all GPUs            |
-| HUM-001        | SR-004 + FG-001 against FSR 3.1 | 5 test sequences              | n/a                  | 3x       | Human study                    |
-
-Ablation runs (section 14) are added to this matrix as SA, FA, L, D and T experiments.
-
-## 19. Assumptions and Risks
-
-### 19.1 Assumptions
-
-| ID  | Assumption                                                       | If wrong                         | Mitigation                                                       |
-| :-- | :--------------------------------------------------------------- | :------------------------------- | :--------------------------------------------------------------- |
-| AS1 | A sub-50K-parameter network can beat FSR 3.1's temporal upscaler | Quality targets missed           | SR-001 first; tiers up to 50K; consider 50K to 100K if justified |
-| AS2 | Engine MVs are accurate for geometric motion                     | FG errors on animated meshes     | Learned flow refines engine MVs (FA3)                            |
-| AS3 | DirectML matches hand-written HLSL speed                         | Latency targets missed           | HLSL path is designed in                                         |
-| AS4 | 9 training scenes give enough diversity                          | Generalisation fails             | More scenes; Sintel and TartanAir (D2)                           |
-| AS5 | FP16 is sufficient for all intermediate values                   | NaN or quality loss              | FP32 for warps and luma compression                              |
-| AS6 | Tensor cores are reachable through DirectML meta-commands        | Ultra misses the RTX 3060 target | Ship Quality tier as the default                                 |
-
-### 19.2 Unavailable Dependencies
-
-DLSS and XeSS weights are proprietary, so they are compared through captured frames only. DLSS frame generation needs RTX 40 hardware. Commercial game captures cannot be redistributed, so open UE5 scenes are used for all reproducible benchmarks. Unreal Engine cannot be redistributed; capture scripts and captured data can.
-
-### 19.3 Risks
-
-| Risk                                       | Severity | Likelihood         | Mitigation                                                        |
-| :----------------------------------------- | :------- | :----------------- | :---------------------------------------------------------------- |
-| Quality gap to FSR 3.1 too small           | High     | Medium             | More capacity, more inputs, bottleneck attention as a last resort |
-| Ultra tier over budget on GTX 1650 class   | High     | High (by estimate) | Performance and Quality tiers                                     |
-| Flicker worse than FSR 3.1                 | High     | Low                | Stronger temporal loss; tighter clamping                          |
-| FG disocclusion quality worse than FSR 3.1 | Medium   | Medium             | Disocclusion-heavy data; inpainting head; two-level flow          |
-| Poor generalisation                        | Medium   | Medium             | Data diversity; domain randomisation                              |
-| Export regression (ONNX, DirectML)         | Low      | Low                | Automated parity tests at every export                            |
-
-## 20. Planned Repository Layout
-
-The repository currently holds `RESEARCH.md` and the two Kaggle notebooks. The planned layout:
+# NeuralSS: open, hardware-agnostic neural reconstruction for games
+
+Technical research plan for an open neural rendering and reconstruction stack that combines **temporal super-resolution** and **low-latency frame generation**, aims at native-quality output in static scenes and heavy motion, and runs on dedicated and integrated GPUs through vendor-neutral APIs.
+
+**Status (5 October 2026).**
+
+- The repository holds three Kaggle notebooks built from one shared library (`src/neuralss`): a data pipeline, temporal super-resolution (TSR) and frame generation (FG).
+- They have passed static checks only: notebook validation, a Kaggle-structure check, pyflakes, and cross-module API and signature checks.
+- **None of the new notebooks has run on Kaggle yet.** Every quality, speed and latency number in this document is a target, an arithmetic estimate, or a measurement explicitly attributed to an earlier run.
+- Labels: _fact_ (with a source), _estimate_ (arithmetic), _hypothesis_ (to be tested).
+
+## 1. Objective
+
+Build an original, open and hardware-agnostic replacement for DLSS / FSR / XeSS-class reconstruction:
+
+1. **Temporal super-resolution.** Reconstructs frames from jittered low-resolution renders plus engine metadata (motion vectors, depth, exposure, reactive / transparency masks, normals where available).
+   - Primary ratio 3x (640x360 to 1920x1080, matching FSR's Ultra Performance ratio); 2x and 1.5x also validated.
+   - Must be stable under heavy motion, recover detail in static scenes, and handle disocclusions, foliage, particles, transparencies, thin geometry and text.
+2. **Frame generation.** Minimises input latency rather than maximising frames per second.
+   - Interpolation and extrapolation (with late-latched camera input).
+   - UI-correct: never interpolates or hallucinates HUD, subtitles, menus or pause screens.
+   - Safe on camera cuts.
+3. **Deployment.** Both networks reduce to plain 3x3 convolution chains plus warps, exportable through ONNX to DirectML, Vulkan compute (ncnn), Metal and TensorRT, with tiers from integrated GPUs to high-end discrete GPUs.
+
+We do not reproduce DLSS, FSR or XeSS internals. The design draws on public research and open documentation (sections 3 and 20), and on what the open FidelityFX documentation says an engine must provide.
+
+## 2. Constraints
+
+| Constraint                                                                                                                                 | Consequence for the design                                                                                                                                                                                                 |
+| :----------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Training runs on Kaggle **GPU T4 x2** (2 x 15 GB, FP16 tensor cores, no fast BF16, 4 CPU cores, about 30 GB RAM, about 20 GB saved output) | Small models; FP16 autocast; GPU-side data generation; memory-mapped caches; wall-clock schedules; each notebook fits a 9.5-hour run budget, under the 12-hour session limit Kaggle documents (re-check the current quota) |
+| Data only from **Kaggle and Hugging Face** for now                                                                                         | Game G-buffer data is scarce, so we use rendered datasets with exact flow and depth (TartanAir, Sintel, GameIR) plus a synthetic layered renderer with exact ground truth (section 5.5)                                    |
+| Deployment on **integrated GPUs**                                                                                                          | Network cost is reported per output frame (GMAC); the `igpu` tiers target about 5 GMAC for TSR at 1080p 3x and under 2 GMAC for FG (section 4.5)                                                                           |
+| Vendor-neutral runtime                                                                                                                     | Plain convolutions, PReLU, pixel (un)shuffle, bilinear grid sampling: operators available in DirectML, Vulkan compute and ONNX opset 16+ (`GridSample`)                                                                    |
+| Legal                                                                                                                                      | Original architecture; only open-licensed code and weights as dependencies (section 16); research-only datasets are kept out of any commercial weight release                                                              |
+
+## 3. Competitive analysis
+
+### 3.1 Commercial and open upscalers and frame generators
+
+| System                                                        | Public facts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Lessons for NeuralSS                                                                                                                                                                                                          |
+| :------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **NVIDIA DLSS 4**                                             | Transformer models for Super Resolution and Ray Reconstruction with "four times the computations and twice the number of parameters" of the previous CNN at a similar budget. Multi Frame Generation produces three frames per rendered frame. Its network is split: one half runs once per input frame pair, a much smaller half once per generated frame (about 1 ms per generated 4K frame on an RTX 5090). Pacing is moved to the display engine (flip metering) ([NVIDIA research](https://research.nvidia.com/labs/adlr/DLSS4)). Frame generation needs depth, motion vectors, HUD-less colour and UI colour, plus Reflex ([integration guide](https://developer.nvidia.com/blog/how-to-integrate-nvidia-dlss-4-into-your-game-with-nvidia-streamline)).                                                                                                                                                                    | Split FG into a per-pair part and a cheap per-frame part; separate UI from the scene; pacing matters as much as the model; closed weights and RTX-only, so it is a quality reference rather than a baseline we can reproduce. |
+| **NVIDIA Reflex 2 Frame Warp**                                | Re-samples the camera from the latest input and warps the rendered frame just before display. Holes are in-painted from previous frames' camera, colour and depth. Up to 75 percent lower system latency in the examples given ([NVIDIA](https://www.nvidia.com/en-us/geforce/news/reflex-2-even-lower-latency-gameplay-with-frame-warp/)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Late-latching the camera is the biggest latency lever; NeuralSS extrapolation takes a camera-only prior from the latest input (section 10).                                                                                   |
+| **AMD FSR 3.1** (open, FidelityFX SDK)                        | The upscaler takes colour, depth, motion vectors, optional reactive and transparency/composition masks and exposure. Jitter uses a Halton or uniform sequence with `ceil(scale^2 / 2)` phases, with mip bias `-log2(scale)` ([FSR 3 upscaler manual](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/super-resolution-upscaler/)). Frame interpolation uses two back buffers, dilated depth and motion vectors, its own optical flow with scene-change detection, and an optional HUD-less colour buffer ([FSR frame interpolation](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/frame-interpolation/)). The swap chain composites UI by callback, separate surface or HUD-less detection. It paces frames on dedicated threads, and recommends rendering slightly below half the target output rate ([swap chain manual](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/frame-interpolation-swap-chain/)). | This documented engine contract defines our inputs: jittered colour, depth, motion vectors, exposure and reactive masks for TSR; HUD-less frames plus a UI layer for FG, with a fallback when the UI cannot be separated.     |
+| **AMD FSR "Redstone" (FSR 4 upscaling, ML frame generation)** | ML upscaler "trained on millions of high-quality captures from modern games". ML frame generation takes previous and current frames with depth and motion vectors, estimates optical flow, predicts per-pixel motion and appearance, and blends with motion-vector reprojection. It should be used with Anti-Lag 2 "to minimize the latency that frame generation inherently introduces". The ML path targets RDNA 4, with analytical fallbacks on older GPUs ([GPUOpen, Dec 2025](https://gpuopen.com/learn/amd-fsr-redstone-developers-neural-rendering/)).                                                                                                                                                                                                                                                                                                                                                                     | Blending learned motion with engine reprojection is our FG design too; vendor ML paths need specific hardware, which is the gap a vendor-neutral stack fills.                                                                 |
+| **Intel XeSS 2 / 3**                                          | XeSS-SR runs on all GPUs with SM 6.4 (DP4a); XeSS-FG and Xe Low Latency (XeLL) also run on non-Intel GPUs meeting SM 6.4 ([intel/xess](https://github.com/intel/xess)). XMX matrix engines on Arc, DP4a elsewhere ([press summary](https://www.guru3d.com/story/9ae754096c391d2ec34bec425201ec214cc93ca6/)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | A DP4a (INT8) fallback makes neural reconstruction cross-vendor; INT8 quantisation is on our roadmap (section 13). Weights are closed.                                                                                        |
+
+### 3.2 Research systems
+
+| Work                                                                                                                                                          | Idea relevant to NeuralSS                                                                                                                                                                                                                   |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| NSRR, Xiao et al., SIGGRAPH 2020 ([Meta](https://research.facebook.com/blog/2020/7/introducing-neural-supersampling-for-real-time-rendering/))                | Colour, depth and dense motion vectors of the current and previous frames; 16x supersampling; trained against high-resolution anti-aliased references.                                                                                      |
+| Thomas et al., HPG 2022 ([EG library](https://diglib.eg.org/handle/10.1145/3543870))                                                                          | Joint denoising and supersampling, with a shared low-precision feature extractor and higher-precision filter stages; temporally stable.                                                                                                     |
+| Mercier et al., ICCV 2023, QRISP dataset ([arXiv](https://arxiv.org/abs/2308.01483))                                                                          | Efficient neural supersampling, about 4x more efficient than prior work at equal accuracy. Dataset with jittered and mip-biased renders at several resolutions, depth and motion vectors (research licence; not on Kaggle or Hugging Face). |
+| FuseSR, SIGGRAPH Asia 2023 ([arXiv](https://arxiv.org/abs/2310.09726))                                                                                        | Cheap high-resolution G-buffers fused with low-resolution colour (H-Net); 4x4 and 8x8 upsampling at 4K.                                                                                                                                     |
+| RDG, CVPR 2025 ([code, Apache-2.0](https://github.com/sunny2109/RDG))                                                                                         | Asymmetric U-Net with decoupled G-buffer guidance for real-time rendering; Blender-rendered dataset.                                                                                                                                        |
+| ExtraNet, SIGGRAPH Asia 2021 ([paper](https://sites.cs.ucsb.edu/~lingqi/publications/paper_extranet.pdf))                                                     | Frame extrapolation with G-buffers of the extrapolated frame; hole in-painting and shading prediction; 1.5x to 2x frame rate with minimal latency.                                                                                          |
+| ExtraSS, SIGGRAPH Asia 2023 ([paper](https://sites.cs.ucsb.edu/~lingqi/publications/paper_siga23extrass.pdf), [DOI](https://doi.org/10.1145/3610548.3618224)) | Joint super sampling and frame extrapolation; G-buffer guided warping plus shading refinement; no added interpolation latency.                                                                                                              |
+| STSS, AAAI 2024 ([arXiv](https://arxiv.org/abs/2312.10890))                                                                                                   | Unified space-time supersampling: aliasing and warping holes are treated as one reshading problem; about 4 ms against 17 ms for two-stage pipelines.                                                                                        |
+| GFFE, 2024 ([arXiv](https://arxiv.org/abs/2406.18551))                                                                                                        | G-buffer-free frame extrapolation for low-latency rendering; motion analysis, disocclusion handling and a light shading-correction network.                                                                                                 |
+| Mob-FGSR, SIGGRAPH 2024 ([paper](https://sites.cs.ucsb.edu/~lingqi/publications/paper_sig24mobfgsr.pdf))                                                      | Frame generation and super-resolution for mobile GPUs; motion vectors reconstructed by splatting, without optical-flow hardware.                                                                                                            |
+| RIFE, ECCV 2022 ([arXiv](https://arxiv.org/abs/2011.06294), [code, MIT](https://github.com/hzwer/Practical-RIFE))                                             | Intermediate-flow estimation; privileged distillation (the teacher sees the true middle frame).                                                                                                                                             |
+| Discontinuity-aware VFI, CVPR 2023 ([arXiv](https://arxiv.org/abs/2202.07291))                                                                                | Figure-text mixing augmentation and a discontinuity map so static UI and text are not interpolated; a benchmark of game and chat videos.                                                                                                    |
+| FlashVSR, 2025 ([arXiv](https://arxiv.org/abs/2510.12747), [code, Apache-2.0](https://github.com/OpenImagingLab/FlashVSR))                                    | One-step diffusion streaming VSR, about 17 FPS at 768x1408 on an A100; far too heavy for games, but a possible offline teacher.                                                                                                             |
+| TecoGAN, SIGGRAPH 2020 ([arXiv](https://arxiv.org/abs/1811.09393))                                                                                            | Temporal metrics (tOF, tLP) and a ping-pong loss for long-term consistency.                                                                                                                                                                 |
+
+### 3.3 What we take from this
+
+- **Engine signals.** All production systems rely on jitter, motion vectors, depth and separated UI. NeuralSS consumes the same signals and degrades gracefully when they are missing.
+- **Speed.** Fast systems reuse history (TSR) and split per-pair from per-frame work (FG).
+- **Latency.** Interpolation adds latency by construction; vendors offset it with Reflex, Anti-Lag 2 and XeLL. Extrapolation (ExtraSS, GFFE) and late-latched warping (Frame Warp) avoid holding frames. NeuralSS supports both and reports their latency separately (section 10).
+- **Hardware.** Vendor ML paths are tied to tensor, XMX or RDNA 4 hardware; DP4a and plain FP16 compute are the cross-vendor path.
+
+## 4. Architecture
+
+### 4.1 Per-frame pipeline (engine integration target)
 
 ```text
-neuralss/
-  configs/            YAML per tier, FG, FSR evaluation and each ablation (OmegaConf)
-  neuralss/
-    models/           repconv_block, sr_net, fg_net, fuse
-    losses/           charbonnier, edge, perceptual, temporal, frequency, census
-    data/             G-buffer dataset, augmentation with MV handling, preprocessing, patch cache
-    metrics/          spatial, perceptual, temporal, VMAF wrapper, ghosting
-    engine/           DDP trainer, evaluator, curriculum, checkpointing
-    export/           ONNX, ncnn, TensorRT
-  scripts/            dataset download with checksums, UE5 capture, cache generation, benchmark, ablation sweep, latency profiling
-  deploy/
-    directml/         SuperResolutionSystem (C++), PreProcessTemporal.hlsl, PostProcessReconstruct.hlsl
-    ncnn_vulkan/      SR and FG pipelines
-  notebooks/          Kaggle notebooks
-  tests/              fusion parity, losses, dataset and MV augmentation, metrics, ONNX parity, latency
-  train.py, evaluate.py, infer.py
+engine renders jittered LR colour + depth + motion vectors (+ reactive mask, exposure)
+  -> TSR step (LR space): history weight + residual, pixel shuffle to HR, history buffers updated
+  -> post-processing / tone mapping at HR
+  -> [optional] FG: interpolation (holds the real frame) or extrapolation (holds nothing, late camera latch)
+  -> UI composited on every displayed frame (real and generated)
+  -> paced present on a variable-refresh display
 ```
 
-## 21. Reproducibility Checklist
+The TSR state (previous output, a small hidden state and the previous depth) lives in ping-pong buffers. It is reset on scene cuts, resolution changes and camera teleports.
 
-- [ ] Seeds fixed (Python, NumPy, PyTorch, CUDA) and recorded with each run.
-- [ ] `CUBLAS_WORKSPACE_CONFIG=:16:8` and deterministic algorithms for final runs.
-- [ ] Package versions pinned (PyTorch, torchvision, lpips, torchmetrics, OmegaConf, OpenEXR).
-- [ ] Dataset downloads verified by SHA-256.
-- [ ] One `torchrun` command plus one config file reproduces each training run.
-- [ ] Checkpoints hold model, optimiser, scheduler, scaler, EMA, RNG states, iteration and best metric.
-- [ ] Evaluation is deterministic for a given checkpoint and data.
-- [ ] Metrics use the listed libraries, or documented reimplementations.
-- [ ] GPU, driver, CUDA, PyTorch versions and git commit logged with every run.
-- [ ] Unit tests: fused block and full-model parity, Charbonnier gradient at zero, temporal loss zero where the mask is zero, ONNX parity, latency within budget on target hardware.
-- [ ] Runs tracked in [Weights & Biases](https://wandb.ai/) or [MLflow](https://github.com/mlflow/mlflow), with configuration hash, hardware, dataset version, and validation and test metrics.
+### 4.2 Temporal super-resolution network
+
+Inputs are at render resolution `h x w`; the output is `s` times larger.
+
+| Input                                                                   | Channels         | Source in training                                                 |
+| :---------------------------------------------------------------------- | :--------------- | :----------------------------------------------------------------- |
+| Jittered colour (one sample per pixel, Halton 2,3 offset)               | 3                | Synthetic renderer, or jittered single-sample reads of real frames |
+| Depth, normalised inverse-depth style `1 / (1 + d / median)`            | 1                | TartanAir, GameIR, synthetic layers                                |
+| Normals derived from depth (central differences)                        | 3                | Derived on the fly                                                 |
+| Motion vectors, current to previous frame, render pixels                | 2                | Exact (synthetic, TartanAir, Sintel) or RAFT (video)               |
+| Depth disocclusion cue `                                                | d - warp(d_prev) | / d`                                                               | 1   | Derived |
+| Reactive mask (transparent effects without motion vectors)              | 1                | Synthetic particles                                                |
+| Exposure (log2 gain) and jitter offset                                  | 1 + 2            | Augmentation and sequence                                          |
+| Flags: depth available, motion quality (1 exact, 0.5 estimated, 0 none) | 2                | Per sample                                                         |
+| Previous output warped by upsampled motion vectors, space-to-depth      | 3 s^2            | Recurrent                                                          |
+| `abs(avgpool(warped history) - colour)`                                 | 3                | Recurrent                                                          |
+| Warped recurrent hidden state                                           | 8 to 32          | Recurrent                                                          |
+
+**Trunk.** RepConv blocks: 3x3 + 1x1 + identity + fixed Sobel / Laplacian filters with a learnable 1x1 projection, after [ECBSR](https://github.com/xindongzhang/ECBSR) (Apache-2.0). They are folded into one 3x3 kernel on every forward pass (online re-parameterisation), so training costs one convolution per block and deployment is a plain chain. An optional U-Net level at half resolution (strided convolution down, pixel shuffle up) enlarges the receptive field for fast motion and disocclusions.
+
+**Output.** `out = a * warped_history + (1 - a) * jitter-aware bilinear upsample + residual`. The per-pixel history weight `a` and the residual are predicted at low resolution and unfolded by pixel shuffle.
+
+- This is a learned version of temporal accumulation with rectification: `a` is driven toward 0 at disocclusions and particles and toward 1 on static content, where jittered samples accumulate toward native detail.
+- The first frame after a reset uses `a = 0`.
+
+### 4.3 Frame-generation network
+
+- **Inputs.** Real frames I0 (t = 0) and I1 (t = 1); target time tau = 0.5 (interpolation) or 1.5 (extrapolation).
+- **Motion priors.** The engine motion vector of I1 (I1 to I0) gives linear-motion flows `F(tau->0) = tau * M1` and `F(tau->1) = (tau - 1) * M1`. For extrapolation, the camera-only flow from the target to I1 is computed from the latest camera input. Depth of I1 is optional. Availability flags let one model serve engine and post-process integrations.
+- **Levels.** At 1/4 and then 1/2 resolution, a RepConv trunk predicts flow corrections, a blend weight, a residual and a UI / static-overlay logit.
+- **Output.** `out = u * I1 + (1 - u) * (m * warp(I0) + (1 - m) * warp(I1) + residual)`. Pixels classified as UI are copied from the newest real frame instead of being interpolated.
+- **Cuts.** A cut detector (luma histogram plus motion-compensated difference, threshold calibrated for 1 percent false alarms) bypasses generation and repeats the newest real frame.
+
+### 4.4 Teacher networks
+
+- **TSR teacher.** The same architecture at 64 channels, 8 blocks and a 6-block U-Net level (about 1.37M parameters, estimate). It is trained first; students learn from its outputs as well as from ground truth.
+- **FG privileged teacher.** It also sees the true target frame, following RIFE's privileged distillation; its flows and outputs supervise the students.
+
+### 4.5 Tiers
+
+Arithmetic estimates from the definitions in `src/neuralss/nss_models.py` (`.agent-local/scripts/tier_arithmetic.py`). The notebooks measure the same numbers with forward hooks.
+
+| TSR tier  | Width / blocks / U-Net blocks / hidden | Fused params (3x) | GMAC per 1080p frame, 3x (2x) | Intended hardware   |
+| :-------- | :------------------------------------- | :---------------- | :---------------------------- | :------------------ |
+| `igpu`    | 16 / 3 / 0 / 8                         | 21K               | 4.8 (8.3)                     | Integrated GPUs     |
+| `low`     | 24 / 4 / 2 / 8                         | 99K               | 12.9 (25.1)                   | Entry discrete GPUs |
+| `mid`     | 32 / 4 / 3 / 16                        | 208K              | 24.0 (48.7)                   | Mid-range           |
+| `high`    | 48 / 6 / 4 / 16                        | 567K              | 62.6 (133.0)                  | High-end            |
+| `teacher` | 64 / 8 / 6 / 32                        | 1.37M             | 144.4 (314.5)                 | Training only       |
+
+| FG tier | Width / levels / blocks | Fused params | GMAC per generated 1080p frame (network only) |
+| :------ | :---------------------- | :----------- | :-------------------------------------------- |
+| `igpu`  | 16 / 1 / 3              | 12K          | 1.55                                          |
+| `low`   | 24 / 1 / 4              | 29K          | 3.7                                           |
+| `mid`   | 32 / 2 / 4              | 95K          | 30.4                                          |
+| `high`  | 48 / 2 / 5              | 239K         | 77.0                                          |
+
+Arithmetic latency at an assumed sustained FP16 throughput T (TFLOPS) is `2 * GMAC / T` ms. For example, the TSR `igpu` tier at 3x costs about 2.4 ms at 4 TFLOPS sustained (estimate). Real latency on target GPUs must be measured through the DirectML / Vulkan path; T4 PyTorch timings only rank variants.
+
+## 5. Dataset strategy
+
+### 5.1 Principles
+
+1. **High-resolution sources only as targets.** Low-resolution inputs are generated (jittered render-like sampling), except where a native low-resolution render exists (GameIR 720p) for generalisation tests.
+2. **Game-rendering metadata wherever it exists.** Exact flow, occlusion and depth (TartanAir, Sintel), depth and native multi-resolution renders (GameIR), plus a synthetic layered renderer that produces every engine signal exactly.
+3. **Natural video for motion diversity**, with RAFT teacher motion marked as estimated.
+4. **One manifest for both tasks**, with leakage groups and perceptual deduplication across every source (section 6).
+
+### 5.2 Inventory (checked 5 October 2026 through the public Kaggle and Hugging Face APIs)
+
+| Source              | Host / id                                           | Content and metadata                                                                                                                                                                                   | Licence as stated by the host                                                                                                     | Role                                                                                     |
+| :------------------ | :-------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------- |
+| DIV2K               | Kaggle `soumikrakshit/div2k-high-resolution-images` | 900 2K images (`DIV2K_train_HR`, `DIV2K_valid_HR`)                                                                                                                                                     | "Unknown" on Kaggle; DIV2K terms are academic                                                                                     | Textures; valid set pinned to test                                                       |
+| Flickr2K            | Kaggle `daehoyang/flickr2k`                         | 2,650 2K images                                                                                                                                                                                        | "Unknown"; Flickr licences vary                                                                                                   | Textures                                                                                 |
+| REDS                | Kaggle `amithkesavmrajagiri/reds-dataset`           | 720p sequences (`train_sharp/hr`)                                                                                                                                                                      | REDS is CC BY 4.0 ([HF mirror tag](https://huggingface.co/datasets/snah/REDS))                                                    | Real sequences (RAFT motion)                                                             |
+| Vimeo-90K septuplet | Kaggle `wangsally/vimeo-90k-7`                      | 448x256 seven-frame clips                                                                                                                                                                              | "Unknown"                                                                                                                         | Real sequences and FG quads                                                              |
+| Vimeo-90K triplet   | Kaggle `chenshu123/vimeo-triplet`                   | 448x256 triplets (official test list used when present)                                                                                                                                                | "Unknown"                                                                                                                         | FG test (capped at 1,000 items)                                                          |
+| MPI Sintel          | Kaggle `artemmmtry/mpi-sintel-dataset`              | Clean and final passes, `.flo` forward flow, occlusion masks (6.2 GB)                                                                                                                                  | CC BY 3.0 on Kaggle; the original site uses its own licence terms (to be confirmed before any release)                            | Exact-motion sequences; `market` and `cave` scene families test-only                     |
+| Vid4                | Kaggle `uom200647r/vid4-dataset`                    | 4 test sequences                                                                                                                                                                                       | Apache 2.0 on Kaggle                                                                                                              | Test only                                                                                |
+| Game frames         | HF `ericphann/video-game-super-resolution`          | 14,431 1080p game frames (Unreal-style scenes) with 480x270 copies (only the 1080p side is used); stills, not sequences                                                                                | Apache-2.0 tag (captures of third-party content: research use)                                                                    | Game textures; `test-hr` test-only                                                       |
+| TartanAir           | HF `theairlabcmu/tartanair`                         | Unreal Engine environments: RGB, depth, forward optical flow, flow masks (0 = valid; non-zero = occluded or out of view), 640x480, per-environment zips                                                | BSD-3-Clause ([HF](https://huggingface.co/datasets/theairlabcmu/tartanair), [tools](https://github.com/castacks/tartanair_tools)) | Exact-motion game-like sequences with depth; `japanesealley` and `seasidetown` test-only |
+| GameIR              | HF `LLLebin/GameIR`                                 | CARLA (Unreal Engine 4) clips with native 720p and 1440p renders, depth (CARLA RGB encoding), segmentation and camera data; frames 10 rendered frames apart; mini split about 11 GB train, 1.5 GB test | MIT ([HF](https://huggingface.co/datasets/LLLebin/GameIR), [paper](https://arxiv.org/abs/2408.16866))                             | Game textures and sequences with depth; town 05 test-only (native-render generalisation) |
+| Vimeo-1080p         | HF `danjacobellis/vimeo1080p`                       | 3,000 train and 200 validation 1080p MP4 videos in parquet shards (about 24 GB)                                                                                                                        | Not stated                                                                                                                        | 1080p real sequences; validation pinned to test                                          |
+
+**Considered and not used now.**
+
+| Candidate                                                                                                                                                            | Reason                                                                                                                                                                       |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Origin Lab game recordings v4 (HF): 1080p60 RGB with and without HUD, depth, normals, inputs                                                                         | Evaluation-only sample terms, no redistribution, 30-day deletion, 5.3 TB ([HF](https://huggingface.co/datasets/originlab/game-recordings-v4))                                |
+| Generative World Renderer (Cyberpunk 2077 and Black Myth: Wukong, 4M frames with G-buffers)                                                                          | Announced gated release under CC BY-NC-SA 4.0; no Hugging Face id in the paper ([HF paper page](https://huggingface.co/papers/2604.02329))                                   |
+| QRISP (Qualcomm)                                                                                                                                                     | Distributed by Qualcomm under a research licence, not on Kaggle or Hugging Face ([Qualcomm](https://www.qualcomm.com/developer/software/qualcomm-rasterized-images-dataset)) |
+| Kaggle `uhecoms/super-resolution-for-real-time-computer-graphics` (GPU-simulator renders of game traces at 320 to 1600 px with depth, normals and edges; MIT; 54 GB) | Promising for native multi-resolution renders but large; a candidate for the native-LR ablation D3                                                                           |
+| Inter4K (HF `Shilin-LU/Inter4k`)                                                                                                                                     | The HF tag says MIT, but the original release is CC BY-NC-SA ([repo](https://github.com/alexandrosstergiou/Inter4K))                                                         |
+| HF `Kim2091/8k-video-game-dataset`                                                                                                                                   | CC BY-NC-SA 4.0 and 7z archives                                                                                                                                              |
+| X4K1000FPS                                                                                                                                                           | Not on Kaggle or Hugging Face ([XVFI](https://github.com/JihyongOh/XVFI)); research and education only                                                                       |
+| Spring (HF `supmelon/spring_processed`)                                                                                                                              | Licence not stated on the mirror                                                                                                                                             |
+| OpenVid-1M and similar                                                                                                                                               | Several TB                                                                                                                                                                   |
+
+### 5.3 Pipeline (`neural-data-pipeline` notebook, `nss_pipeline.py`)
+
+1. **Discovery.**
+   - Kaggle: a capped randomised directory walk, listing directories completely so sequences are never split. Degraded copies (LR, bicubic, blurred, `x2`/`x3`/`x4`) and non-colour passes are dropped by path token.
+   - Hugging Face: HTTPS with retries. TartanAir is read member by member from remote zips with HTTP range requests; GameIR tars are streamed and stopped early; Vimeo-1080p parquet shards are unpacked into MP4 files. Both access patterns were checked against the live repositories on 5 October 2026.
+2. **Normalisation.** RGB uint8 frames; depth to an inverse-depth style code; flow to engine motion-vector semantics.
+3. **Leakage groups.** Every item gets one: Kaggle video folder or video, Sintel scene family, TartanAir environment, GameIR town, Vimeo-1080p video, still file.
+4. **Quality filter.** Rejects keyframes that are smaller than 256 px, flat, more than 35 percent letterboxed, or blurry (Laplacian variance). Rejected items are kept in the manifest as `filtered`.
+5. **Deduplication and split.** Section 6. The output is `nss_manifest.parquet` with URIs that resolve on Kaggle (`kaggle:<ref>|path`, `data:path`, `mp4:path#frame`).
+
+The two training notebooks load this manifest from an attached notebook output, or rebuild a smaller one inline with the same code.
+
+### 5.4 Temporal sequences and motion-vector semantics
+
+- All windows use the engine convention: for each pixel of frame k, the displacement to frame k-1.
+- TartanAir and Sintel provide forward flow (frame k to k+1). Their windows are played **backwards**, so this forward flow becomes exactly the engine vector, and the occlusion mask becomes the disocclusion mask.
+- Video windows get RAFT motion with a forward-backward consistency mask.
+- Frame-generation quads (four consecutive frames) store teacher flows 2 to 0 (the newest real frame's motion vector), 1 to 0 and 1 to 2 (interpolation targets), and 3 to 2 (extrapolation target).
+
+### 5.5 Synthetic game-like renderer (`nss_synth.py`)
+
+Rendered on the GPU from cached high-resolution stills:
+
+- **Scene.** A background plane and a foreground layer with a procedural alpha: solid blobs, wires one to two texels wide, and fences of thin bars.
+- **Motion.** Each layer has its own continuous affine camera path. Speed classes are static, slow (0.3 to 3 px/frame), medium (3 to 10) and fast (10 to 28), with rotation, zoom, acceleration and optional camera reversal.
+- **Effects.** Alpha-blended particles that write no motion vectors (like real engines) and set a reactive mask; world-space text; exposure changes.
+- **Overlays (FG).** Screen-space HUD tiles, subtitle changes, full-screen menus and scene cuts.
+- **Rendering.** Low-resolution frames take one jittered sample per pixel from the full-resolution texture with no mip filtering, so minification produces real aliasing on thin geometry. Targets use 4 samples per pixel (rotated grid).
+- **Ground truth.** Motion vectors, intermediate flows, disocclusion masks and depth are exact because every pixel's layer and trajectory are known.
+
+**Hypothesis.** This closes most of the gap left by the lack of open game G-buffer data for motion, disocclusion and aliasing behaviour. It does not model lighting effects such as specular highlights, reflections and shadows (section 15).
+
+## 6. Deduplication and leakage strategy
+
+| Step                     | Method                                                                                                                                                                                                      | Notes                                                                                                                                                                                                                |
+| :----------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Keyframes                | One per still or short clip; first, middle and last for long sequences                                                                                                                                      | Bounds compute; mid-sequence content changes are covered by the three keyframes                                                                                                                                      |
+| Exact and near-exact     | 64-bit DCT pHash and dHash on 256x256 thumbnails                                                                                                                                                            | Robust to rescaling, mild compression and colour shifts; weak under large crops and mirroring                                                                                                                        |
+| Semantic near-duplicates | [DINOv2-small](https://huggingface.co/facebook/dinov2-small) (Apache-2.0) global descriptors, cosine similarity                                                                                             | Catches crops, mirroring and re-encodes; may also link different images of the same landmark (conservative error)                                                                                                    |
+| Search                   | Exhaustive all-pairs on GPU: Hamming as dot products of +-1 vectors, cosine as half-precision matrix products, chunked, both GPUs                                                                           | No approximate index needed at about 30K keyframes; [FAISS](https://github.com/facebookresearch/faiss) (MIT) is the path to millions                                                                                 |
+| Calibration              | Synthetic positives (60 to 95 percent crops, rescale, mirror, rotation, colour shift, blur, text overlay, JPEG 35 to 92) against random negatives                                                           | Threshold = stricter of the 0.1 percent false-positive point and the most similar negative plus a margin. All-pairs search tests about K^2/2 pairs, so a plain 0.1 percent false-positive rate would flood the graph |
+| Guards                   | pHash edges only between keyframes with enough structure (grey standard deviation at least 15), confirmed by dHash; thresholds are tightened automatically while there are more than two edges per keyframe | Prevents dark or flat frames, or semantically similar scenes, from merging unrelated data into giant components                                                                                                      |
+| Clustering               | Union-find over leakage-group edges and duplicate edges                                                                                                                                                     | A component is the unit of splitting                                                                                                                                                                                 |
+| Split                    | A component containing any test item becomes test, and its training members are dropped. Other components go to validation with probability 0.05 (deterministic hash), else training                        | Test sets are pinned by source role (benchmarks, held-out environments, towns, scene families, official test lists)                                                                                                  |
+| Audit                    | Nearest training neighbour of every validation and test keyframe                                                                                                                                            | The notebook asserts no cross-split embedding match above the final threshold, and reports pHash matches                                                                                                             |
+
+**Limitations and leakage risks.**
+
+1. Duplicates are judged on keyframes. Two sequences that share only mid-sequence content can slip through.
+2. Similarity thresholds are global; per-source calibration would be tighter.
+3. Strong augmentations beyond the calibration set (heavy colour grading, large overlays, extreme crops under 50 percent) are missed.
+4. Scenes that are related but different, such as other trajectories in the same TartanAir environment, other Sintel shots of the same set, or REDS clips from the same city walk, are kept together only through the coarse leakage groups (environment, scene family). Groups that are too fine would leak.
+5. Synthetic training scenes reuse textures from training stills only. Test synthetic scenes use test stills (held-out game frames and DIV2K validation images).
+6. RAFT was trained on Sintel and other flow datasets ([RAFT](https://github.com/princeton-vl/RAFT)), so motion estimated on Sintel-like content is optimistic. Sintel test sequences use exact flow, not RAFT.
+
+## 7. Temporal super-resolution training strategy
+
+- **Data mix per step.**
+  - About 60 percent synthetic sequences (exact everything).
+  - About 40 percent real windows: TartanAir and Sintel exact; REDS, Vimeo, Vimeo-1080p and GameIR with RAFT motion and `mv_quality = 0.5`.
+  - Real windows get motion-consistent flips and exposure augmentation.
+- **Unroll.** Six frames per sequence (truncated back-propagation through the recurrence), 192x192 output patches (64x64 input at 3x).
+- **Loss per frame.** The first frame, which has no history, is down-weighted.
+  - Charbonnier, plus 0.1 times a gradient loss, plus 0.05 times an L1 loss on Fourier magnitudes.
+  - Plus 0.05 times LPIPS on the last frame.
+  - Plus 0.5 times a temporal-change loss `|(o_t - W o_{t-1}) - (g_t - W g_{t-1})|` over pixels visible in both frames, weighted by motion quality.
+  - Plus 0.5 times distillation toward the teacher (students only).
+- **Schedule.** Teacher first (both GPUs), then the main 3x student with distillation, then the `igpu` 3x and `low` 2x students in parallel (one per GPU), then six ablation runs in three parallel pairs. AdamW, cosine schedule over each run's wall-clock budget, EMA weights, best checkpoint by validation PSNR-Y.
+- **Ratios.** 3x is primary and 2x is trained. **1.5x is not trained yet.** The pixel-shuffle head needs an integer factor; options (section 14): an integer-factor model with a resampled output, or a fractional head with a learned resampling kernel.
+
+## 8. Frame-generation strategy
+
+- **Two modes, one model.**
+  - Interpolation (tau = 0.5) gives the best quality at the cost of one held frame.
+  - Extrapolation (tau = 1.5) holds nothing. Its camera prior is re-sampled from the latest input, so camera motion in generated frames responds without waiting for the next rendered frame.
+- **Training data.** Synthetic scenes provide exact intermediate flows, disocclusions, HUD with subtitle changes, menus, cuts and rapid camera reversals. Real quads provide RAFT flows.
+- **Robustness.** Engine inputs (motion vectors, depth, camera prior) are dropped at random, so the same model works for engine integrations and post-process integrations.
+- **Loss.** Charbonnier, plus 0.5 times census, plus 0.1 times LPIPS, plus 0.01 times flow L1 (exact or RAFT), plus 0.2 times UI binary cross-entropy (positive weight 4), plus 0.5 times distillation from the privileged teacher.
+- **Special cases.**
+  - Cuts: the detector forces a frame repeat.
+  - Menus and pause screens: the UI mask covers the panel and the newest real frame is shown.
+  - Rapid input reversal: measured with and without the camera prior.
+  - Low base frame rate: generation becomes less reliable as motion between real frames grows, so integrations should offer a minimum base frame rate (FSR recommends rendering slightly below half the output rate; section 3.1).
+
+## 9. UI and text handling
+
+| Situation                                            | Handling                                                                                                                                                                                                                                                                                                                            |
+| :--------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TSR, engine integration                              | Upscale before UI composition; UI is drawn at native resolution after reconstruction (the FSR / DLSS convention). Training never puts screen-space UI into TSR targets; world-space text is part of the scene and is evaluated as fine detail                                                                                       |
+| FG, engine provides HUD-less frames and a UI layer   | Generate from HUD-less frames, then composite the newest UI layer on every displayed frame (`student+ui_layer` in the evaluation)                                                                                                                                                                                                   |
+| FG, UI not separable (post-process injection, video) | The learned UI / static-overlay mask copies those pixels from the newest real frame. Trained with HUD tiles, health bars, crosshairs, subtitle plates and changes, and menus, in the spirit of figure-text mixing (CVPR 2023). Measured with UI-region PSNR and a UI ghosting rate (share of UI pixels off by more than 10 percent) |
+| Subtitle or HUD changes between real frames          | Target = the UI of the newest real frame, never a blend                                                                                                                                                                                                                                                                             |
+| Menus, pause screens, full-screen overlays           | Covered by the mask; a static scene makes generation trivial; the cut detector handles screen switches                                                                                                                                                                                                                              |
+
+## 10. Latency strategy
+
+**Definitions** (reported separately in the FG notebook):
+
+- _Game input latency_: input sample to first photons of a **real** frame that reflects it (game logic only advances on real frames).
+- _Camera latency_: input sample to the first displayed frame of any kind whose camera reflects it.
+- _Generated-frame content age_: time since the newest real input in a displayed generated frame.
+
+**Model** (`simulate_latency`): a GPU-bound loop with just-in-time CPU scheduling (Reflex / Anti-Lag / XeLL style, no queued frames) on a variable-refresh display, with log-normal render-time jitter.
+
+- **Interpolation** holds real frame k until the frame between k-1 and k has been generated and shown. Game latency rises by about half a frame plus the generation time.
+- **Extrapolation** holds nothing, so game latency equals native.
+- **Late-latched extrapolation** re-samples the camera just before generating. Camera latency of generated frames then drops to about the generation time plus present.
+
+The model is driven by T4-measured generation times; on target hardware these must be replaced with measured times.
+
+**Engineering rules.**
+
+1. Never queue frames: CPU work starts just in time.
+2. Run FG on an asynchronous compute queue, with presentation paced on a dedicated thread (as FSR does).
+3. Split FG into a per-pair part and a per-frame part when generating several frames (DLSS 4 MFG).
+4. Disable FG below a base-rate threshold.
+5. Click-to-photon measurement on hardware (PresentMon or an LDAT-like sensor) is planned for the integration phase; Kaggle cannot measure display latency.
+
+## 11. Teacher and distillation strategy
+
+| Teacher                                                                                                                                                                                                                                                                                                                  | Status          | Use                                                                                                                                                                                  |
+| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| In-notebook TSR teacher (1.37M params)                                                                                                                                                                                                                                                                                   | Implemented     | Output distillation for the `low` and `igpu` students                                                                                                                                |
+| In-notebook privileged FG teacher                                                                                                                                                                                                                                                                                        | Implemented     | Flow and output distillation                                                                                                                                                         |
+| RAFT small ([torchvision](https://pytorch.org/vision/stable/models/raft.html), BSD-3)                                                                                                                                                                                                                                    | Implemented     | Motion for video, flow supervision, tOF metric                                                                                                                                       |
+| DINOv2-small                                                                                                                                                                                                                                                                                                             | Implemented     | Deduplication embeddings                                                                                                                                                             |
+| Large open VSR models as offline teachers or pseudo-ground-truth generators: [BasicVSR++](https://github.com/ckkelvinchan/BasicVSR_PlusPlus) (Apache-2.0), [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) (Apache-2.0), [SeedVR](https://github.com/ByteDance-Seed/SeedVR) (Apache-2.0)                          | Not implemented | Only relevant where no ground truth exists, such as sharpening native-resolution game captures. Every Kaggle source here has ground truth, so the extra compute is not justified yet |
+| Open interpolation models as FG references: [RIFE](https://github.com/hzwer/Practical-RIFE) (MIT, weights on Google Drive), [IFRNet](https://github.com/ltkong218/IFRNet) (MIT), [EMA-VFI](https://github.com/MCG-NJU/EMA-VFI) (Apache-2.0), [FILM](https://github.com/google-research/frame-interpolation) (Apache-2.0) | Not implemented | Quality ceilings for offline comparison; weights are not on Kaggle or Hugging Face in official form, so they are not in the notebooks                                                |
+
+## 12. Losses and metrics
+
+| Metric                                                                                                  | Task                     | Implementation                                                                                  |
+| :------------------------------------------------------------------------------------------------------ | :----------------------- | :---------------------------------------------------------------------------------------------- |
+| PSNR and SSIM on Y (BT.601), RGB PSNR                                                                   | Both                     | `nss_metrics`                                                                                   |
+| LPIPS-AlexNet                                                                                           | Both                     | [lpips](https://github.com/richzhang/PerceptualSimilarity) (BSD-2), with a torchvision fallback |
+| LDR-FLIP                                                                                                | TSR (static convergence) | [flip-evaluator](https://github.com/NVlabs/flip) (BSD-3)                                        |
+| Warping error along exact motion; temporal-change error                                                 | TSR                      | `nss_metrics`                                                                                   |
+| tOF (RAFT) and tLP                                                                                      | Both                     | TecoGAN definitions                                                                             |
+| Region PSNR: disocclusions, fine detail (top 15 percent gradients), particles                           | TSR                      | `nss_eval`                                                                                      |
+| Static-scene convergence (PSNR against frame index)                                                     | TSR                      | Synthetic static suite                                                                          |
+| Interpolation error, occluded-region PSNR                                                               | FG                       | `nss_eval`                                                                                      |
+| UI-region PSNR, UI ghosting rate, cut detection rate, menu and cut correctness, camera-reversal quality | FG                       | `nss_eval` and synthetic suites                                                                 |
+| Displayed frame rate, game and camera latency, content age                                              | FG                       | `simulate_latency`                                                                              |
+| T4 latency per tier and resolution, GMAC per frame                                                      | Both                     | CUDA events, forward hooks                                                                      |
+
+**Baselines.**
+
+- TSR: bicubic, jitter-aware bilinear, and an analytic TAA upscaler (history reprojection, YCoCg 3x3 neighbourhood clamp, 10 percent blend).
+- FG: frame repeat, average, motion-vector reprojection.
+- FSR 3.1 itself needs engine captures; comparing against it is planned (section 17).
+
+## 13. Hardware and runtime strategy
+
+- **Arithmetic.** FP16 everywhere; FP32 only for warp coordinates and losses. INT8 (DP4a-friendly) quantisation-aware fine-tuning is planned for the `igpu` tiers.
+- **Export.**
+  - The fused networks export to ONNX (opset 17, static shapes per render resolution; `GridSample` needs opset 16+), with ONNX Runtime parity checked in the notebooks.
+  - Deployment paths: [DirectML](https://github.com/microsoft/DirectML) on Windows (all vendors), Vulkan compute through [ncnn](https://github.com/Tencent/ncnn) (Windows, Linux, Android), Metal on Apple GPUs (to be evaluated), and TensorRT as the NVIDIA-only fast path.
+  - The pre- and post-processing (dilation, reprojection, pixel shuffle, blend) belong in the engine's compute shaders.
+- **Memory (estimate, 1080p, TSR 3x).**
+  - Two FP16 RGBA history buffers at 1920x1080 take 33.2 MB.
+  - TSR activations depend on the tier: the `low` tier's 24-channel ping-pong at 640x360 plus its 48-channel half-resolution level is about 28 MB.
+  - FG activations range from about 12 MB (`low`, one level at 480x270) to about 70 MB (`mid`, a second 32-channel level at 960x540).
+  - The previous plan's 100 MB pipeline budget remains the target.
+
+## 14. Experiments and ablations
+
+Run by the notebooks (short, equal budgets per ablation pair):
+
+| ID         | Notebook | Change                                                       | Question                                        |
+| :--------- | :------- | :----------------------------------------------------------- | :---------------------------------------------- |
+| A-TSR-1    | TSR      | No history (single frame)                                    | Value of temporal accumulation                  |
+| A-TSR-2    | TSR      | No G-buffers (colour only)                                   | Value of depth and motion vectors               |
+| A-TSR-3    | TSR      | Bicubic degradation instead of jittered render-like sampling | Training/deployment domain gap (aliasing)       |
+| A-TSR-4    | TSR      | No temporal loss                                             | Flicker and ghosting                            |
+| A-TSR-5    | TSR      | No distillation                                              | Value of the teacher                            |
+| A-FG-1     | FG       | No UI training                                               | UI correctness                                  |
+| A-FG-2     | FG       | No motion priors                                             | Value of engine motion vectors and camera prior |
+| A-FG-3 / 4 | FG       | Interpolation-only / extrapolation-only                      | Cost of one shared model                        |
+| A-FG-5     | FG       | No distillation                                              | Value of the privileged teacher                 |
+
+Next (not yet run):
+
+- Tier sweeps (width, depth, U-Net level) for quality against GMAC.
+- 1.5x scaling.
+- Kernel-prediction output head.
+- Adversarial / perceptual fine-tuning stage for texture.
+- Native low-resolution training (the GameIR and `uhecoms` renders).
+- INT8 quantisation.
+- Multi-frame generation (2x, 3x, 4x).
+- Engine-motion-vector forward splatting for FG.
+- Learned versus analytic cut detection.
+
+**Success criteria for this phase (Kaggle).**
+
+1. On game-like suites, the 3x student beats the analytic TAA upscaler on both PSNR-Y and temporal-change error, and LPIPS is lower.
+2. Static scenes converge above the single-frame ablation.
+3. FG beats motion-vector reprojection on real suites in both modes.
+4. UI ghosting rate is far below the reprojection baseline.
+5. Fused-model parity is below 1e-3, and ONNX Runtime parity is checked.
+
+All of these remain unmeasured until the notebooks have run.
+
+## 15. Known limitations
+
+1. **No real engine G-buffer data on Kaggle or Hugging Face with open terms** (section 5.2).
+   - Lighting-dependent effects (specular aliasing, reflections, shadows, volumetrics, ray-traced noise) are under-represented.
+   - The synthetic renderer covers geometry, motion, disocclusion, transparency without motion vectors, and UI only.
+2. **Real sequences mostly lack exact motion.** Video motion comes from RAFT and carries its errors.
+3. **GameIR frames are 10 rendered frames apart**, so its sequences are effectively high-motion.
+4. **Simulated, not real, low-resolution renders.** Jittered single-sample reads of a finished high-resolution frame miss level-of-detail changes, mip selection and shading-rate effects of a real low-resolution render. GameIR native renders test this gap (2x only).
+5. **Kaggle limits training** to a few hours per stage: models are under-trained compared with production systems; tiers above `mid` are not trained.
+6. **T4 PyTorch latency is not in-engine latency on target GPUs**; the latency model is analytic.
+7. **No head-to-head with FSR 3.1, DLSS or XeSS yet** (it needs engine captures with their SDKs).
+8. **Perceptual deduplication is keyframe-based** with global thresholds (section 6).
+9. **1.5x is not trained.** Fractional ratios need a different output head.
+
+## 16. Licensing considerations
+
+| Item                                                                  | Licence (as checked)                                                                                                                                                                                   | Policy                                                                                                                                                                                                               |
+| :-------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ECBSR (RepConv idea)                                                  | Apache-2.0 ([repo](https://github.com/xindongzhang/ECBSR)); the previous plan said MIT, corrected                                                                                                      | Ideas re-implemented; attribution                                                                                                                                                                                    |
+| RAFT (torchvision weights), LPIPS, FLIP, DINOv2, FAISS, PySceneDetect | BSD-3, BSD-2, BSD-3, Apache-2.0, MIT, BSD-3                                                                                                                                                            | Evaluation and data tooling; not shipped in runtime weights                                                                                                                                                          |
+| RIFE / Practical-RIFE                                                 | MIT, including the released models per the README; the previous plan said non-commercial, corrected                                                                                                    | Reference only                                                                                                                                                                                                       |
+| IFRNet                                                                | MIT on GitHub; the previous plan said Apache 2.0, corrected                                                                                                                                            | Reference only                                                                                                                                                                                                       |
+| FidelityFX SDK (FSR 3.1)                                              | Open SDK on GPUOpen; the current repository has no SPDX licence detected (check the licence file per version)                                                                                          | Documentation informs the engine contract; no code copied                                                                                                                                                            |
+| XeSS SDK                                                              | Custom Intel licence (not SPDX-classified on GitHub); closed models                                                                                                                                    | Reference only                                                                                                                                                                                                       |
+| DLSS                                                                  | Proprietary                                                                                                                                                                                            | Reference only                                                                                                                                                                                                       |
+| Data                                                                  | Section 5.2; DIV2K, Flickr2K, Vimeo-90K, Sintel (original terms), Vid4, game captures and Vimeo-1080p are research-use or unclear; REDS (CC BY 4.0), TartanAir (BSD-3) and GameIR (MIT) are permissive | **Research weights** may use everything listed. **Commercial weights** must be retrained on permissive sources (TartanAir, GameIR, REDS, project-owned renders) after each licence is confirmed on the original page |
+
+## 17. Roadmap
+
+| Phase                      | Deliverable                                                                                                                                                                               | Acceptance                                                                                            |
+| :------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------- |
+| 0. Kaggle validation (now) | Run the three notebooks; publish metrics, plots and weights                                                                                                                               | Section 14 success criteria; data audit with zero embedding leaks                                     |
+| 1. Data scale-up           | More TartanAir environments and trajectories (exact motion, depth), the native multi-resolution `uhecoms` renders, larger Vimeo-1080p subsets, optional Hugging Face token for throughput | Gains on held-out environments; native-LR gap measured                                                |
+| 2. Engine captures         | Open-content UE5 / Unity / Godot scenes captured with jitter, motion vectors, depth, reactive masks, HUD-less colour and UI layers, plus FSR 3.1 outputs for the same frames              | First head-to-head with FSR 3.1 at 3x and 2x                                                          |
+| 3. Quality                 | 1.5x head, perceptual / adversarial stage, multi-frame generation, INT8 for `igpu`                                                                                                        | Static convergence near native (PSNR / FLIP); UI ghosting under target                                |
+| 4. Runtime                 | DirectML and Vulkan (ncnn) integrations, async-compute FG, pacing thread, PresentMon latency on an integrated GPU, an entry GPU and a mid GPU                                             | Measured latency within tier budgets; click-to-photon reported separately for game and camera latency |
+| 5. Release                 | Weights trained only on permissive data; licences confirmed                                                                                                                               | Licence review complete                                                                               |
+
+## 18. Repository layout and how to run
+
+```text
+src/neuralss/          single source of the library (embedded into the notebooks at build time)
+  nss_common.py        run folders, logging, hardware report, pip helper, training launcher
+  nss_data.py          source registry, discovery, Hugging Face range access, decoding, window / crop workers, manifest I/O
+  nss_dedup.py         hashes, embeddings, calibration, GPU neighbour search, union-find split
+  nss_pipeline.py      data-pipeline steps and the inline fallback
+  nss_cache.py         memory-mapped caches and RAFT teacher motion
+  nss_synth.py         synthetic game-like renderer and GPU batch builders
+  nss_models.py        RepConv, TSR network, FG network, tiers, fusion, ONNX wrappers
+  nss_metrics.py       losses, metrics, RAFT, analytic baselines, latency model
+  nss_train.py         DDP harness
+  nss_eval.py          test clips, runners, metric rows
+  train_tsr.py, train_fg.py
+notebooks/             percent-format notebook sources
+tools/build_notebooks.py   builds the .ipynb files (python tools/build_notebooks.py [--check])
+neural-data-pipeline/neural-data-pipeline.ipynb
+neural-supersampling/neural-supersampling.ipynb
+neural-frame-generation/neural-frame-generation.ipynb
+neural-supersampling/outputs/   archived outputs of the superseded single-frame notebook (section 19)
+```
+
+**Run order on Kaggle** (GPU T4 x2, Internet on):
+
+1. `neural-data-pipeline`: attach the seven Kaggle datasets; this produces the manifest and the Hugging Face subsets.
+2. `neural-supersampling` and `neural-frame-generation`: attach the pipeline output and the same Kaggle datasets.
+
+Each notebook can also run alone (inline manifest, smaller caps). `QUICK_RUN = True` gives a short smoke test of every cell.
+
+## 19. Prior evidence
+
+| Evidence                                                                               | Status                                                                                                                                                                                                                                                                                                                                     |
+| :------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Single-frame Rep-TNSR v2 run (Kaggle, September 2026; `neural-supersampling/outputs`)  | _Measured_, superseded design. Set5 x3 PSNR-Y +2.29 dB and Set14 +1.67 dB over bicubic; fused 640x360 to 1080p in 4.2 ms on a T4. Validation plateaued after about 2 hours (capacity-bound), and 98 of the 100 "DIV2K" test images were also in its training split. These findings motivated the temporal, G-buffer, leakage-safe redesign |
+| Rep-TNSR v1 (earlier project): 34.82 dB at 360p to 1080p, 2.72 ms on a GTX 1650 Mobile | _Reported by the earlier project, not reproduced here_; compared against FSR 1.0 only                                                                                                                                                                                                                                                      |
+
+## 20. References
+
+Industry: [DLSS 4 (NVIDIA research)](https://research.nvidia.com/labs/adlr/DLSS4) · [DLSS 4 integration (Streamline)](https://developer.nvidia.com/blog/how-to-integrate-nvidia-dlss-4-into-your-game-with-nvidia-streamline) · [Reflex 2 Frame Warp](https://www.nvidia.com/en-us/geforce/news/reflex-2-even-lower-latency-gameplay-with-frame-warp/) · [FSR 3 upscaler](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/super-resolution-upscaler/) · [FSR frame interpolation](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/frame-interpolation/) · [FSR frame-interpolation swap chain](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/frame-interpolation-swap-chain/) · [FSR Redstone for developers](https://gpuopen.com/learn/amd-fsr-redstone-developers-neural-rendering/) · [Intel XeSS SDK](https://github.com/intel/xess)
+
+Research: [NSRR](https://research.facebook.com/blog/2020/7/introducing-neural-supersampling-for-real-time-rendering/) · [Thomas et al. 2022](https://diglib.eg.org/handle/10.1145/3543870) · [Mercier et al. 2023](https://arxiv.org/abs/2308.01483) · [FuseSR](https://arxiv.org/abs/2310.09726) · [RDG](https://github.com/sunny2109/RDG) · [ExtraNet](https://sites.cs.ucsb.edu/~lingqi/publications/paper_extranet.pdf) · [ExtraSS](https://doi.org/10.1145/3610548.3618224) · [STSS](https://arxiv.org/abs/2312.10890) · [GFFE](https://arxiv.org/abs/2406.18551) · [Mob-FGSR](https://sites.cs.ucsb.edu/~lingqi/publications/paper_sig24mobfgsr.pdf) · [RIFE](https://arxiv.org/abs/2011.06294) · [Discontinuity-aware VFI](https://arxiv.org/abs/2202.07291) · [FlashVSR](https://arxiv.org/abs/2510.12747) · [TecoGAN](https://arxiv.org/abs/1811.09393) · [GameIR](https://arxiv.org/abs/2408.16866) · [ECBSR](https://github.com/xindongzhang/ECBSR) · [SSCD copy detection](https://arxiv.org/abs/2202.10261)
+
+Data: [TartanAir (HF)](https://huggingface.co/datasets/theairlabcmu/tartanair) · [GameIR (HF)](https://huggingface.co/datasets/LLLebin/GameIR) · [Game frames (HF)](https://huggingface.co/datasets/ericphann/video-game-super-resolution) · [Vimeo-1080p (HF)](https://huggingface.co/datasets/danjacobellis/vimeo1080p) · [MPI Sintel (Kaggle)](https://www.kaggle.com/datasets/artemmmtry/mpi-sintel-dataset) · [REDS (Kaggle)](https://www.kaggle.com/datasets/amithkesavmrajagiri/reds-dataset) · [Vimeo-90K septuplet (Kaggle)](https://www.kaggle.com/datasets/wangsally/vimeo-90k-7) · [Vimeo-90K triplet (Kaggle)](https://www.kaggle.com/datasets/chenshu123/vimeo-triplet) · [DIV2K (Kaggle)](https://www.kaggle.com/datasets/soumikrakshit/div2k-high-resolution-images) · [Flickr2K (Kaggle)](https://www.kaggle.com/datasets/daehoyang/flickr2k) · [Vid4 (Kaggle)](https://www.kaggle.com/datasets/uom200647r/vid4-dataset) · [Origin Lab recordings](https://huggingface.co/datasets/originlab/game-recordings-v4) · [Generative World Renderer](https://huggingface.co/papers/2604.02329) · [QRISP](https://www.qualcomm.com/developer/software/qualcomm-rasterized-images-dataset) · [Inter4K](https://github.com/alexandrosstergiou/Inter4K) · [XVFI / X4K1000FPS](https://github.com/JihyongOh/XVFI)
+
+Tools: [RAFT](https://github.com/princeton-vl/RAFT) · [LPIPS](https://github.com/richzhang/PerceptualSimilarity) · [FLIP](https://github.com/NVlabs/flip) · [DINOv2-small](https://huggingface.co/facebook/dinov2-small) · [FAISS](https://github.com/facebookresearch/faiss) · [BasicVSR++](https://github.com/ckkelvinchan/BasicVSR_PlusPlus) · [SeedVR](https://github.com/ByteDance-Seed/SeedVR) · [IFRNet](https://github.com/ltkong218/IFRNet) · [EMA-VFI](https://github.com/MCG-NJU/EMA-VFI) · [FILM](https://github.com/google-research/frame-interpolation) · [DirectML](https://github.com/microsoft/DirectML) · [ncnn](https://github.com/Tencent/ncnn) · [ONNX Runtime](https://github.com/microsoft/onnxruntime)
