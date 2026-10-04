@@ -1,0 +1,7 @@
+{
+	"exported": true,
+	"error": null,
+	"onnxruntime_max_abs_diff": null,
+	"onnxruntime_check": "skipped: ModuleNotFoundError(\"No module named 'onnxruntime'\")",
+	"onnx_mb": 0.131
+}

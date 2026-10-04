@@ -1,0 +1,74 @@
+{
+	"train_count": 39826,
+	"train_capacity": 40509,
+	"val_count": 2007,
+	"patch": 240,
+	"train_gb": 6.88,
+	"decode_failures": 725,
+	"per_dataset": [
+		{
+			"dataset": "div2k",
+			"quota_patches": 4861,
+			"patches_per_image": 6,
+			"images_used": 811,
+			"patches_cached": 4862,
+			"share_pct": 12.2
+		},
+		{
+			"dataset": "flickr2k",
+			"quota_patches": 8912,
+			"patches_per_image": 4,
+			"images_used": 2228,
+			"patches_cached": 8912,
+			"share_pct": 22.4
+		},
+		{
+			"dataset": "df2k_ost",
+			"quota_patches": 6481,
+			"patches_per_image": 1,
+			"images_used": 6481,
+			"patches_cached": 5811,
+			"share_pct": 14.6
+		},
+		{
+			"dataset": "realsr_v3",
+			"quota_patches": 2025,
+			"patches_per_image": 5,
+			"images_used": 405,
+			"patches_cached": 2025,
+			"share_pct": 5.1
+		},
+		{
+			"dataset": "reds",
+			"quota_patches": 6076,
+			"patches_per_image": 1,
+			"images_used": 6076,
+			"patches_cached": 6075,
+			"share_pct": 15.3
+		},
+		{
+			"dataset": "vimeo_septuplet",
+			"quota_patches": 4861,
+			"patches_per_image": 1,
+			"images_used": 4861,
+			"patches_cached": 4848,
+			"share_pct": 12.2
+		},
+		{
+			"dataset": "vimeo_triplet",
+			"quota_patches": 4051,
+			"patches_per_image": 1,
+			"images_used": 4051,
+			"patches_cached": 4051,
+			"share_pct": 10.2
+		},
+		{
+			"dataset": "sintel",
+			"quota_patches": 3241,
+			"patches_per_image": 2,
+			"images_used": 1621,
+			"patches_cached": 3242,
+			"share_pct": 8.1
+		}
+	]
+}

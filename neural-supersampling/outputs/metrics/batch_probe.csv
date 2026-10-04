@@ -1,0 +1,9 @@
+batch,fits,peak_vram_pct,img_per_s_one_gpu
+64,True,6.0,474.1
+128,True,12.0,706.9
+256,True,24.0,806.6
+384,True,36.0,837.0
+512,True,48.0,861.5
+768,True,72.0,843.6
+1024,True,96.0,835.9
+1536,False,,

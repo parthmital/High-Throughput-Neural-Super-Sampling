@@ -1,0 +1,11 @@
+dataset,role,found,listed,dirs_listed,listing_complete,seconds,kept,test,train,val,groups
+div2k,train,True,900,5,True,3.1,900,0,879,21,900
+flickr2k,train,True,2650,2,True,9.6,2650,0,2562,88,2650
+df2k_ost,train,True,41172,24,False,122.4,10324,0,9996,328,10324
+realsr_v3,train,True,3130,20,True,11.0,459,0,442,17,459
+reds,train,True,40000,404,False,185.9,22200,0,21500,700,222
+vimeo_septuplet,train,True,40005,5727,False,190.8,40005,0,34433,5572,10
+vimeo_triplet,train,True,40002,13378,False,191.0,40002,0,37164,2838,41
+sintel,train,True,7466,205,True,13.8,3256,0,3156,100,35
+sr_benchmarks,test,True,1344,50,True,6.1,119,119,0,0,119
+vid4,video_test,True,513,16,True,0.9,171,171,0,0,4

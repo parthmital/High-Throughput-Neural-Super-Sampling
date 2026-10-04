@@ -1,0 +1,4 @@
+tier,blocks,channels,train_params,fused_params,gmac_640x360,gflop_640x360
+performance,4,16,14779,11387,2.588,5.18
+quality,4,20,21587,16387,3.732,7.46
+ultra,6,24,44811,32715,7.465,14.93

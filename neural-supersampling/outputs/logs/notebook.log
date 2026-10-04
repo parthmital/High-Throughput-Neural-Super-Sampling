@@ -1,0 +1,21 @@
+13:56:31 | output folders ready under /kaggle/working
+13:56:32 | start: discovery
+13:59:52 | done: discovery in 3.3 min (run total 0.06 h)
+13:59:53 | start: eda
+13:59:54 | done: eda in 0.0 min (run total 0.06 h)
+13:59:56 | cache target 40509 patches (7.00 GB), 26534 decode tasks
+13:59:56 | start: cache_build
+14:06:34 | done: cache_build in 6.6 min (run total 0.17 h)
+14:06:47 | start: batch_probe
+14:08:25 | done: batch_probe in 1.6 min (run total 0.20 h)
+14:08:26 | start: training
+19:08:46 | done: training in 300.3 min (run total 5.20 h)
+19:08:48 | start: benchmark_eval
+19:09:07 | done: benchmark_eval in 0.3 min (run total 5.21 h)
+19:09:11 | start: vid4_eval
+19:09:16 | done: vid4_eval in 0.1 min (run total 5.21 h)
+19:09:17 | start: latency
+19:09:28 | done: latency in 0.2 min (run total 5.22 h)
+19:09:29 | start: onnx_export
+19:09:30 | done: onnx_export in 0.0 min (run total 5.22 h)
+19:09:31 | start: packaging
