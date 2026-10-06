@@ -31,7 +31,14 @@
 # %% [markdown]
 # ## 1. Library files
 #
-# The shared NeuralSS library and the DDP training script are written to `/kaggle/working/code` (the repository's `src/neuralss` is their single source). Training runs as separate processes that import the same files.
+# The first cell creates `/kaggle/working/code`; the shared NeuralSS library and the DDP training script are then written into it (the repository's `src/neuralss` is their single source). Training runs as separate processes that import the same files.
+
+# %%
+import os
+
+os.makedirs(
+    "/kaggle/working/code", exist_ok=True
+)  # %%writefile does not create folders
 
 # %% [markdown]
 # **`nss_common.py`**: run folders, logger, stage timer, figure and metric saving, hardware report, pip helper and the training-process launcher.

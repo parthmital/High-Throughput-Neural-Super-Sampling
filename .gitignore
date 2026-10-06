@@ -3,3 +3,4 @@
 .cache/
 .agent-local/
 __pycache__/
+*.env

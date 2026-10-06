@@ -42,7 +42,14 @@
 # %% [markdown]
 # ## 1. Library files
 #
-# The pipeline code is shared with the two training notebooks. These cells write it to `/kaggle/working/code` so the notebook is self-contained: `nss_common` (run folders, logging, stage timer, zip), `nss_data` (source registry, discovery, Hugging Face range-request access, decoding, windows), `nss_dedup` (hashes, embeddings, calibration, GPU neighbour search, union-find split) and `nss_pipeline` (the steps run below).
+# The pipeline code is shared with the two training notebooks. The first cell creates `/kaggle/working/code`, then the following cells write the library into it so the notebook is self-contained: `nss_common` (run folders, logging, stage timer, zip), `nss_data` (source registry, discovery, Hugging Face range-request access, decoding, windows), `nss_dedup` (hashes, embeddings, calibration, GPU neighbour search, union-find split) and `nss_pipeline` (the steps run below).
+
+# %%
+import os
+
+os.makedirs(
+    "/kaggle/working/code", exist_ok=True
+)  # %%writefile does not create folders
 
 # %% [markdown]
 # **`nss_common.py`**: run folders, logger, stage timer, figure and metric saving, hardware report, pip helper and the training-process launcher.

@@ -19,7 +19,14 @@
 # %% [markdown]
 # ## 1. Library files
 #
-# The shared NeuralSS library and the frame-generation training script are written to `/kaggle/working/code` from the repository's single source.
+# The first cell creates `/kaggle/working/code`; the shared NeuralSS library and the frame-generation training script are then written into it from the repository's single source.
+
+# %%
+import os
+
+os.makedirs(
+    "/kaggle/working/code", exist_ok=True
+)  # %%writefile does not create folders
 
 # %% [markdown]
 # **`nss_common.py`**: run folders, logger, stage timer, figure and metric saving, hardware report, pip helper and the training-process launcher.
