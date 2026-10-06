@@ -1,0 +1,13 @@
+{
+	"items": 11392,
+	"components": 2527,
+	"largest_component": 8354,
+	"dup_edges": 31190,
+	"train_items_dropped_for_test_leakage": 8150,
+	"split_counts": {
+		"train": 2567,
+		"val": 134,
+		"test": 541,
+		"drop": 8150
+	}
+}

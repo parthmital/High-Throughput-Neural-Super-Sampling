@@ -1,0 +1,8 @@
+source,ref,found,listed,kept_files,dirs_listed,listing_complete,items,test_items
+div2k,soumikrakshit/div2k-high-resolution-images,True,900,900,5,True,900,100
+flickr2k,daehoyang/flickr2k,True,2650,2650,2,True,2650,0
+reds,amithkesavmrajagiri/reds-dataset,True,40000,22100,404,False,221,0
+vimeo_septuplet,wangsally/vimeo-90k-7,True,40005,40005,5725,False,5715,0
+vimeo_triplet,chenshu123/vimeo-triplet,True,6000,6000,2023,False,97,97
+sintel,artemmmtry/mpi-sintel-dataset,True,7466,3256,205,True,46,10
+vid4,uom200647r/vid4-dataset,True,513,171,16,True,4,4

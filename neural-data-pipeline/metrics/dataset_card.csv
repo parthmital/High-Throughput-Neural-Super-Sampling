@@ -1,0 +1,12 @@
+source,host,id,licence,content,items,train,val,test,drop,filtered,exact_motion,depth
+div2k,kaggle,soumikrakshit/div2k-high-resolution-images,DIV2K: academic research use,photo,900,558,30,100,212,0,False,False
+flickr2k,kaggle,daehoyang/flickr2k,"Flickr2K: research use (Flickr images, original licences)",photo,2650,1806,90,0,754,0,False,False
+reds,kaggle,amithkesavmrajagiri/reds-dataset,REDS: CC BY 4.0,video,221,98,4,0,119,0,False,False
+vimeo_septuplet,kaggle,wangsally/vimeo-90k-7,Vimeo-90K: research use (Vimeo uploads),video,5715,0,0,0,5598,117,False,False
+vimeo_triplet,kaggle,chenshu123/vimeo-triplet,Vimeo-90K: research use,video,97,0,0,96,0,1,False,False
+sintel,kaggle,artemmmtry/mpi-sintel-dataset,MPI Sintel: CC BY 3.0 (Kaggle mirror),rendered,46,4,0,10,32,0,True,False
+vid4,kaggle,uom200647r/vid4-dataset,Vid4: research benchmark (Kaggle mirror Apache 2.0),video,4,0,0,4,0,0,False,False
+game_stills,hf,ericphann/video-game-super-resolution,HF tag Apache 2.0 (game captures; check per use),game,1450,88,10,243,1081,28,False,False
+tartanair,hf,theairlabcmu/tartanair,TartanAir: BSD-3-Clause (HF tag and tools),rendered,65,0,0,9,55,1,True,True
+gameir,hf,LLLebin/GameIR,GameIR: MIT,game,70,0,0,30,40,0,False,True
+vimeo1080p,hf,danjacobellis/vimeo1080p,unspecified on HF (Vimeo uploads); research use,video,174,5,0,31,112,26,False,False

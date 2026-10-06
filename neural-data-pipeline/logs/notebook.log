@@ -1,0 +1,37 @@
+05:11:20 | HF_TOKEN secret loaded
+05:11:20 | start: kaggle_discovery
+05:18:14 | done: kaggle_discovery in 6.9 min (run total 0.12 h)
+05:18:14 | start: hf_materialisation
+05:27:39 | game_stills train: 1200 of 10000 images
+05:29:38 | game_stills test: 250 of 2165 images
+06:09:47 | tartanair abandonedfactory (train): 120 frames from P000, 5 sequences
+06:09:47 | tartanair amusement (train): 120 frames from P001, 5 sequences
+06:09:47 | tartanair carwelding (train): 120 frames from P001, 5 sequences
+06:09:47 | tartanair endofworld (train): 120 frames from P000, 5 sequences
+06:09:47 | tartanair gascola (train): 120 frames from P001, 5 sequences
+06:09:47 | tartanair hospital (train): 120 frames from P000, 5 sequences
+06:19:15 | tartanair neighborhood (train): 120 frames from P000, 5 sequences
+06:34:11 | tartanair oldtown (train): 120 frames from P000, 5 sequences
+06:34:11 | tartanair seasonsforest (train): 120 frames from P001, 5 sequences
+06:40:50 | tartanair soulcity (train): 120 frames from P000, 5 sequences
+06:40:50 | tartanair westerndesert: skipped (IncompleteRead(244489 bytes read, 804087 more expected))
+06:45:25 | tartanair ocean (train): 120 frames from P000, 5 sequences
+06:48:17 | tartanair japanesealley (test): 120 frames from P001, 5 sequences
+06:48:17 | tartanair seasidetown (test): 120 frames from P000, 5 sequences
+07:21:18 | gameir train: 40 clips
+07:35:20 | gameir test: 30 clips
+07:37:21 | vimeo1080p train: 134 videos
+07:41:51 | vimeo1080p val_pinned: 40 videos
+07:41:51 | done: hf_materialisation in 143.6 min (run total 2.51 h)
+07:41:51 | Hugging Face items: 1759, data root size 13.39 GB
+07:41:53 | start: keyframe_stats
+07:53:43 | done: keyframe_stats in 11.8 min (run total 2.71 h)
+07:54:02 | start: hashes
+07:54:09 | done: hashes in 0.1 min (run total 2.71 h)
+07:54:09 | start: embeddings
+07:54:31 | done: embeddings in 0.4 min (run total 2.72 h)
+07:54:31 | embeddings: (12404, 384) in 15 s
+07:54:32 | start: calibration
+07:55:03 | done: calibration in 0.5 min (run total 2.73 h)
+07:55:04 | start: duplicate_search
+07:55:05 | done: duplicate_search in 0.0 min (run total 2.73 h)

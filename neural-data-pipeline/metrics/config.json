@@ -1,0 +1,143 @@
+{
+	"quick_run": false,
+	"cfg": {
+		"seed": 7,
+		"list_cap_files": 40000,
+		"hf_caps": {
+			"game_stills": [1200, 250],
+			"tartanair": 120,
+			"tartanair_seq": 24,
+			"gameir": [40, 30],
+			"vimeo1080p": [160, 40]
+		},
+		"calibration_pairs": 1500,
+		"max_fpr": 0.001,
+		"val_fraction": 0.05,
+		"workers": 4
+	},
+	"sources": [
+		{
+			"name": "div2k",
+			"host": "kaggle",
+			"ref": "soumikrakshit/div2k-high-resolution-images",
+			"kind": "still",
+			"test_dirs": ["DIV2K_valid_HR"],
+			"licence": "DIV2K: academic research use",
+			"content": "photo"
+		},
+		{
+			"name": "flickr2k",
+			"host": "kaggle",
+			"ref": "daehoyang/flickr2k",
+			"kind": "still",
+			"licence": "Flickr2K: research use (Flickr images, original licences)",
+			"content": "photo"
+		},
+		{
+			"name": "reds",
+			"host": "kaggle",
+			"ref": "amithkesavmrajagiri/reds-dataset",
+			"kind": "video",
+			"group_level": 1,
+			"licence": "REDS: CC BY 4.0",
+			"content": "video"
+		},
+		{
+			"name": "vimeo_septuplet",
+			"host": "kaggle",
+			"ref": "wangsally/vimeo-90k-7",
+			"kind": "video",
+			"group_level": 2,
+			"licence": "Vimeo-90K: research use (Vimeo uploads)",
+			"content": "video"
+		},
+		{
+			"name": "vimeo_triplet",
+			"host": "kaggle",
+			"ref": "chenshu123/vimeo-triplet",
+			"kind": "video",
+			"group_level": 2,
+			"test_list": "tri_testlist.txt",
+			"test_only": true,
+			"list_cap": 6000,
+			"max_items": 1000,
+			"licence": "Vimeo-90K: research use",
+			"content": "video"
+		},
+		{
+			"name": "sintel",
+			"host": "kaggle",
+			"ref": "artemmmtry/mpi-sintel-dataset",
+			"kind": "render_seq",
+			"test_groups": ["market", "cave"],
+			"licence": "MPI Sintel: CC BY 3.0 (Kaggle mirror)",
+			"content": "rendered"
+		},
+		{
+			"name": "vid4",
+			"host": "kaggle",
+			"ref": "uom200647r/vid4-dataset",
+			"kind": "video",
+			"group_level": 1,
+			"test_only": true,
+			"licence": "Vid4: research benchmark (Kaggle mirror Apache 2.0)",
+			"content": "video"
+		},
+		{
+			"name": "game_stills",
+			"host": "hf",
+			"repo": "ericphann/video-game-super-resolution",
+			"kind": "still",
+			"train_dir": "training-hr",
+			"test_dir": "test-hr",
+			"licence": "HF tag Apache 2.0 (game captures; check per use)",
+			"content": "game"
+		},
+		{
+			"name": "tartanair",
+			"host": "hf",
+			"repo": "theairlabcmu/tartanair",
+			"kind": "render_seq",
+			"train_envs": [
+				"abandonedfactory",
+				"amusement",
+				"carwelding",
+				"endofworld",
+				"gascola",
+				"hospital",
+				"neighborhood",
+				"oldtown",
+				"seasonsforest",
+				"soulcity",
+				"westerndesert",
+				"ocean"
+			],
+			"test_envs": ["japanesealley", "seasidetown"],
+			"licence": "TartanAir: BSD-3-Clause (HF tag and tools)",
+			"content": "rendered"
+		},
+		{
+			"name": "gameir",
+			"host": "hf",
+			"repo": "LLLebin/GameIR",
+			"kind": "render_pairs",
+			"train_tars": ["mini_dataset/train/GameIR-SR/GameIR-SR-000000.tar"],
+			"test_tars": ["mini_dataset/test/GameIR-SR/GameIR-SR-000000.tar"],
+			"licence": "GameIR: MIT",
+			"content": "game"
+		},
+		{
+			"name": "vimeo1080p",
+			"host": "hf",
+			"repo": "danjacobellis/vimeo1080p",
+			"kind": "video_file",
+			"train_shards": [
+				"data/train-00000-of-00045.parquet",
+				"data/train-00001-of-00045.parquet"
+			],
+			"val_shards": ["data/validation-00000-of-00003.parquet"],
+			"licence": "unspecified on HF (Vimeo uploads); research use",
+			"content": "video"
+		}
+	]
+}

@@ -1,0 +1,12 @@
+source,drop,filtered,test,train,val
+div2k,212,0,100,558,30
+flickr2k,754,0,0,1806,90
+game_stills,1081,28,243,88,10
+gameir,40,0,30,0,0
+reds,119,0,0,98,4
+sintel,32,0,10,4,0
+tartanair,55,1,9,0,0
+vid4,0,0,4,0,0
+vimeo1080p,112,26,31,5,0
+vimeo_septuplet,5598,117,0,0,0
+vimeo_triplet,0,1,96,0,0

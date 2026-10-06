@@ -1,0 +1,5 @@
+split,metric,max,p99
+val,max cosine to train,0.74853515625,0.7405224609375
+val,min pHash Hamming to train,16.0,16.0
+test,max cosine to train,0.75,0.7275878906250001
+test,min pHash Hamming to train,14.0,16.0

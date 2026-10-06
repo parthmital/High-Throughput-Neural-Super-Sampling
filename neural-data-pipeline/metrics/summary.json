@@ -1,0 +1,14 @@
+{
+	"items": 11392,
+	"keyframes": 12404,
+	"duplicate_pairs": 31190,
+	"train": 2567,
+	"val": 134,
+	"test": 541,
+	"drop": 8150,
+	"train_dropped_for_leakage": 8150,
+	"phash_hamming_threshold": 14,
+	"embedding_cosine_threshold": 0.7506718683242799,
+	"data_root_gb": 13.39,
+	"run_hours": 2.73
+}
