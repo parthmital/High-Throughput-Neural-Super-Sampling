@@ -53,7 +53,7 @@ os.makedirs(
 # WRITEFILE nss_data.py
 
 # %% [markdown]
-# **`nss_dedup.py`**: pHash / dHash, DINOv2 embeddings on both GPUs, exhaustive GPU neighbour search, threshold calibration with synthetic near-duplicates, union-find leakage-safe split.
+# **`nss_dedup.py`**: pHash / dHash, DINOv2 embeddings on both GPUs, exhaustive GPU neighbour search, SIFT + RANSAC geometric verification, synthetic copies for calibration, the duplicate rule and the leakage-safe split.
 
 # %%
 # WRITEFILE nss_dedup.py
@@ -268,7 +268,7 @@ print(json.dumps(CFG["minutes"]), json.dumps(CFG["cache"]))
 # %% [markdown]
 # ## 5. Dataset manifest
 #
-# Looks for `nss_manifest.parquet` in an attached `neural-data-pipeline` output. If it is missing, the same pipeline runs inline with smaller caps (Kaggle discovery, Hugging Face subsets in `/tmp/nss_data`, quality filters, pHash + DINOv2 near-duplicate search, leakage-safe split), which adds roughly 30 to 60 minutes. Expected output: where the manifest came from and the item counts per split.
+# Looks for `nss_manifest.parquet` in an attached `neural-data-pipeline` output. If it is missing, the same pipeline runs inline with smaller caps (Kaggle discovery, Hugging Face subsets in `/tmp/nss_data`, quality filters, copy detection with DINOv2 candidates and SIFT verification, leakage-safe split with audit), which adds roughly 30 to 60 minutes. Expected output: where the manifest came from and the item counts per split.
 
 # %%
 with RUN.stage("manifest"):

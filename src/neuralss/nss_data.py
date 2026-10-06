@@ -14,9 +14,9 @@ import os
 import random
 import re
 import tarfile
+import threading
 import time
 import urllib.parse
-import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -55,6 +55,7 @@ HF = "https://huggingface.co"
 # ---------------------------------------------------------------------------------------------------------------
 # Source registry. Every source states where it lives, what it provides and how it may be used.
 # role: train sources are split into train/val by leakage group; test sources (or test parts) are pinned to test.
+# distinct_groups: different groups never show the same content (used for hard negatives when calibrating).
 # ---------------------------------------------------------------------------------------------------------------
 SOURCES = [
     {
@@ -63,6 +64,7 @@ SOURCES = [
         "ref": "soumikrakshit/div2k-high-resolution-images",
         "kind": "still",
         "test_dirs": ["DIV2K_valid_HR"],
+        "distinct_groups": True,
         "licence": "DIV2K: academic research use",
         "content": "photo",
     },
@@ -111,6 +113,7 @@ SOURCES = [
         "ref": "artemmmtry/mpi-sintel-dataset",
         "kind": "render_seq",
         "test_groups": ["market", "cave"],
+        "distinct_groups": True,
         "licence": "MPI Sintel: CC BY 3.0 (Kaggle mirror)",
         "content": "rendered",
     },
@@ -154,6 +157,7 @@ SOURCES = [
             "ocean",
         ],
         "test_envs": ["japanesealley", "seasidetown"],
+        "distinct_groups": True,
         "licence": "TartanAir: BSD-3-Clause (HF tag and tools)",
         "content": "rendered",
     },
@@ -273,19 +277,46 @@ def hf_url(repo, path):
     return f"{HF}/datasets/{repo}/resolve/main/{urllib.parse.quote(path)}"
 
 
-def http_get(url, headers=None, retries=4, timeout=120):
+_LOCAL = threading.local()
+
+
+def _session():
+    """One keep-alive HTTP session per thread: range reads reuse the connection instead of a new TLS handshake
+    per request. Authorization is dropped on redirects to another host (the signed CDN URL).
+    """
+    if getattr(_LOCAL, "session", None) is None:
+        import requests
+
+        _LOCAL.session = requests.Session()
+    return _LOCAL.session
+
+
+def http_get(url, headers=None, retries=5, timeout=120, expect_len=None):
+    """GET with retries and exponential back-off; with expect_len, a short body (truncated transfer) is retried."""
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers={**_headers(), **(headers or {})})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read(), r.headers
+            r = _session().get(
+                url, headers={**_headers(), **(headers or {})}, timeout=timeout
+            )
+            r.raise_for_status()
+            if expect_len is not None and len(r.content) != expect_len:
+                raise IOError(f"short read: {len(r.content)} of {expect_len} bytes")
+            return r.content, r.headers
         except Exception:
             if attempt == retries - 1:
                 raise
             time.sleep(2**attempt)
 
 
-def http_download(url, dest, retries=4):
+def http_stream(url, timeout=300):
+    """Streaming GET (one connection for a whole sequential read, e.g. a tar); the caller closes the response."""
+    r = _session().get(url, headers=_headers(), stream=True, timeout=timeout)
+    r.raise_for_status()
+    r.raw.decode_content = True
+    return r
+
+
+def http_download(url, dest, retries=5):
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
         return dest
@@ -293,14 +324,10 @@ def http_download(url, dest, retries=4):
     tmp = dest.with_suffix(dest.suffix + ".part")
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers=_headers())
-            with urllib.request.urlopen(req, timeout=300) as r, open(tmp, "wb") as f:
-                while True:
-                    chunk = r.read(1 << 22)
-                    if not chunk:
-                        break
+            with http_stream(url) as r, open(tmp, "wb") as f:
+                for chunk in r.iter_content(1 << 22):
                     f.write(chunk)
-            tmp.rename(dest)
+            tmp.replace(dest)
             return dest
         except Exception:
             if attempt == retries - 1:
@@ -325,11 +352,17 @@ class HttpRangeFile(io.RawIOBase):
     """Seekable read-only file over HTTP range requests, so zip members can be read without downloading archives."""
 
     def __init__(self, url):
-        self.url, self.pos = url, 0
-        req = urllib.request.Request(url, method="HEAD", headers=_headers())
-        with urllib.request.urlopen(req, timeout=60) as r:
-            self.size = int(r.headers["Content-Length"])
-            self.url = r.url
+        self.source_url, self.pos = url, 0
+        self._resolve()
+
+    def _resolve(self):
+        """Follow the Hub redirect once; the signed CDN URL is reused until it fails (it expires after a while)."""
+        r = _session().head(
+            self.source_url, headers=_headers(), allow_redirects=True, timeout=60
+        )
+        r.raise_for_status()
+        self.size = int(r.headers["Content-Length"])
+        self.url = r.url
 
     def seekable(self):
         return True
@@ -350,9 +383,12 @@ class HttpRangeFile(io.RawIOBase):
         n = min(n, self.size - self.pos)
         if n <= 0:
             return b""
-        data, _ = http_get(
-            self.url, headers={"Range": f"bytes={self.pos}-{self.pos + n - 1}"}
-        )
+        rng = {"Range": f"bytes={self.pos}-{self.pos + n - 1}"}
+        try:
+            data, _ = http_get(self.url, headers=rng, retries=3, expect_len=n)
+        except Exception:
+            self._resolve()
+            data, _ = http_get(self.url, headers=rng, expect_len=n)
         self.pos += len(data)
         return data
 
@@ -522,12 +558,45 @@ def _item(src, kind, group, frames, role, **extra):
     }
 
 
+def find_shallow(root, name, depth=4):
+    """First file called name at most depth levels below root (avoids a recursive walk of a large dataset)."""
+    for d in range(depth):
+        hits = sorted(Path(root).glob("/".join(["*"] * d + [name])))
+        if hits:
+            return hits[0]
+    return None
+
+
+def test_list_files(src, root, seed):
+    """Frames of up to max_items clips named in the source's official test list (sampled with the seed), read
+    directly from <list folder>/sequences/<clip>. Returns (files, dirs listed, True) or None if unavailable.
+    """
+    lst = find_shallow(root, src["test_list"])
+    seq_root = None if lst is None else lst.parent / "sequences"
+    if seq_root is None or not seq_root.is_dir():
+        return None
+    clips = sorted({s.strip() for s in lst.read_text().splitlines() if s.strip()})
+    random.Random(seed).shuffle(clips)
+    files, dirs = [], 0
+    for clip in clips:
+        if dirs >= src.get("max_items", len(clips)):
+            break
+        folder = seq_root / clip
+        if folder.is_dir():
+            files += [str(f) for f in folder.iterdir() if f.suffix.lower() in IMG_EXTS]
+            dirs += 1
+    return (sorted(files), dirs, True) if files else None
+
+
 def catalogue_kaggle(src, input_root, cap, seed):
     """Stills and frame folders of a Kaggle-mounted source, with the degraded-copy filter."""
     root = find_dataset_root(input_root, src["ref"])
     if root is None:
         return [], {"found": False}
-    files, dirs_listed, complete = sampled_walk(root, src.get("list_cap", cap), seed)
+    listed = test_list_files(src, root, seed) if src.get("test_list") else None
+    files, dirs_listed, complete = listed or sampled_walk(
+        root, src.get("list_cap", cap), seed
+    )
     kept = [f for f in files if is_clean_colour(f, root)]
     if src["kind"] in ("video",) and any(
         any(t in HR_TOKENS for t in path_tokens(f, root)) for f in kept
@@ -550,11 +619,11 @@ def catalogue_kaggle(src, input_root, cap, seed):
     elif src["kind"] == "video":
         test_set = set()
         if src.get("test_list"):
-            lists = sorted(Path(root).rglob(src["test_list"]))
-            if lists:
+            lst = find_shallow(root, src["test_list"])
+            if lst is not None:
                 test_set = {
                     line.strip()
-                    for line in lists[0].read_text().splitlines()
+                    for line in lst.read_text().splitlines()
                     if line.strip()
                 }
         folders = {}
@@ -764,19 +833,22 @@ def materialise_tartanair(
         (env, "test" if env in envs_test else "train") for env in envs_train + envs_test
     ]
 
-    def run(job):
+    def run(job, attempts=3):
         env, role = job
-        try:
-            return (
-                env,
-                role,
-                _tartanair_env(
-                    src, data_root, env, role, frames_per_env, seq_len, difficulty
-                ),
-                None,
-            )
-        except Exception as exc:
-            return env, role, None, exc
+        for attempt in range(attempts):  # frames already written are skipped on a retry
+            try:
+                return (
+                    env,
+                    role,
+                    _tartanair_env(
+                        src, data_root, env, role, frames_per_env, seq_len, difficulty
+                    ),
+                    None,
+                )
+            except Exception as exc:
+                if attempt == attempts - 1:
+                    return env, role, None, exc
+                time.sleep(10 * (attempt + 1))
 
     items = []
     with ThreadPoolExecutor(workers) as pool:
@@ -793,8 +865,9 @@ def materialise_tartanair(
 
 
 def materialise_gameir(src, data_root, max_clips_train, max_clips_test, log=print):
-    """Stream GameIR-SR tars (sequential read, stops early) keeping native 720p and 1440p RGB and depth.
-    Frames of a clip are sampled every 10 rendered frames; the leakage group is the town.
+    """Stream GameIR-SR tars (one sequential HTTP stream per tar, stops early) keeping native 720p and 1440p RGB
+    and depth. Frames of a clip are sampled every 10 rendered frames; the leakage group is the town. A dropped
+    connection keeps the clips already written (incomplete clips are skipped below).
     """
     items = []
     for role, tars, cap in (
@@ -804,33 +877,38 @@ def materialise_gameir(src, data_root, max_clips_train, max_clips_test, log=prin
         clips = {}
         for tar_path in tars:
             try:
-                stream = io.BufferedReader(
-                    HttpRangeFile(hf_url(src["repo"], tar_path)), buffer_size=1 << 22
-                )
-                tf = tarfile.open(fileobj=stream, mode="r|")
+                with http_stream(hf_url(src["repo"], tar_path)) as resp:
+                    with tarfile.open(fileobj=resp.raw, mode="r|") as tf:
+                        for m in tf:
+                            parts = m.name.split("/")
+                            if (
+                                len(parts) < 5
+                                or not m.isfile()
+                                or not m.name.endswith((".rgb.png", ".depth.png"))
+                            ):
+                                continue
+                            town, clip, res = parts[1], parts[2], parts[3]
+                            key = (town, clip)
+                            if key not in clips and len(clips) >= cap:
+                                break
+                            clips.setdefault(key, set()).add(res)
+                            dst = (
+                                Path(data_root)
+                                / "gameir"
+                                / town
+                                / clip
+                                / res
+                                / parts[4]
+                            )
+                            if not dst.exists():
+                                dst.parent.mkdir(parents=True, exist_ok=True)
+                                tmp = dst.with_suffix(".part")
+                                tmp.write_bytes(tf.extractfile(m).read())
+                                tmp.replace(dst)
             except Exception as exc:
-                log(f"gameir {tar_path}: skipped ({exc})")
-                continue
-            for m in tf:
-                parts = m.name.split("/")
-                if (
-                    len(parts) < 5
-                    or not m.isfile()
-                    or not (
-                        m.name.endswith(".rgb.png") or m.name.endswith(".depth.png")
-                    )
-                ):
-                    continue
-                town, clip, res = parts[1], parts[2], parts[3]
-                key = (town, clip)
-                if key not in clips and len(clips) >= cap:
-                    break
-                clips.setdefault(key, set()).add(res)
-                dst = Path(data_root) / "gameir" / town / clip / res / parts[4]
-                if not dst.exists():
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    dst.write_bytes(tf.extractfile(m).read())
-            tf.close()
+                log(
+                    f"gameir {tar_path}: stream ended early ({exc}); keeping complete clips"
+                )
         for (town, clip), res in sorted(clips.items()):
             folder = Path(data_root) / "gameir" / town / clip
             hr = sorted((folder / "1440p").glob("*.rgb.png"), key=natural_key)
@@ -913,13 +991,14 @@ def materialise_vimeo1080p(src, data_root, n_train, n_val, log=print):
 # ---------------------------------------------------------------------------------------------------------------
 def keyframes(item):
     """Frames used to represent an item in deduplication: the still itself, the middle frame of a short clip,
-    or first, middle and last frame of a long sequence (scene content can change within it).
+    or frames at 10, 50 and 90 percent of a long sequence (scene content can change within it; the very first and
+    last frames are often fades or black).
     """
     frames, n = item["frames"], item["n_frames"]
     if n == 1:
         return [frames[0]]
     if n >= 24:
-        return [frames[0], frames[n // 2], frames[-1]]
+        return [frames[n // 10], frames[n // 2], frames[n - 1 - n // 10]]
     return [frames[n // 2]]
 
 

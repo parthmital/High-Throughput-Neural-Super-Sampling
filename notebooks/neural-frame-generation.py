@@ -41,7 +41,7 @@ os.makedirs(
 # WRITEFILE nss_data.py
 
 # %% [markdown]
-# **`nss_dedup.py`**: pHash / dHash, DINOv2 embeddings on both GPUs, exhaustive GPU neighbour search, threshold calibration with synthetic near-duplicates, union-find leakage-safe split.
+# **`nss_dedup.py`**: pHash / dHash, DINOv2 embeddings on both GPUs, exhaustive GPU neighbour search, SIFT + RANSAC geometric verification, synthetic copies for calibration, the duplicate rule and the leakage-safe split.
 
 # %%
 # WRITEFILE nss_dedup.py
