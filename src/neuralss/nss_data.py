@@ -10,6 +10,7 @@ URI scheme used in the manifest (so it stays valid across notebooks and machines
 import hashlib
 import io
 import json
+import multiprocessing
 import os
 import random
 import re
@@ -18,7 +19,7 @@ import threading
 import time
 import urllib.parse
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -984,6 +985,27 @@ def materialise_vimeo1080p(src, data_root, n_train, n_val, log=print):
             local.unlink()  # the shard is only a container
         log(f"vimeo1080p {role}: {written} videos")
     return items
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Worker processes
+# ---------------------------------------------------------------------------------------------------------------
+def process_map(fn, tasks, workers, ordered=True, chunksize=1):
+    """Yield fn(task) for every task from `workers` spawned processes, in task order or (ordered=False) in order
+    of completion. fn must be a module-level function. Spawned workers start clean: forked ones inherit the
+    notebook kernel's CUDA context and the locks of its BLAS, OpenMP and GPU threads, and can deadlock on them.
+    A worker that dies raises BrokenProcessPool instead of hanging; leaving the loop early cancels pending tasks
+    (and waits only for the few already running).
+    """
+    pool = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
+    try:
+        if ordered:
+            yield from pool.map(fn, tasks, chunksize=chunksize)
+        else:
+            for fut in as_completed([pool.submit(fn, t) for t in tasks]):
+                yield fut.result()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 # ---------------------------------------------------------------------------------------------------------------

@@ -11,7 +11,6 @@ import math
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Pool
 
 import numpy as np
 import torch
@@ -81,17 +80,16 @@ def build_still_cache(tasks, path, capacity, S, workers, deadline_s, log=print):
     )
     filled, failed, t0 = 0, 0, time.time()
     bar = tqdm(total=capacity, desc=f"Still crops -> {path.name}", unit="crop")
-    with Pool(workers) as pool:
-        for _, crops in pool.imap_unordered(D.still_crop, tasks, chunksize=2):
-            if crops is None:
-                failed += 1
-                continue
-            take = min(len(crops), capacity - filled)
-            arr[filled : filled + take] = crops[:take]
-            filled += take
-            bar.update(take)
-            if filled >= capacity or time.time() - t0 > deadline_s:
-                break
+    for _, crops in D.process_map(D.still_crop, tasks, workers, ordered=False):
+        if crops is None:
+            failed += 1
+            continue
+        take = min(len(crops), capacity - filled)
+        arr[filled : filled + take] = crops[:take]
+        filled += take
+        bar.update(take)
+        if filled >= capacity or time.time() - t0 > deadline_s:
+            break
     bar.close()
     arr.flush()
     del arr
@@ -153,28 +151,27 @@ def build_window_cache(
     arrs = open_window_arrays(prefix, capacity, T, P, flows=flows)
     filled, failed, need_raft, counts, t0 = 0, 0, [], {}, time.time()
     bar = tqdm(total=capacity, desc=f"Windows -> {prefix.name}", unit="win")
-    with Pool(workers) as pool:
-        for key, w in pool.imap_unordered(D.extract_window, tasks, chunksize=1):
-            if w is None:
-                failed += 1
-                continue
-            i = filled
-            arrs["rgb"][i], arrs["mv"][i], arrs["valid"][i], arrs["depth"][i] = (
-                w["rgb"],
-                w["mv"],
-                w["valid"],
-                w["depth"],
-            )
-            arrs["meta"][i] = (
-                (0.0, 0.0) if flows else (float(w["has_depth"]), float(w["mv_quality"]))
-            )
-            if w["mv_quality"] < 1.0 or flows:
-                need_raft.append(i)
-            counts[src_of[key]] = counts.get(src_of[key], 0) + 1
-            filled += 1
-            bar.update(1)
-            if filled >= capacity or time.time() - t0 > deadline_s:
-                break
+    for key, w in D.process_map(D.extract_window, tasks, workers, ordered=False):
+        if w is None:
+            failed += 1
+            continue
+        i = filled
+        arrs["rgb"][i], arrs["mv"][i], arrs["valid"][i], arrs["depth"][i] = (
+            w["rgb"],
+            w["mv"],
+            w["valid"],
+            w["depth"],
+        )
+        arrs["meta"][i] = (
+            (0.0, 0.0) if flows else (float(w["has_depth"]), float(w["mv_quality"]))
+        )
+        if w["mv_quality"] < 1.0 or flows:
+            need_raft.append(i)
+        counts[src_of[key]] = counts.get(src_of[key], 0) + 1
+        filled += 1
+        bar.update(1)
+        if filled >= capacity or time.time() - t0 > deadline_s:
+            break
     bar.close()
     for a in arrs.values():
         a.flush()

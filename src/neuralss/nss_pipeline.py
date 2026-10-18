@@ -8,7 +8,6 @@ verification -> leakage-safe split with a cross-split audit (repaired until clea
 
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
@@ -126,17 +125,16 @@ def keyframe_stats(items, data_root, workers):
     rows = [None] * len(tasks)
     from tqdm.auto import tqdm
 
-    with Pool(workers) as pool:
-        for k, (uri, small, stats) in enumerate(
-            tqdm(
-                pool.imap(D.thumb_and_stats, tasks, chunksize=4),
-                total=len(tasks),
-                desc="Keyframe thumbnails and statistics",
-            )
-        ):
-            if small is not None:
-                thumbs[k] = small
-            rows[k] = {"item": owner[k], "uri": uri, "ok": small is not None, **stats}
+    for k, (uri, small, stats) in enumerate(
+        tqdm(
+            D.process_map(D.thumb_and_stats, tasks, workers, chunksize=4),
+            total=len(tasks),
+            desc="Keyframe thumbnails and statistics",
+        )
+    ):
+        if small is not None:
+            thumbs[k] = small
+        rows[k] = {"item": owner[k], "uri": uri, "ok": small is not None, **stats}
     return thumbs, pd.DataFrame(rows)
 
 
@@ -222,6 +220,7 @@ def calibrate(
     act = np.nonzero(active)[0]
 
     src, copies, kinds = DD.synthetic_copies(thumbs, act, n_pos, seed)
+    log(f"calibration: {len(src)} synthetic copies; SIFT, embeddings and hashes")
     copy_feats = DD.local_features(
         copies, workers, cfg["sift_features"], desc="SIFT features (synthetic copies)"
     )
@@ -240,6 +239,7 @@ def calibrate(
         std[src],
         cfg["min_std_hash"],
     )
+    log("calibration: verifying the synthetic copies")
     pos["cells"] = DD.verify_pairs(
         feats + copy_feats,
         [(i, len(feats) + m) for m, i in enumerate(src)],
@@ -281,6 +281,7 @@ def calibrate(
         std[b],
         cfg["min_std_hash"],
     )
+    log(f"calibration: verifying {len(neg_pairs)} negatives")
     neg["cells"] = DD.verify_pairs(
         feats, neg_pairs, workers, desc="Verification (negatives)"
     )

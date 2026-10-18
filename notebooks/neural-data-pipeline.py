@@ -66,7 +66,7 @@ os.makedirs(
 # WRITEFILE nss_data.py
 
 # %% [markdown]
-# **`nss_dedup.py`**: pHash / dHash, DINOv2 embeddings on both GPUs, exhaustive GPU neighbour search, SIFT + RANSAC geometric verification in a process pool, synthetic copies for calibration, the duplicate rule and the leakage-safe split.
+# **`nss_dedup.py`**: pHash / dHash, DINOv2 embeddings on both GPUs, exhaustive GPU neighbour search, SIFT + RANSAC geometric verification in a thread pool (OpenCV releases the GIL, so the notebook kernel is never forked), synthetic copies for calibration, the duplicate rule and the leakage-safe split.
 
 # %%
 # WRITEFILE nss_dedup.py
@@ -250,7 +250,7 @@ RUN.show(fig, "catalogue")
 # %% [markdown]
 # ## 8. Keyframe thumbnails and quality statistics
 #
-# Decodes one keyframe per still or short clip and three per long sequence, in a process pool over all CPU cores. Long sequences use frames at 10, 50 and 90 percent, because first and last frames are often fades or black. Each keyframe keeps a 256x256 thumbnail and statistics: size, grey mean and contrast, Laplacian-variance sharpness, letterbox fraction and colourfulness. Expected output: a progress bar and a statistics table.
+# Decodes one keyframe per still or short clip and three per long sequence, in a pool of spawned worker processes over all CPU cores (spawned, not forked, so workers never inherit the kernel's CUDA context or thread locks, and a dead worker raises an error instead of hanging). Long sequences use frames at 10, 50 and 90 percent, because first and last frames are often fades or black. Each keyframe keeps a 256x256 thumbnail and statistics: size, grey mean and contrast, Laplacian-variance sharpness, letterbox fraction and colourfulness. Expected output: a progress bar and a statistics table.
 
 # %%
 with RUN.stage("keyframe_stats"):
@@ -350,7 +350,7 @@ log(f"embeddings: {None if EMB is None else EMB.shape} in {time.time() - t0:.0f}
 # %% [markdown]
 # ## 12. Local features for geometric verification
 #
-# SIFT keypoints (up to `sift_features` per image) and descriptors for every thumbnail and for its mirror image, computed in a process pool over all CPU cores and kept in RAM (uint8 descriptors). Verification later matches two keyframes with Lowe's ratio test and fits one affine map with RANSAC. The score is the number of cells of an 8x8 grid covered by consistent matches, so a shared logo, HUD or caption alone cannot verify two different frames. Expected output: a progress bar and keypoint statistics.
+# SIFT keypoints (up to `sift_features` per image) and descriptors for every thumbnail and for its mirror image, computed in a thread pool over all CPU cores and kept in RAM (uint8 descriptors). Verification later matches two keyframes with Lowe's ratio test and fits one affine map with RANSAC. The score is the number of cells of an 8x8 grid covered by consistent matches, so a shared logo, HUD or caption alone cannot verify two different frames. Expected output: a progress bar and keypoint statistics.
 
 # %%
 with RUN.stage("local_features"):
@@ -373,7 +373,7 @@ print(
 # * verification `t_cells` lies above the most similar negative's score (at least 10 of 64 cells);
 # * exact hash `h_exact` lies 4 bits below the closest negative's pHash distance (at most 6, also confirmed by dHash on textured frames); `h_cand` covers 95 percent of light copies and only proposes candidates.
 #
-# Expected output: the thresholds, recall of the combined rule on light and heavy copies, false positives on the negatives, and four diagnostic plots.
+# Expected output: a log line per step (copies, their features, verification of copies and of negatives; the run log shows these even where progress bars are not captured), the thresholds, recall of the combined rule on light and heavy copies, false positives on the negatives, and four diagnostic plots.
 
 # %%
 with RUN.stage("calibration"):
@@ -442,7 +442,7 @@ RUN.show(fig, "dedup_calibration")
 # %% [markdown]
 # ## 14. Copy detection across the combined dataset
 #
-# Candidates come from two sources. The first is each kept keyframe's `k` nearest DINOv2 neighbours outside its own leakage group with cosine at least `t_ret`, from an exhaustive half-precision search on the GPU. The second is pHash pairs within `h_cand` between textured keyframes. If the hash candidates are implausibly many, `h_cand` is tightened. Every candidate is verified with SIFT + RANSAC in a process pool. A pair becomes a duplicate edge if it is `verified`, `strong_embedding` or `exact_hash` (section 13). Expected output: candidate and edge counts per rule, a cross-source edge matrix (which datasets overlap) and examples of edges for visual checking, cross-source pairs first.
+# Candidates come from two sources. The first is each kept keyframe's `k` nearest DINOv2 neighbours outside its own leakage group with cosine at least `t_ret`, from an exhaustive half-precision search on the GPU. The second is pHash pairs within `h_cand` between textured keyframes. If the hash candidates are implausibly many, `h_cand` is tightened. Every candidate is verified with SIFT + RANSAC in a thread pool. A pair becomes a duplicate edge if it is `verified`, `strong_embedding` or `exact_hash` (section 13). Expected output: candidate and edge counts per rule, a cross-source edge matrix (which datasets overlap) and examples of edges for visual checking, cross-source pairs first.
 
 # %%
 with RUN.stage("duplicate_search"):

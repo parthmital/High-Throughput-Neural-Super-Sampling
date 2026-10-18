@@ -21,7 +21,7 @@ components (groups joined by duplicate edges) that go to validation or training 
 import hashlib
 import io
 from collections import defaultdict, deque
-from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
@@ -123,8 +123,6 @@ def load_embedder(device, log=print):
 @torch.no_grad()
 def embed_thumbs(thumbs, embedders, devices, batch=256):
     """Embed uint8 thumbnails (N, 256, 256, 3), splitting batches across devices (threads, one per GPU)."""
-    from concurrent.futures import ThreadPoolExecutor
-
     chunks = [(i, thumbs[i : i + batch]) for i in range(0, len(thumbs), batch)]
     out = [None] * len(chunks)
 
@@ -204,10 +202,8 @@ def hamming_threshold_to_dot(h, nbits=64):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Geometric verification with local features (CPU process pool; tables are shared with forked workers)
+# Geometric verification with local features (CPU thread pool; OpenCV releases the GIL)
 # ---------------------------------------------------------------------------------------------------------------
-_IMAGES = None  # image array read by forked feature workers
-_FEATS = None  # feature table read by forked verification workers
 GRID = (
     8  # verification score = occupied cells of a GRID x GRID grid over the first image
 )
@@ -224,36 +220,38 @@ def _sift(img, n_features):
     return pts, np.clip(desc, 0, 255).astype(np.uint8)
 
 
-def _features_task(args):
+def _thread_map(fn, tasks, workers, desc, chunk=64):
+    """[fn(t) for t in tasks] on a thread pool, with a progress bar. OpenCV releases the GIL inside SIFT, matching
+    and RANSAC, so threads run in parallel without forking the notebook kernel: forked workers can deadlock on
+    locks held by the kernel's CUDA, BLAS and OpenMP threads, and a process pool whose worker dies waits forever.
+    """
     import cv2
+    from tqdm.auto import tqdm
 
+    chunks = [tasks[i : i + chunk] for i in range(0, len(tasks), chunk)]
+    out, prev = [], cv2.getNumThreads()
+    # the pool supplies the parallelism; one OpenCV thread per task
     cv2.setNumThreads(1)
-    i, n_features = args
-    img = _IMAGES[i]
-    return _sift(img, n_features), _sift(img[:, ::-1], n_features)
+    try:
+        with ThreadPoolExecutor(workers) as pool, tqdm(
+            total=len(tasks), desc=desc
+        ) as bar:
+            for part in pool.map(lambda c: [fn(t) for t in c], chunks):
+                out.extend(part)
+                bar.update(len(part))
+    finally:
+        cv2.setNumThreads(prev)
+    return out
 
 
 def local_features(images, workers, n_features=400, desc="SIFT features"):
     """SIFT keypoints and uint8 descriptors of every image and of its mirror: list of ((pts, desc), (pts, desc))."""
-    global _IMAGES
-    from tqdm.auto import tqdm
-
-    _IMAGES = images
-    try:
-        with Pool(workers) as pool:
-            return list(
-                tqdm(
-                    pool.imap(
-                        _features_task,
-                        [(i, n_features) for i in range(len(images))],
-                        chunksize=32,
-                    ),
-                    total=len(images),
-                    desc=desc,
-                )
-            )
-    finally:
-        _IMAGES = None
+    return _thread_map(
+        lambda i: (_sift(images[i], n_features), _sift(images[i][:, ::-1], n_features)),
+        list(range(len(images))),
+        workers,
+        desc,
+    )
 
 
 def match_cells(fa, fb, size=256, ratio=0.8, reproj=4.0):
@@ -287,38 +285,17 @@ def match_cells(fa, fb, size=256, ratio=0.8, reproj=4.0):
     return int(len({(int(x), int(y)) for x, y in cells}))
 
 
-def _verify_task(pair):
-    import cv2
-
-    cv2.setNumThreads(1)
-    i, j = pair
-    a, (b, b_flip) = _FEATS[i][0], _FEATS[j]
-    return max(match_cells(a, b), match_cells(a, b_flip))
-
-
 def verify_pairs(feats, pairs, workers, desc="Geometric verification"):
     """Verification score (covered grid cells, 0..64) for each (i, j) pair of rows of the feature table."""
-    global _FEATS
-    from tqdm.auto import tqdm
-
     pairs = [(int(i), int(j)) for i, j in pairs]
     if not pairs:
         return np.zeros(0, np.int32)
-    _FEATS = feats
-    try:
-        with Pool(workers) as pool:
-            return np.array(
-                list(
-                    tqdm(
-                        pool.imap(_verify_task, pairs, chunksize=64),
-                        total=len(pairs),
-                        desc=desc,
-                    )
-                ),
-                np.int32,
-            )
-    finally:
-        _FEATS = None
+
+    def score(pair):
+        a, (b, b_flip) = feats[pair[0]][0], feats[pair[1]]
+        return max(match_cells(a, b), match_cells(a, b_flip))
+
+    return np.array(_thread_map(score, pairs, workers, desc), np.int32)
 
 
 # ---------------------------------------------------------------------------------------------------------------
