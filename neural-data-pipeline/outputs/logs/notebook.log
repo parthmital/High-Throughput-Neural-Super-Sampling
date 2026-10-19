@@ -1,0 +1,51 @@
+22:34:23 | HF_TOKEN secret loaded
+22:34:23 | start: kaggle_discovery
+22:36:02 | done: kaggle_discovery in 1.7 min (run total 0.03 h)
+22:36:03 | start: hf_materialisation
+22:37:31 | game_stills train: 1200 of 10000 images
+22:37:48 | game_stills test: 250 of 2165 images
+22:42:07 | tartanair abandonedfactory (train): 120 frames from P000, 5 sequences
+22:42:07 | tartanair amusement (train): 120 frames from P001, 5 sequences
+22:42:07 | tartanair carwelding (train): 120 frames from P001, 5 sequences
+22:42:07 | tartanair endofworld (train): 120 frames from P000, 5 sequences
+22:42:11 | tartanair gascola (train): 120 frames from P001, 5 sequences
+22:42:11 | tartanair hospital (train): 120 frames from P000, 5 sequences
+22:45:40 | tartanair neighborhood (train): 120 frames from P000, 5 sequences
+22:46:44 | tartanair oldtown (train): 120 frames from P000, 5 sequences
+22:46:44 | tartanair seasonsforest (train): 120 frames from P001, 5 sequences
+22:46:44 | tartanair soulcity (train): 120 frames from P000, 5 sequences
+22:46:44 | tartanair westerndesert (train): 120 frames from P001, 5 sequences
+22:47:25 | tartanair ocean (train): 120 frames from P000, 5 sequences
+22:49:37 | tartanair japanesealley (test): 120 frames from P001, 5 sequences
+22:49:37 | tartanair seasidetown (test): 120 frames from P000, 5 sequences
+22:49:48 | gameir train: 40 clips
+22:49:57 | gameir test: 30 clips
+22:50:11 | vimeo1080p train: 134 videos
+22:50:17 | vimeo1080p val_pinned: 40 videos
+22:50:17 | done: hf_materialisation in 14.2 min (run total 0.27 h)
+22:50:17 | Hugging Face items: 1764, data root size 13.64 GB
+22:50:19 | start: keyframe_stats
+23:02:16 | done: keyframe_stats in 12.0 min (run total 0.46 h)
+23:02:16 | start: filters
+23:02:32 | done: filters in 0.3 min (run total 0.47 h)
+23:02:38 | start: hashes
+23:02:46 | done: hashes in 0.1 min (run total 0.47 h)
+23:02:46 | start: embeddings
+23:03:07 | done: embeddings in 0.4 min (run total 0.48 h)
+23:03:07 | embeddings: (13322, 384) in 16 s
+23:03:08 | start: local_features
+23:08:13 | done: local_features in 5.1 min (run total 0.56 h)
+23:08:13 | start: calibration
+23:08:19 | calibration: 1500 synthetic copies; SIFT, embeddings and hashes
+23:08:54 | calibration: verifying the synthetic copies
+23:08:59 | calibration: verifying 3928 negatives
+23:09:09 | calibration: 1500 synthetic copies, 2930 random and 998 hard negatives
+23:09:09 | done: calibration in 0.9 min (run total 0.58 h)
+23:09:12 | start: duplicate_search
+23:09:13 | duplicate candidates: {'keyframes_searched': 13165, 'candidates_embedding': 45213, 'candidates_phash': 849, 'candidates': 27044}
+23:10:35 | done: duplicate_search in 1.4 min (run total 0.60 h)
+23:10:38 | start: split_and_audit
+23:11:18 | audit round 1: 24 cross-split duplicates; adding them as edges and re-splitting
+23:11:58 | done: split_and_audit in 1.3 min (run total 0.63 h)
+23:12:01 | start: manifest
+23:12:01 | done: manifest in 0.0 min (run total 0.63 h)

@@ -1,0 +1,28 @@
+{
+	"embedding": {
+		"t_ret": 0.6075183176994324,
+		"t_strong": 0.9648487854003907,
+		"recall_at_t_ret": 0.98,
+		"recall_at_t_strong": 0.038,
+		"worst_negative": 0.9348487854003906
+	},
+	"verify": {
+		"t_cells": 10,
+		"recall": 0.9493333333333334,
+		"worst_negative": 8.0
+	},
+	"phash": {
+		"h_exact": 6,
+		"h_cand": 6,
+		"recall_light_at_h_exact": 0.9986666666666667,
+		"recall_light_at_h_cand": 0.9986666666666667,
+		"worst_negative": 18.0
+	},
+	"rule": {
+		"recall": 0.9673333333333334,
+		"recall_light": 0.9946666666666667,
+		"recall_heavy": 0.94,
+		"false_positives": 1,
+		"precision": 0.9993112947658402
+	}
+}

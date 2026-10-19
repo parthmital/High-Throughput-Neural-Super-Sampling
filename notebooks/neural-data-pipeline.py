@@ -14,7 +14,7 @@
 # 6. Split by leakage group: test items keep their role, anything sharing a group with a test item or connected to one by duplicate edges is dropped, and the remaining components go to validation or training.
 # 7. Audit every validation and test keyframe against its nearest training (and validation) keyframes with the same rule; any duplicate found is added as an edge and the split is repeated until the audit is clean.
 #
-# **Why two stages.** The first run used global similarity only (pHash Hamming 14, DINOv2 cosine 0.75). Those thresholds flag *similar* pictures (two cherry-tree photos, two skylines, frames of one game), not copies. The false edges chained 8,354 items into one component that touched a test item, and 8,150 training items (72 percent) were dropped. Geometric verification separates copies from look-alikes. Splitting by provenance instead of transitive components keeps one copied clip from taking its whole folder with it.
+# **Why two stages.** The first run used global similarity only (pHash Hamming 14, DINOv2 cosine 0.75). Those thresholds flag *similar* pictures (two cherry-tree photos, two skylines, frames of one game), not copies. The false edges chained 8,354 items into one component that touched a test item, and 8,150 training items (72 percent) were dropped. Geometric verification separates copies from look-alikes. Splitting by provenance instead of transitive components keeps one copied clip from taking its whole folder with it. In the run of 18 October 2026 with the two-stage rule, 756 of 12,300 items (6 percent) were dropped as test duplicates, the largest duplicate cluster held 50 items, and the audit ended with zero cross-split duplicates.
 #
 # **Outputs** (in `/kaggle/working`, saved as this notebook's output; attach it to the training notebooks with **Add Input > Notebook output**):
 #
@@ -39,7 +39,7 @@
 # | `artemmmtry/mpi-sintel-dataset` | rendered sequences with exact flow and occlusions (scene families `market`, `cave` pinned to test) |
 # | `uom200647r/vid4-dataset` | video test only |
 #
-# **Run time.** The first full run took 2.7 hours, 2.4 of them Hugging Face transfer. Connection reuse and streamed tars should shorten that, and copy detection adds roughly 10 to 20 minutes of CPU verification (not yet measured). `QUICK_RUN = True` shrinks every cap for a short smoke test.
+# **Run time.** The run of 18 October 2026 took 0.63 hours on GPU T4 x2 with an `HF_TOKEN` secret (the first run, before connection reuse and streamed tars, took 2.7 hours). Hugging Face transfer took 14.2 minutes, keyframe decoding 12.0, SIFT features 5.1, and calibration, candidate verification and the audit 3.7 together. `QUICK_RUN = True` shrinks every cap for a short smoke test.
 
 # %% [markdown]
 # ## 1. Library files
@@ -124,7 +124,7 @@ DEVICES = [torch.device("cuda", i) for i in range(HW["gpus"])]
 # %% [markdown]
 # ## 4. Configuration
 #
-# All caps and thresholds in one place. Hugging Face caps are sized to keep the materialised data under about 14 GB of the 20 GB `/kaggle/working` quota (the first run used 13.4 GB); the cell lowers them when free disk is short.
+# All caps and thresholds in one place. Hugging Face caps are sized to keep the materialised data under about 14 GB of the 20 GB `/kaggle/working` quota (the run of 18 October 2026 used 13.64 GB); the cell lowers them when free disk is short.
 #
 # * `hf_caps`: game frames (train, test), TartanAir frames per environment and sequence length, GameIR clips (train, test), Vimeo-1080p videos (train, test).
 # * `calibration_pairs`: synthetic copies used to calibrate the duplicate rule (half light, half heavy edits).
@@ -194,7 +194,7 @@ print(discovery.to_string(index=False))
 # * **game_stills** (`ericphann/video-game-super-resolution`): 1080p frames from game scenes; `test-hr` pinned to test.
 # * **tartanair** (`theairlabcmu/tartanair`, BSD-3): contiguous runs from 12 training and 2 held-out environments, read member by member from the remote zips. Each run keeps RGB, depth, forward optical flow and the flow mask (occlusion / out of view). A failed environment is retried twice, resuming from the frames already written.
 # * **gameir** (`LLLebin/GameIR`, MIT): CARLA / Unreal Engine 4 clips read from the mini tars in one sequential stream, keeping native 1440p and 720p renders and depth; town 05 is the official test town.
-# * **vimeo1080p** (`danjacobellis/vimeo1080p`): MP4 videos extracted from two training parquet shards and one validation shard (validation pinned to test).
+# * **vimeo1080p** (`danjacobellis/vimeo1080p`): MP4 videos extracted from two training parquet shards and one validation shard (validation pinned to test). The cap is an upper bound: only the listed shards are read and videos under 8 frames are skipped, so the two training shards gave 134 of the 160 allowed in the run of 18 October 2026.
 #
 # Each source is optional: a failure is logged and the pipeline continues. Expected output: per-source counts and the disk used.
 

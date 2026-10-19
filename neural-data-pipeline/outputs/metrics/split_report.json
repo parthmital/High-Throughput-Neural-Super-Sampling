@@ -1,0 +1,19 @@
+{
+	"items": 12300,
+	"active": 12149,
+	"dup_edges": 3370,
+	"largest_duplicate_cluster": 50,
+	"trainval_components": 3956,
+	"largest_trainval_component": 2936,
+	"dropped_test_group": 0,
+	"dropped_test_duplicate": 756,
+	"split_counts": {
+		"train": 8874,
+		"val": 1087,
+		"test": 1432,
+		"drop": 756,
+		"filtered": 151
+	},
+	"audit_rounds": 2,
+	"audit_violations": 0
+}

@@ -4,7 +4,10 @@ Sources: notebooks/<name>.py (cells separated by "# %%" and "# %% [markdown]"). 
 "# WRITEFILE <name>.py" becomes a %%writefile cell that embeds src/neuralss/<name>.py into /kaggle/working/code,
 so every notebook is self-contained on Kaggle while the library has one source of truth in this repository.
 
-Usage: python tools/build_notebooks.py [--check]   (--check: fail if any built notebook differs from the repo copy)
+Usage: python tools/build_notebooks.py [--check]
+  --check: fail if any repo notebook's cell ids, types or sources differ from a fresh build. Outputs and metadata
+  are ignored, so an executed Kaggle copy with unchanged sources passes.
+  Without --check every notebook is rewritten without outputs; an executed copy's outputs stay in <name>/outputs/.
 Requires: nbformat.
 """
 
@@ -76,6 +79,10 @@ def build(name):
     return out, nb
 
 
+def cell_sources(nb):
+    return [(c.get("id"), c.cell_type, c.source) for c in nb.cells]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -83,11 +90,13 @@ def main():
     stale = []
     for name in NOTEBOOKS:
         out, nb = build(name)
-        text = nbformat.writes(nb) + "\n"
         if args.check:
-            if not out.exists() or out.read_text(encoding="utf-8") != text:
+            if not out.exists() or cell_sources(
+                nbformat.read(out, as_version=4)
+            ) != cell_sources(nb):
                 stale.append(str(out))
             continue
+        text = nbformat.writes(nb) + "\n"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8", newline="\n")
         n_code = sum(c.cell_type == "code" for c in nb.cells)

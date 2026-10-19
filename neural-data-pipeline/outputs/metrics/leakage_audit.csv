@@ -1,0 +1,7 @@
+split,reference,metric,worst,median
+val,train,max cosine,0.96142578125,0.57568359375
+val,train,max verification cells,9.0,0.0
+val,train,min pHash Hamming,8.0,16.0
+test,train+val,max cosine,0.95703125,0.574462890625
+test,train+val,max verification cells,9.0,0.0
+test,train+val,min pHash Hamming,0.0,16.0
