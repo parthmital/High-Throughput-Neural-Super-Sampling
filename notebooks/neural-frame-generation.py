@@ -136,6 +136,7 @@ import nss_metrics as M
 import nss_models as NM
 import nss_pipeline as PL
 import nss_synth as S
+import nss_train as TR
 
 try:
     from kaggle_secrets import UserSecretsClient
@@ -147,7 +148,7 @@ except Exception:
 # %% [markdown]
 # ## 3. Hardware check
 #
-# Run-time detection of GPUs, CPU, RAM and disk; two GPUs are required for DDP. Expected output: two Tesla T4 rows.
+# Run-time detection of GPUs, CPU, RAM and disk; two GPUs are required for DDP. The library supports PyTorch 2.0 (the Kaggle image of the data-pipeline run) and later. Expected output: two Tesla T4 rows.
 
 # %%
 HW = C.hardware_report()
@@ -287,11 +288,11 @@ assert ITEMS[
 # %% [markdown]
 # ## 7. Training caches
 #
-# Memory-mapped 512x512 still crops (synthetic textures) and quads of four 192x192 frames, decoded with all CPU cores; RAFT teacher flows for each quad on both GPUs: 2 -> 0 (the engine-style motion vector of the newest real frame), 1 -> 0 and 1 -> 2 (interpolation targets) and 3 -> 2 (extrapolation target). Expected output: progress bars, counts per source, cache size.
+# Memory-mapped 512x512 still crops (synthetic textures) and quads of four 192x192 frames in `/tmp/nss_cache` (local disk outside `/kaggle/working`, so about 10 GB of caches never count toward the 20 GB saved output), decoded with all CPU cores; RAFT teacher flows for each quad on both GPUs: 2 -> 0 (the engine-style motion vector of the newest real frame), 1 -> 0 and 1 -> 2 (interpolation targets) and 3 -> 2 (extrapolation target). Expected output: progress bars, counts per source, cache size.
 
 # %%
-CACHE = C.WORK / "cache"
-CACHE.mkdir(exist_ok=True)
+CACHE = Path("/tmp/nss_cache")
+CACHE.mkdir(parents=True, exist_ok=True)
 CACHES = {}
 with RUN.stage("caches"):
     deadline = CFG["cache"]["build_min"] * 60
@@ -478,7 +479,7 @@ assert TIERS["parity_max_abs"].max() < 1e-3, "fusion parity failed"
 # %% [markdown]
 # ## 10. Batch-size probe
 #
-# Full training steps (synthetic batch with UI, forward, losses, backward) on GPU 0 for the teacher and for a student with the teacher alongside; keeps the largest batch below 85 percent of VRAM. Expected output: probe tables and chosen batch sizes.
+# Full training steps (synthetic batch with UI, forward, pixel and census losses, backward) on GPU 0 for the teacher and for a student with the teacher alongside; keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the LPIPS, flow, UI and distillation losses, real-quad batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. Expected output: probe tables and chosen batch sizes.
 
 
 # %%
@@ -497,7 +498,7 @@ def probe(tier, with_teacher, sizes):
                 else None
             )
             opt = torch.optim.AdamW(net.parameters(), 1e-4)
-            scaler = torch.amp.GradScaler("cuda")
+            scaler = TR.grad_scaler()
             times = []
             for _ in range(3):
                 torch.cuda.synchronize(dev)
@@ -533,11 +534,12 @@ def probe(tier, with_teacher, sizes):
             break
     torch.cuda.empty_cache()
     df = pd.DataFrame(rows)
-    ok = df[df["fits"] & (df["peak_vram_pct"] <= 85)]
+    ok = df[df["fits"] & (df["peak_vram_pct"] <= 75)]
     return df, int(ok["batch"].max()) if len(ok) else sizes[0]
 
 
 with RUN.stage("batch_probe"):
+    TR.free_gpu_memory()
     sizes = [8, 16] if QUICK_RUN else [8, 16, 24, 32, 48, 64, 96]
     PROBE_T, BS_TEACHER = probe("teacher", False, sizes)
     PROBE_S, BS_STUDENT = probe(CFG["student_tier"], True, sizes)
@@ -557,7 +559,9 @@ RUN.save_csv(
 # %% [markdown]
 # ## 11. Training launcher and budget
 #
-# One JSON config per run; `code/train_fg.py` runs with DDP on both GPUs for main stages, or as two single-GPU processes in parallel for paired stages and ablations. Progress bars follow `PROGRESS` lines; validation rounds (PSNR overall, interpolation, extrapolation and UI regions) update a live chart. Expected output: planned minutes per stage.
+# One JSON config per run; `code/train_fg.py` runs with DDP on both GPUs for main stages, or as two single-GPU processes in parallel for paired stages and ablations. Progress bars follow `PROGRESS` lines; validation rounds (PSNR overall, interpolation, extrapolation and UI regions) update a live chart.
+#
+# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: planned minutes per stage.
 
 # %%
 remaining_h = RUN_BUDGET_H - RUN.hours() - CFG["eval"]["eval_reserve_h"]
@@ -570,7 +574,7 @@ plan_min = (
 SCALE_T = min(1.0, max(0.1, remaining_h * 60 / plan_min))
 MINUTES = {k: v * SCALE_T for k, v in CFG["minutes"].items()}
 print(pd.Series(MINUTES).round(1).to_string(), f"\n(scale {SCALE_T:.2f})")
-HISTORY, PORT = {}, [29600]
+HISTORY, FAILED, PORT = {}, {}, [29600]
 
 
 def run_cfg(name, tier, minutes, batch, teacher_ckpt=None, **over):
@@ -637,19 +641,29 @@ def live_plot(title):
 
 
 def launch(cfg, gpus, live=True):
-    PORT[0] += 1
-    rounds, done = C.launch_training(
+    """Run one training process; returns its DONE line, or None if it failed (recorded in FAILED)."""
+    PORT[0] += 2
+    rounds, done, error = TR.launch_with_retry(
         RUN.work / "code" / "train_fg.py",
         cfg,
-        RUN.dirs["code"] / f"cfg_{cfg['name']}.json",
-        RUN.dirs["logs"] / f"{cfg['name']}.log",
+        RUN.dirs["code"],
+        RUN.dirs["logs"],
         gpus,
-        cfg["name"],
-        port=PORT[0],
+        PORT[0],
         on_round=live_plot(cfg["name"]) if live else None,
+        log=log,
     )
     HISTORY[cfg["name"]] = rounds
+    if error:
+        FAILED[cfg["name"]] = error
+        return None
     return done
+
+
+def checkpoint(name):
+    """Path of a run's best checkpoint, or None if the run produced none."""
+    path = RUN.dirs["weights"] / f"{name}_best.pt"
+    return str(path) if path.exists() else None
 
 
 def launch_pair(cfg_a, cfg_b):
@@ -670,7 +684,9 @@ with RUN.stage("train_teacher"):
     print(
         launch(run_cfg("fg_teacher", "teacher", MINUTES["teacher"], BS_TEACHER), [0, 1])
     )
-TEACHER_CKPT = str(RUN.dirs["weights"] / "fg_teacher_best.pt")
+TEACHER_CKPT = checkpoint("fg_teacher")
+if TEACHER_CKPT is None:
+    log("no teacher checkpoint: students train without distillation")
 
 # %% [markdown]
 # ## 13. Stage B: main student with distillation (both GPUs)
@@ -746,7 +762,7 @@ with RUN.stage("ablations"):
 # %% [markdown]
 # ## 16. Training curves
 #
-# Validation PSNR over time for every run and train loss for the main stages; table of best rounds. Expected output: two charts and a table.
+# Validation PSNR over time for every run and train loss for the main stages; table of best rounds. Expected output: two charts, a table and the list of failed runs (`metrics/failed_runs.json`, normally empty).
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(15, 4))
@@ -756,6 +772,8 @@ for name, rounds in HISTORY.items():
         continue
     h = pd.DataFrame(rounds)
     RUN.save_csv(h, f"history_{name}.csv", index=False)
+    if "val_psnr" not in h or h["val_psnr"].isna().all():
+        continue
     axes[0].plot(
         h["elapsed_min"],
         h["val_psnr"],
@@ -790,6 +808,8 @@ RUN.show(fig, "training_curves")
 BEST = pd.DataFrame(best_rows)
 RUN.save_csv(BEST, "best_validation.csv", index=False)
 print(BEST.round(3).to_string(index=False))
+RUN.save_json(FAILED, "failed_runs.json")
+print("failed runs:", sorted(FAILED) or "none")
 
 # %% [markdown]
 # ## 17. Load and fuse models
@@ -858,7 +878,7 @@ RUN.show(fig, "cut_detector")
 # %% [markdown]
 # ## 19. Test suites
 #
-# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (192x192 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p and Vid4 (both modes, RAFT motion vectors). Expected output: suite sizes.
+# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (192x192 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p and Vid4 (both modes, RAFT motion vectors). Clips that cannot be decoded are logged and skipped. Expected output: suite sizes.
 
 # %%
 ev = CFG["eval"]
@@ -886,7 +906,11 @@ with RUN.stage("test_suites"):
             and i["n_frames"] >= (3 if source == "vimeo_triplet" else 4)
         ][: n * 3]:
             Tn = 3 if source == "vimeo_triplet" else 4
-            c = E.load_clip(DATA_ROOT, it, 0, Tn, crop, max_side=max_side)
+            try:
+                c = E.load_clip(DATA_ROOT, it, 0, Tn, crop, max_side=max_side)
+            except Exception as exc:  # unreadable clip: skip it, keep the suite
+                log(f"{source} {it['item_id']}: skipped ({exc})")
+                c = None
             if c is not None:
                 out.append((it["item_id"], c))
             if len(out) >= n:
@@ -914,7 +938,7 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# For each suite and mode: every network (the privileged teacher is listed as an upper bound only, since it sees the target), the analytic baselines (frame repeat, average, motion-vector reprojection) and, on UI suites, the engine path (generate on HUD-less frames, composite the newest UI layer). The cut detector gates every network: frames it flags are replaced by the newest real frame. Expected output: number of metric rows.
+# For each suite and mode: every network (the privileged teacher is listed as an upper bound only, since it sees the target), the analytic baselines (frame repeat, average, motion-vector reprojection) and, on UI suites, the engine path (generate on HUD-less frames, composite the newest UI layer). The cut detector gates every network: frames it flags are replaced by the newest real frame. Models whose training failed are left out, and a model that fails on one suite is logged and skipped there. Expected output: number of metric rows.
 
 # %%
 ROWS = []
@@ -975,11 +999,15 @@ def evaluate(suite, b, extra=None, models=None, ui_engine=False):
             f["mv_avail"], f["cam_avail"] = torch.zeros_like(
                 f["mv_avail"]
             ), torch.zeros_like(f["cam_avail"])
-        out, _ = E.run_fg(net, f)
-        outs[key] = torch.where(gate, b["i1"], out)
-        if ui_engine and key in ("student", "igpu"):
-            out_e, _ = E.run_fg(net, f, hudless=True)
-            outs[f"{key}+ui_layer"] = torch.where(gate, b["i1"], out_e)
+        try:  # one failing model (for example out of memory on a large clip) must not end the evaluation
+            out, _ = E.run_fg(net, f)
+            outs[key] = torch.where(gate, b["i1"], out)
+            if ui_engine and key in ("student", "igpu"):
+                out_e, _ = E.run_fg(net, f, hudless=True)
+                outs[f"{key}+ui_layer"] = torch.where(gate, b["i1"], out_e)
+        except Exception as exc:
+            log(f"evaluation {suite} / {key} skipped: {exc}")
+            torch.cuda.empty_cache()
     for mname, out in outs.items():
         for r in E.fg_metrics(out, b, LPIPS):
             ROWS.append({"suite": suite, "method": mname, **(extra or {}), **r})
@@ -1276,19 +1304,22 @@ if len(abl):
     RUN.save_csv(ABL.round(4), "ablations.csv")
     print(ABL.round(3).to_string())
     piv = abl.groupby(["method", "mode"])["psnr"].mean().unstack()
-    fig, ax = plt.subplots(figsize=(10, 3.8))
-    (piv - piv.loc["abl_reference"]).drop(
-        index="abl_reference", errors="ignore"
-    ).plot.bar(ax=ax, rot=30)
-    ax.set_title("PSNR change vs reference (all suites)")
-    RUN.show(fig, "ablations")
+    if "abl_reference" in piv.index:
+        fig, ax = plt.subplots(figsize=(10, 3.8))
+        (piv - piv.loc["abl_reference"]).drop(
+            index="abl_reference", errors="ignore"
+        ).plot.bar(ax=ax, rot=30)
+        ax.set_title("PSNR change vs reference (all suites)")
+        RUN.show(fig, "ablations")
+    else:
+        print("abl_reference did not train: deltas cannot be computed")
 
 # %% [markdown]
 # ## 26. Latency and the input-to-photon pacing model
 #
 # Model latency: one fused FP16 generation on a T4 (CUDA events, batch 1) at 1920x1080 and 2560x1440, plus the arithmetic estimate for an assumed integrated-GPU throughput.
 #
-# Pacing model (`nss_metrics.simulate_latency`): a GPU-bound game loop with just-in-time CPU scheduling (Reflex / Anti-Lag style) on a variable-refresh display, for base render times of 33, 25 and 17 ms. It separates **game input latency** (input -> first real frame reflecting it), **camera latency** (input -> first displayed frame whose camera reflects it; late-latched extrapolation re-samples the camera just before generating) and **content age** of generated frames. Interpolation holds each real frame for half a frame plus the generation time; extrapolation holds nothing. Measured T4 model times feed the model; on other GPUs scale them by the measured / estimated ratio. Expected output: latency tables and a chart of displayed frame rate against latency.
+# Pacing model (`nss_metrics.simulate_latency`): a GPU-bound game loop with just-in-time CPU scheduling (Reflex / Anti-Lag style) on a variable-refresh display, for base render times of 33, 25 and 17 ms. It separates **game input latency** (input -> first real frame reflecting it), **camera latency** (input -> first displayed frame whose camera reflects it; late-latched extrapolation re-samples the camera just before generating) and **content age** of generated frames. Interpolation holds each real frame for half a frame plus the generation time; extrapolation holds nothing. Measured T4 model times feed the model (2.0 ms is assumed, and logged, if the student did not train); on other GPUs scale them by the measured / estimated ratio. Expected output: latency tables and a chart of displayed frame rate against latency.
 
 
 # %%
@@ -1341,15 +1372,16 @@ for key in ("igpu", "student", "mid"):
 LAT = pd.DataFrame(lat_rows)
 RUN.save_csv(LAT, "latency.csv", index=False)
 print(LAT.round(2).to_string(index=False))
-fg_ms = (
-    float(
-        LAT[(LAT["model"] == "student") & (LAT["output"] == "1920x1080")][
-            "t4_mean_ms"
-        ].iloc[0]
-    )
+sel = (
+    LAT[(LAT["model"] == "student") & (LAT["output"] == "1920x1080")]
     if len(LAT)
-    else 2.0
+    else LAT
 )
+fg_ms = float(sel["t4_mean_ms"].iloc[0]) if len(sel) else 2.0
+if not len(sel):
+    log(
+        "no measured student latency: the pacing model assumes 2.0 ms per generated frame"
+    )
 sim_rows = []
 for render_ms in (33.3, 25.0, 16.7):
     for mode in ("native", "interp", "extrap", "extrap_late"):
@@ -1373,7 +1405,7 @@ RUN.show(fig, "pacing_model")
 # %% [markdown]
 # ## 27. ONNX export
 #
-# Exports the fused `low` and `igpu` generators (opset 17, static shapes: one graph per output resolution) and compares ONNX Runtime CPU output with PyTorch FP32. Expected output: export status and maximum difference.
+# Exports the fused `low` and `igpu` generators (opset 17 with the TorchScript exporter on any PyTorch 2.x via `NM.export_onnx`, static shapes: one graph per output resolution) and compares ONNX Runtime CPU output with PyTorch FP32. Expected output: export status and maximum difference.
 
 # %%
 onnx_rows = []
@@ -1397,15 +1429,7 @@ for key in ("student", "igpu"):
     path = RUN.dirs["weights"] / f"fg_{key}_fused.onnx"
     row = {"model": key, "exported": False, "ort_max_abs": None}
     try:
-        torch.onnx.export(
-            wrap,
-            args,
-            str(path),
-            input_names=names,
-            output_names=["frame"],
-            opset_version=17,
-            dynamo=False,
-        )
+        NM.export_onnx(wrap, args, path, names, ["frame"])
         row.update(exported=True, onnx_mb=round(path.stat().st_size / 1e6, 3))
         import onnxruntime as ort
 
@@ -1422,7 +1446,7 @@ RUN.save_json(onnx_rows, "onnx_export.json")
 # %% [markdown]
 # ## 28. Summary
 #
-# Headline numbers for the main student against motion-vector reprojection on real suites, UI handling, cut and menu correctness, latency and the pacing model at a 30 fps base. Expected output: summary table and stage times.
+# Headline numbers for the main student against motion-vector reprojection on real suites, UI handling, cut and menu correctness, latency, the pacing model at a 30 fps base and failed runs (normally none). Expected output: summary table and stage times.
 
 
 # %%
@@ -1435,6 +1459,7 @@ def agg(suite, mode, method, col):
 
 summary = {
     "run_hours": round(RUN.hours(), 2),
+    "failed_runs": sorted(FAILED),
     "cut_threshold": CUT_THR,
     "cut_detection_rate": cut_rate,
 }
@@ -1464,7 +1489,7 @@ RUN.show(fig, "stage_times")
 # %% [markdown]
 # ## 29. Remove training caches
 #
-# Deletes the memory-mapped caches (intermediates) before zipping. Expected output: the space freed.
+# Deletes the memory-mapped caches in `/tmp/nss_cache` (intermediates) to free local disk. Expected output: the space freed.
 
 # %%
 import shutil

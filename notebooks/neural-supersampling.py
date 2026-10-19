@@ -149,6 +149,7 @@ import nss_metrics as M
 import nss_models as NM
 import nss_pipeline as PL
 import nss_synth as S
+import nss_train as TR
 
 try:
     from kaggle_secrets import UserSecretsClient
@@ -160,7 +161,7 @@ except Exception:
 # %% [markdown]
 # ## 3. Hardware check
 #
-# GPUs, CPU cores, RAM and disk detected at run time; stops early unless two GPUs are visible, because training uses one process per GPU. Expected output: two Tesla T4 rows.
+# GPUs, CPU cores, RAM and disk detected at run time; stops early unless two GPUs are visible, because training uses one process per GPU. The library supports PyTorch 2.0 (the Kaggle image of the data-pipeline run) and later. Expected output: two Tesla T4 rows.
 
 # %%
 HW = C.hardware_report()
@@ -304,7 +305,7 @@ assert ITEMS[
 # %% [markdown]
 # ## 7. Training caches
 #
-# Decodes once, with all CPU cores, into memory-mapped arrays in `/kaggle/working/cache` (shared by both training processes through the page cache):
+# Decodes once, with all CPU cores, into memory-mapped arrays in `/tmp/nss_cache` (shared by both training processes through the page cache; `/tmp` is local disk outside `/kaggle/working`, so about 9 GB of caches never count toward the 20 GB saved output, even if the run stops early):
 #
 # * still crops of 512x512 for the synthetic renderer (random down-scale per source for varied detail density, flat crops rejected);
 # * windows of 6 frames at 192x192 with motion vectors, validity and depth at half resolution.
@@ -312,8 +313,8 @@ assert ITEMS[
 # Windows from video sources get RAFT motion (frame to previous frame) with a forward-backward consistency mask, computed on both GPUs. Expected output: progress bars, counts per source and the cache size.
 
 # %%
-CACHE = C.WORK / "cache"
-CACHE.mkdir(exist_ok=True)
+CACHE = Path("/tmp/nss_cache")
+CACHE.mkdir(parents=True, exist_ok=True)
 CACHES = {}
 with RUN.stage("caches"):
     deadline = CFG["cache"]["build_min"] * 60
@@ -543,7 +544,7 @@ RUN.show(fig, "model_tiers")
 # %% [markdown]
 # ## 11. Batch-size probe
 #
-# Runs full training steps (synthetic batch generation, recurrent unroll, losses, backward) on GPU 0 for increasing batch sizes, for the teacher alone and for the student with the frozen teacher alongside (distillation), and keeps the largest batch below 85 percent of VRAM. Expected output: a table of batch size, peak VRAM share and sequences per second.
+# Runs full training steps (synthetic batch generation, recurrent unroll, a pixel loss, backward) on GPU 0 for increasing batch sizes, for the teacher alone and for the student with the frozen teacher alongside (distillation), and keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the gradient, Fourier, temporal and LPIPS losses, real-sequence batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. Expected output: a table of batch size, peak VRAM share and sequences per second.
 
 
 # %%
@@ -563,7 +564,7 @@ def probe(student_tier, teacher_tier, scale, sizes):
                 else None
             )
             opt = torch.optim.AdamW(net.parameters(), 1e-4)
-            scaler = torch.amp.GradScaler("cuda")
+            scaler = TR.grad_scaler()
             times = []
             for _ in range(3):
                 torch.cuda.synchronize(dev)
@@ -605,11 +606,12 @@ def probe(student_tier, teacher_tier, scale, sizes):
             break
     torch.cuda.empty_cache()
     df = pd.DataFrame(rows)
-    ok = df[df["fits"] & (df["peak_vram_pct"] <= 85)]
+    ok = df[df["fits"] & (df["peak_vram_pct"] <= 75)]
     return df, int(ok["batch"].max()) if len(ok) else sizes[0]
 
 
 with RUN.stage("batch_probe"):
+    TR.free_gpu_memory()
     sizes = [4, 8] if QUICK_RUN else [4, 8, 12, 16, 24, 32, 48]
     PROBE_T, BS_TEACHER = probe(CFG["teacher_tier"], None, CFG["scale"], sizes)
     PROBE_S, BS_STUDENT = probe(
@@ -631,7 +633,9 @@ RUN.save_csv(
 # %% [markdown]
 # ## 12. Training launcher and budget
 #
-# Builds one JSON config per run and launches `code/train_tsr.py`: DDP on both GPUs for the main stages, or two single-GPU runs in parallel threads for the paired stages and ablations. Each run streams `PROGRESS` lines into a progress bar (percent of its time budget, loss, sequences per second, learning rate, per-GPU memory) and `ROUND` lines (validation PSNR-Y, temporal-change error) into a live chart. Stage budgets are scaled down if the run budget is short. Expected output: the planned minutes per stage.
+# Builds one JSON config per run and launches `code/train_tsr.py`: DDP on both GPUs for the main stages, or two single-GPU runs in parallel threads for the paired stages and ablations. Each run streams `PROGRESS` lines into a progress bar (percent of its time budget, loss, sequences per second, learning rate, per-GPU memory) and `ROUND` lines (validation PSNR-Y, temporal-change error) into a live chart. Stage budgets are scaled down if the run budget is short.
+#
+# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: the planned minutes per stage.
 
 # %%
 remaining_h = RUN_BUDGET_H - RUN.hours() - CFG["eval"]["eval_reserve_h"]
@@ -647,7 +651,7 @@ print(
     pd.Series(MINUTES).round(1).to_string(),
     f"\n(scale {SCALE_T:.2f}, {remaining_h:.2f} h available for training)",
 )
-HISTORY = {}
+HISTORY, FAILED = {}, {}
 PORT = [29500]
 
 
@@ -713,20 +717,29 @@ def live_plot(title):
 
 
 def launch(cfg, gpus, live=True):
-    PORT[0] += 1
-    cfg_path = RUN.dirs["code"] / f"cfg_{cfg['name']}.json"
-    rounds, done = C.launch_training(
+    """Run one training process; returns its DONE line, or None if it failed (recorded in FAILED)."""
+    PORT[0] += 2
+    rounds, done, error = TR.launch_with_retry(
         RUN.work / "code" / "train_tsr.py",
         cfg,
-        cfg_path,
-        RUN.dirs["logs"] / f"{cfg['name']}.log",
+        RUN.dirs["code"],
+        RUN.dirs["logs"],
         gpus,
-        cfg["name"],
-        port=PORT[0],
+        PORT[0],
         on_round=live_plot(cfg["name"]) if live else None,
+        log=log,
     )
     HISTORY[cfg["name"]] = rounds
+    if error:
+        FAILED[cfg["name"]] = error
+        return None
     return done
+
+
+def checkpoint(name):
+    """Path of a run's best checkpoint, or None if the run produced none."""
+    path = RUN.dirs["weights"] / f"{name}_best.pt"
+    return str(path) if path.exists() else None
 
 
 def launch_pair(cfg_a, cfg_b):
@@ -750,7 +763,9 @@ with RUN.stage("train_teacher"):
         ),
         [0, 1],
     )
-TEACHER_CKPT = str(RUN.dirs["weights"] / "tsr_teacher_s3_best.pt")
+TEACHER_CKPT = checkpoint("tsr_teacher_s3")
+if TEACHER_CKPT is None:
+    log("no teacher checkpoint: students train without distillation")
 print(done_teacher)
 
 # %% [markdown]
@@ -829,7 +844,7 @@ with RUN.stage("ablations"):
 # %% [markdown]
 # ## 17. Training curves
 #
-# Validation PSNR-Y and temporal-change error against time for every run, and the train loss of the main stages. Expected output: three charts and a table of the best validation round per run.
+# Validation PSNR-Y and temporal-change error against time for every run, and the train loss of the main stages. Expected output: three charts, a table of the best validation round per run and the list of failed runs (`metrics/failed_runs.json`, normally empty).
 
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(17, 4))
@@ -839,6 +854,8 @@ for name, rounds in HISTORY.items():
         continue
     h = pd.DataFrame(rounds)
     RUN.save_csv(h, f"history_{name}.csv", index=False)
+    if "val_psnr_y" not in h or h["val_psnr_y"].isna().all():
+        continue
     style = "-" if not name.startswith("abl_") else "--"
     axes[0].plot(h["elapsed_min"], h["val_psnr_y"], style, label=name)
     axes[1].plot(h["elapsed_min"], h["val_tce"], style, label=name)
@@ -864,11 +881,13 @@ RUN.show(fig, "training_curves")
 BEST = pd.DataFrame(best_rows)
 RUN.save_csv(BEST, "best_validation.csv", index=False)
 print(BEST.round(4).to_string(index=False))
+RUN.save_json(FAILED, "failed_runs.json")
+print("failed runs:", sorted(FAILED) or "none")
 
 # %% [markdown]
 # ## 18. Load, fuse and place models
 #
-# Loads the best EMA weights of every run, folds RepConv branches into plain convolutions, checks fused against unfused output on a real validation batch, and keeps FP16 fused replicas on GPU 0 for evaluation. Expected output: a table of runs with fused parameter count and parity.
+# Loads the best EMA weights of every run, folds RepConv branches into plain convolutions, checks fused against unfused output in FP32 on a synthetic batch (3x models), and keeps FP16 fused replicas on GPU 0 for evaluation. Runs without a checkpoint are skipped. The bilinear and analytic TAA baselines use `BASE`, untrained networks of each scale whose parameter-free jitter-aware upsampler is all they need, so baselines never depend on a training run. Expected output: a table of runs with fused parameter count and parity.
 
 
 # %%
@@ -920,6 +939,9 @@ for key, (name, tier, scale) in RUNS.items():
         }
     )
 print(pd.DataFrame(rows).to_string(index=False))
+BASE = {  # only base_upsample (parameter-free) is used: bilinear and analytic TAAU baselines
+    s: NM.build_tsr(CFG["small_tier"], s).to(DEVICES[0]).eval() for s in (S3, S2)
+}
 LPIPS = M.load_lpips(DEVICES[0], log=log)
 RAFT = RAFTS[0] if RAFTS else M.load_raft(DEVICES[0], log=log)
 
@@ -934,7 +956,7 @@ RAFT = RAFTS[0] if RAFTS else M.load_raft(DEVICES[0], log=log)
 # * **video**: Vid4 and held-out Vimeo-1080p clips with RAFT motion;
 # * **gameir-native**: held-out town 05, native 720p renders to 1440p ground truth (2x, a real renderer's low-resolution image instead of a simulated one).
 #
-# Expected output: the number of sequences per suite.
+# Clips that cannot be decoded are logged and skipped. Expected output: the number of sequences per suite.
 
 # %%
 ev = CFG["eval"]
@@ -960,7 +982,11 @@ with RUN.stage("test_suites"):
         for it in [
             i for i in TEST_ITEMS if i["source"] == source and i["n_frames"] >= Tn
         ][: n * 3]:
-            c = E.load_clip(DATA_ROOT, it, 0, Tn, crop, max_side=max_side)
+            try:
+                c = E.load_clip(DATA_ROOT, it, 0, Tn, crop, max_side=max_side)
+            except Exception as exc:  # unreadable clip: skip it, keep the suite
+                log(f"{source} {it['item_id']}: skipped ({exc})")
+                c = None
             if c is not None:
                 out.append((it["item_id"], c))
             if len(out) >= n:
@@ -990,33 +1016,38 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame, warping error (exact motion only) and temporal-change error. Methods: bicubic, jitter-aware bilinear, analytic TAA upscaler, the teacher, the students and the ablations. Expected output: progress logs and the number of metric rows.
+# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame, warping error (exact motion only) and temporal-change error. Methods: bicubic, jitter-aware bilinear, analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
 
 # %%
 ROWS = []
 
 
 def evaluate(suite, b, scale, methods, extra=None):
-    ref = (
-        MODELS["student_s3"][0] if scale == S3 else MODELS.get("student_s2", (None,))[0]
-    )
+    ref = BASE[scale]  # only its parameter-free upsampler is used
     for mname in methods:
-        if mname == "bicubic":
-            out = E.run_bicubic(b, scale)
-        elif (
-            mname == "bilinear"
-        ):  # the reference network only provides its parameter-free upsampler
-            out = E.run_bilinear(ref, b)
-        elif mname == "analytic_taau":
-            out = E.run_taau(ref, b, scale)
-        else:
-            net, s_ = MODELS[mname]
-            if s_ != scale:
-                continue
-            kw = {"use_history": False} if mname == "abl_no_history" else {}
-            kw.update({"ablate_gbuffers": True} if mname == "abl_no_gbuffers" else {})
-            out = E.run_tsr(net, b, **kw)
-        for r in E.sr_frame_metrics(out, b, scale, LPIPS, RAFT):
+        if mname not in ("bicubic", "bilinear", "analytic_taau") and (
+            mname not in MODELS or MODELS[mname][1] != scale
+        ):
+            continue
+        try:  # one failing method (for example out of memory on a large clip) must not end the evaluation
+            if mname == "bicubic":
+                out = E.run_bicubic(b, scale)
+            elif mname == "bilinear":
+                out = E.run_bilinear(ref, b)
+            elif mname == "analytic_taau":
+                out = E.run_taau(ref, b, scale)
+            else:
+                kw = {"use_history": False} if mname == "abl_no_history" else {}
+                kw.update(
+                    {"ablate_gbuffers": True} if mname == "abl_no_gbuffers" else {}
+                )
+                out = E.run_tsr(MODELS[mname][0], b, **kw)
+            rows = E.sr_frame_metrics(out, b, scale, LPIPS, RAFT)
+        except Exception as exc:
+            log(f"evaluation {suite} / {mname} at {scale}x skipped: {exc}")
+            torch.cuda.empty_cache()
+            continue
+        for r in rows:
             ROWS.append(
                 {"suite": suite, "method": mname, "scale": scale, **(extra or {}), **r}
             )
@@ -1185,13 +1216,10 @@ if TEST_STILLS is not None:
         "abl_no_history",
     ]:
         if mname in ("bilinear", "analytic_taau"):
-            ref_net = MODELS["student_s3"][
-                0
-            ]  # only its parameter-free jitter-aware upsampler is used
             out = (
-                E.run_bilinear(ref_net, b)
+                E.run_bilinear(BASE[S3], b)
                 if mname == "bilinear"
-                else E.run_taau(ref_net, b, S3)
+                else E.run_taau(BASE[S3], b, S3)
             )
         elif mname in MODELS:
             out = E.run_tsr(
@@ -1229,14 +1257,18 @@ if TEST_STILLS is not None:
 
 # %%
 def visual(b, title, fname, crop=160):
+    nets = [k for k in ("igpu_s3", "student_s3", "teacher_s3") if k in MODELS]
+    if not nets:
+        log(f"{fname}: no trained 3x model, figure skipped")
+        return
     outs = {
-        "bilinear": E.run_bilinear(MODELS["student_s3"][0], b),
-        "analytic_taau": E.run_taau(MODELS["student_s3"][0], b, S3),
+        "bilinear": E.run_bilinear(BASE[S3], b),
+        "analytic_taau": E.run_taau(BASE[S3], b, S3),
     }
-    for k in ("igpu_s3", "student_s3", "teacher_s3"):
-        if k in MODELS:
-            outs[k] = E.run_tsr(MODELS[k][0], b)
-    _, alpha = E.run_tsr(MODELS["student_s3"][0], b, keep_alpha=True)
+    for k in nets:
+        outs[k] = E.run_tsr(MODELS[k][0], b)
+    alpha_net = "student_s3" if "student_s3" in MODELS else nets[0]
+    _, alpha = E.run_tsr(MODELS[alpha_net][0], b, keep_alpha=True)
     outs["ground truth"] = b["hr"]
     H, W = b["hr"].shape[-2:]
     y0, x0 = (H - crop) // 2, (W - crop) // 2
@@ -1262,7 +1294,7 @@ def visual(b, title, fname, crop=160):
         vmin=0,
         vmax=1,
     )
-    axes[0, -1].set_title("history weight a", fontsize=8)
+    axes[0, -1].set_title(f"history weight a ({alpha_net})", fontsize=8)
     axes[1, -1].imshow(
         1 - b["valid_hr"][0, -1, 0, y0 : y0 + crop, x0 : x0 + crop].cpu().numpy(),
         cmap="gray",
@@ -1307,7 +1339,9 @@ abl = RES[
     & RES["suite"].isin(["synthetic-game", "tartanair"])
     & (RES["scale"] == S3)
 ]
-if len(abl):
+if len(abl) and "abl_reference" not in set(abl["method"]):
+    print("abl_reference did not train: deltas cannot be computed")
+elif len(abl):
     ABL = abl.groupby(["suite", "method"])[
         ["psnr_y", "ssim_y", "lpips", "temporal_err", "psnr_disocc"]
     ].mean()
@@ -1410,7 +1444,7 @@ RUN.show(fig, "latency")
 # %% [markdown]
 # ## 27. ONNX export
 #
-# Exports one fused recurrent step of the main 3x student and the integrated-GPU student (explicit state tensors: previous output, hidden state, previous depth), opset 17, with static shapes (a deployment builds one optimised graph per render resolution; re-export with the target size), and compares ONNX Runtime (CPU) with PyTorch FP32. Expected output: export status and maximum difference.
+# Exports one fused recurrent step of the main 3x student and the integrated-GPU student (explicit state tensors: previous output, hidden state, previous depth), opset 17 with the TorchScript exporter on any PyTorch 2.x (`NM.export_onnx`), with static shapes (a deployment builds one optimised graph per render resolution; re-export with the target size), and compares ONNX Runtime (CPU) with PyTorch FP32. Expected output: export status and maximum difference.
 
 # %%
 onnx_rows = []
@@ -1448,15 +1482,7 @@ for key in ("student_s3", "igpu_s3"):
     path = RUN.dirs["weights"] / f"tsr_{key}_fused.onnx"
     row = {"model": key, "exported": False, "ort_max_abs": None}
     try:  # static shapes: engines build one optimised graph per render resolution anyway
-        torch.onnx.export(
-            wrap,
-            args,
-            str(path),
-            input_names=names,
-            output_names=["out", "hidden", "depth_out"],
-            opset_version=17,
-            dynamo=False,
-        )
+        NM.export_onnx(wrap, args, path, names, ["out", "hidden", "depth_out"])
         row["exported"] = True
         row["onnx_mb"] = round(path.stat().st_size / 1e6, 3)
         import onnxruntime as ort
@@ -1475,7 +1501,7 @@ RUN.save_json(onnx_rows, "onnx_export.json")
 # %% [markdown]
 # ## 28. Summary
 #
-# Headline results of the main 3x student against the analytic TAA upscaler on the game-like suites, the integrated-GPU tier, the 2x student on native GameIR renders, latency, and stage times against the budget. Expected output: the summary table and a stage-time chart.
+# Headline results of the main 3x student against the analytic TAA upscaler on the game-like suites, the integrated-GPU tier, the 2x student on native GameIR renders, latency, failed runs (normally none) and stage times against the budget. Expected output: the summary table and a stage-time chart.
 
 
 # %%
@@ -1486,7 +1512,7 @@ def pick(suite, method, col, scale=S3):
         return None
 
 
-summary = {"run_hours": round(RUN.hours(), 2)}
+summary = {"run_hours": round(RUN.hours(), 2), "failed_runs": sorted(FAILED)}
 for suite in ("synthetic-game", "tartanair", "sintel", "vid4", "vimeo1080p"):
     for m in ("analytic_taau", "student_s3", "igpu_s3"):
         summary[f"{suite}/{m}/psnr_y"] = pick(suite, m, "psnr_y")
@@ -1509,7 +1535,7 @@ RUN.show(fig, "stage_times")
 # %% [markdown]
 # ## 29. Remove training caches
 #
-# The memory-mapped caches are intermediates; deleting them keeps the saved output small and frees disk for the zip. Expected output: the space freed.
+# The memory-mapped caches in `/tmp/nss_cache` are intermediates; deleting them frees local disk. Expected output: the space freed.
 
 # %%
 import shutil

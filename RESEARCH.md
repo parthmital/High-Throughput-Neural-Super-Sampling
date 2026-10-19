@@ -459,13 +459,13 @@ src/neuralss/          single source of the library (embedded into the notebooks
   nss_pipeline.py      data-pipeline steps and the inline fallback
   nss_cache.py         memory-mapped caches and RAFT teacher motion
   nss_synth.py         synthetic game-like renderer and GPU batch builders
-  nss_models.py        RepConv, TSR network, FG network, tiers, fusion, ONNX wrappers
+  nss_models.py        RepConv, TSR network, FG network, tiers, fusion, ONNX wrappers and export
   nss_metrics.py       losses, metrics, RAFT, analytic baselines, latency model
-  nss_train.py         DDP harness
+  nss_train.py         DDP harness, notebook launcher with one out-of-memory retry, PyTorch-version-independent AMP helper
   nss_eval.py          test clips, runners, metric rows
   train_tsr.py, train_fg.py
 notebooks/             percent-format notebook sources
-tools/build_notebooks.py   builds the .ipynb files (python tools/build_notebooks.py [--check])
+tools/build_notebooks.py   builds the .ipynb files whose sources changed (python tools/build_notebooks.py [--check])
 neural-data-pipeline/neural-data-pipeline.ipynb   executed Kaggle copy with saved outputs (run of 18 October 2026)
 neural-data-pipeline/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, nss_data/nss_manifest.parquet, __notebook__.ipynb
 neural-data-pipeline/outputs.zip   the same files as the run's zip
@@ -480,6 +480,13 @@ neural-supersampling/outputs/   archived outputs of the superseded single-frame 
 2. `neural-supersampling` and `neural-frame-generation`: attach the pipeline output and the same Kaggle datasets.
 
 Each notebook can also run alone (inline manifest, smaller caps). `QUICK_RUN = True` gives a short smoke test of every cell.
+
+**Run safeguards in the training notebooks.**
+
+- The library runs on PyTorch 2.0 (the Kaggle image of the data-pipeline run) and later: gradient scaling and ONNX export go through version-independent helpers.
+- Training caches go to `/tmp/nss_cache`, outside the 20 GB saved-output folder.
+- Batch sizes are probed to 75 percent of VRAM, and the notebook releases its cached GPU memory before every training run.
+- A run that runs out of GPU memory is retried once with half the batch. Any other failed run is recorded in `metrics/failed_runs.json` and does not stop the notebook: students train without distillation if the teacher failed, and evaluation skips missing models, unreadable clips and methods that fail on one suite.
 
 ## 19. Prior evidence
 

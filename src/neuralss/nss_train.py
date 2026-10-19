@@ -1,6 +1,8 @@
 """Shared DDP training harness: process group setup, random-batch streaming from memory-mapped caches,
 wall-clock learning-rate schedule, EMA, checkpointing and the machine-readable progress protocol
-(PROGRESS / ROUND / DONE JSON lines on rank 0, parsed by the notebooks)."""
+(PROGRESS / ROUND / DONE JSON lines on rank 0, parsed by the notebooks). Also the notebook-side launcher that
+retries a run once after running out of GPU memory, and version-independent AMP helpers.
+"""
 
 import copy
 import json
@@ -28,6 +30,64 @@ def setup_ddp():
     torch.cuda.set_device(local)
     torch.backends.cudnn.benchmark = True
     return rank, world, torch.device("cuda", local)
+
+
+def grad_scaler():
+    """CUDA gradient scaler on any PyTorch 2.x (torch.amp.GradScaler only exists from 2.3)."""
+    if hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda")
+    return torch.cuda.amp.GradScaler()
+
+
+def free_gpu_memory():
+    """Return the calling process's cached CUDA blocks on every GPU (the notebook kernel before a training run)."""
+    for i in range(torch.cuda.device_count()):
+        with torch.cuda.device(i):
+            torch.cuda.empty_cache()
+
+
+def launch_with_retry(
+    script, cfg, code_dir, logs_dir, gpus, port, on_round=None, log=print
+):
+    """Notebook side: run one training process with nss_common.launch_training, never raising. A run that ran
+    out of GPU memory is retried once with half the batch for the rest of its time budget (the failed log is
+    kept as <name>.oom.log). Returns (rounds, done, error); error is None on success."""
+    from pathlib import Path
+
+    import nss_common as C
+
+    name = cfg["name"]
+    log_path = Path(logs_dir) / f"{name}.log"
+    for attempt in (1, 2):
+        free_gpu_memory()
+        t0 = time.time()
+        try:
+            rounds, done = C.launch_training(
+                script,
+                cfg,
+                Path(code_dir) / f"cfg_{name}.json",
+                log_path,
+                gpus,
+                name,
+                port=port + attempt,
+                on_round=on_round,
+            )
+            return rounds, done, None
+        except RuntimeError as exc:
+            oom = "out of memory" in log_path.read_text(errors="ignore").lower()
+            log(f"{name} failed (attempt {attempt}, out of memory: {oom}): {exc}")
+            if not oom or attempt == 2 or cfg["batch_per_gpu"] <= 2:
+                return [], {}, str(exc)[-2000:]
+            log_path.replace(log_path.with_suffix(".oom.log"))
+            spent = time.time() - t0
+            cfg = dict(
+                cfg,
+                batch_per_gpu=cfg["batch_per_gpu"] // 2,
+                train_seconds=max(
+                    cfg["train_seconds"] - spent, 0.3 * cfg["train_seconds"]
+                ),
+            )
+            log(f"{name}: retrying with batch {cfg['batch_per_gpu']} per GPU")
 
 
 def is_dist():
@@ -132,7 +192,7 @@ def train_loop(cfg, model, step_fn, val_fn, rank, world, device, loader):
         betas=(0.9, 0.99),
         weight_decay=cfg["weight_decay"],
     )
-    scaler = torch.amp.GradScaler("cuda")
+    scaler = grad_scaler()
     ema = EMA(model, cfg["ema_decay"]) if rank == 0 else None
     start = last_val = last_prog = time.time()
     sync = torch.zeros(3 + world, device=device)

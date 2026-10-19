@@ -7,7 +7,8 @@ so every notebook is self-contained on Kaggle while the library has one source o
 Usage: python tools/build_notebooks.py [--check]
   --check: fail if any repo notebook's cell ids, types or sources differ from a fresh build. Outputs and metadata
   are ignored, so an executed Kaggle copy with unchanged sources passes.
-  Without --check every notebook is rewritten without outputs; an executed copy's outputs stay in <name>/outputs/.
+  Without --check, notebooks whose sources changed are rewritten without outputs; unchanged ones (including an
+  executed copy with its outputs) are left as they are.
 Requires: nbformat.
 """
 
@@ -90,11 +91,15 @@ def main():
     stale = []
     for name in NOTEBOOKS:
         out, nb = build(name)
+        current = out.exists() and cell_sources(
+            nbformat.read(out, as_version=4)
+        ) == cell_sources(nb)
         if args.check:
-            if not out.exists() or cell_sources(
-                nbformat.read(out, as_version=4)
-            ) != cell_sources(nb):
+            if not current:
                 stale.append(str(out))
+            continue
+        if current:
+            print(f"unchanged {out.relative_to(ROOT)}")
             continue
         text = nbformat.writes(nb) + "\n"
         out.parent.mkdir(parents=True, exist_ok=True)

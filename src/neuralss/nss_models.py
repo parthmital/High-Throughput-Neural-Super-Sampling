@@ -487,3 +487,24 @@ class FGExport(nn.Module):
             "depth_avail": avail[:, 2],
         }
         return self.net(f)[0]
+
+
+def export_onnx(wrapper, args, path, input_names, output_names, opset=17):
+    """TorchScript-based ONNX export with static shapes on any PyTorch 2.x. From 2.5 export() takes a dynamo flag
+    (later the default, which needs onnxscript); older versions do not accept it."""
+    import inspect
+
+    extra = (
+        {"dynamo": False}
+        if "dynamo" in inspect.signature(torch.onnx.export).parameters
+        else {}
+    )
+    torch.onnx.export(
+        wrapper,
+        args,
+        str(path),
+        input_names=input_names,
+        output_names=output_names,
+        opset_version=opset,
+        **extra,
+    )
