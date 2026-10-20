@@ -467,7 +467,7 @@ g.manual_seed(3)
 TEXT_BANK = torch.from_numpy(
     S.make_text_bank(64, CFG["seed"], height=24, width=128)
 ).to(DEVICES[0])
-stills_t = torch.from_numpy(np.ascontiguousarray(st[:4])).to(DEVICES[0])
+stills_t = torch.from_numpy(np.array(st[:4])).to(DEVICES[0])
 demo = S.sr_batch(stills_t, CFG["scale"], T, P, g, text_bank=TEXT_BANK)
 fig, axes = plt.subplots(3, 6, figsize=(18, 9))
 for r, t in enumerate([1, 3, 5]):
@@ -553,7 +553,7 @@ RUN.show(fig, "model_tiers")
 # %% [markdown]
 # ## 11. Batch-size probe
 #
-# Runs full training steps (synthetic batch generation, recurrent unroll, a pixel loss, backward) on GPU 0 for increasing batch sizes, for the teacher alone and for the student with the frozen teacher alongside (distillation), and keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the gradient, Fourier, temporal and LPIPS losses, real-sequence batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. Expected output: a table of batch size, peak VRAM share and sequences per second.
+# Runs full training steps (synthetic batch generation, recurrent unroll, a pixel loss, backward) on GPU 0 for increasing batch sizes, for the teacher alone and for the student with the frozen teacher alongside (distillation), and keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the gradient, Fourier, temporal and LPIPS losses, real-sequence batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. `finite_loss` flags an FP16 overflow at initialisation (it made the first teacher run NaN for its whole budget; RepConv's zero-initialised side branches now prevent it, and training stops a run whose loss stays non-finite for 200 steps). Expected output: a table of batch size, finite loss, peak VRAM share and sequences per second.
 
 
 # %%
@@ -561,7 +561,7 @@ def probe(student_tier, teacher_tier, scale, sizes):
     rows = []
     dev = DEVICES[0]
     total = torch.cuda.get_device_properties(dev).total_memory
-    stills = torch.from_numpy(np.ascontiguousarray(st[: max(sizes)])).to(dev)
+    stills = torch.from_numpy(np.array(st[: max(sizes)])).to(dev)
     for bs in sizes:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(dev)
@@ -603,6 +603,7 @@ def probe(student_tier, teacher_tier, scale, sizes):
                 {
                     "batch": bs,
                     "fits": True,
+                    "finite_loss": bool(torch.isfinite(loss).item()),
                     "peak_vram_pct": round(
                         100 * torch.cuda.max_memory_allocated(dev) / total, 1
                     ),
@@ -629,6 +630,9 @@ with RUN.stage("batch_probe"):
     PROBE_S, BS_STUDENT = probe(
         CFG["student_tier"], CFG["teacher_tier"], CFG["scale"], sizes
     )
+    for label, df in (("teacher", PROBE_T), ("student", PROBE_S)):
+        if "finite_loss" in df and not df["finite_loss"].fillna(True).all():
+            log(f"{label} probe: non-finite loss at initialisation (FP16 overflow)")
 print(
     "teacher\n",
     PROBE_T.to_string(index=False),
@@ -834,10 +838,12 @@ print(done_pair)
 # %% [markdown]
 # ## 16. Ablations (three parallel pairs)
 #
-# Short runs of the `low` 3x student with one change each, against a `reference` run with the full recipe and the same short budget: no history (single-frame upscaling), no G-buffers (colour only: no depth or motion vectors), bicubic degradation (classic image super-resolution inputs instead of render-like jittered sampling), no temporal loss, and no distillation. Expected output: final scores of the six runs.
+# Short runs of the `low` 3x student with one change each, against a `reference` run with the full recipe and the same short budget: no history (single-frame upscaling), no G-buffers (colour only: no depth or motion vectors), bicubic degradation (classic image super-resolution inputs instead of render-like jittered sampling), no temporal loss, and no distillation. Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged), as in the first Kaggle run, where both reached the same best validation score. Expected output: final scores of the six runs.
 
 # %%
 with RUN.stage("ablations"):
+    if TEACHER_CKPT is None:
+        log("no teacher checkpoint: abl_no_distillation repeats abl_reference")
     names = list(ABLATIONS)
     for a, b in zip(names[0::2], names[1::2]):
         cfgs = []
@@ -903,7 +909,7 @@ print("failed runs:", sorted(FAILED) or "none")
 # %% [markdown]
 # ## 18. Load, fuse and place models
 #
-# Loads the best EMA weights of every run, folds RepConv branches into plain convolutions, checks fused against unfused output in FP32 on a synthetic batch (3x models), and keeps FP16 fused replicas on GPU 0 for evaluation. Runs without a checkpoint are skipped. The bilinear and analytic TAA baselines use `BASE`, untrained networks of each scale whose parameter-free jitter-aware upsampler is all they need, so baselines never depend on a training run. Expected output: a table of runs with fused parameter count and parity.
+# Loads the best EMA weights of every run, folds RepConv branches into plain convolutions, checks fused against unfused output in FP32 on a synthetic batch of the model's own scale, and keeps FP16 fused replicas on GPU 0 for evaluation. Runs without a checkpoint are skipped. The bilinear and analytic TAA baselines use `BASE`, untrained networks of each scale whose parameter-free jitter-aware upsampler is all they need, so baselines never depend on a training run. Expected output: a table of runs with fused parameter count and parity.
 
 
 # %%
@@ -927,7 +933,10 @@ RUNS = {
 }
 RUNS.update({f"abl_{a}": (f"abl_{a}", CFG["student_tier"], S3) for a in ABLATIONS})
 MODELS, rows = {}, []
-vb = {k: v.to(DEVICES[0]) for k, v in S.sr_batch(stills_t[:2], S3, 4, P, g).items()}
+VB = {  # one synthetic parity batch per scale
+    s: {k: v.to(DEVICES[0]) for k, v in S.sr_batch(stills_t[:2], s, 4, P, g).items()}
+    for s in (S3, S2)
+}
 for key, (name, tier, scale) in RUNS.items():
     net = load_tsr(name, tier, scale)
     if net is None:
@@ -937,12 +946,9 @@ for key, (name, tier, scale) in RUNS.items():
         {"state_dict": fused.state_dict(), "tier": tier, "scale": scale},
         RUN.dirs["weights"] / f"{name}_fused.pt",
     )
-    if scale == S3:  # FP32 parity on a synthetic validation batch
-        a = E.run_tsr(net.to(DEVICES[0]).float(), vb, amp=False)
-        b2 = E.run_tsr(NM.fuse_model(net).to(DEVICES[0]).float(), vb, amp=False)
-        parity = float((a - b2).abs().max())
-    else:
-        parity = None
+    a = E.run_tsr(net.to(DEVICES[0]).float(), VB[scale], amp=False)  # FP32 parity
+    b2 = E.run_tsr(NM.fuse_model(net).to(DEVICES[0]).float(), VB[scale], amp=False)
+    parity = float((a - b2).abs().max())
     MODELS[key] = (fused, scale)
     net.cpu()
     rows.append(
@@ -1032,7 +1038,7 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame, warping error (exact motion only) and temporal-change error. Methods: bicubic, jitter-aware bilinear, analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
+# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame (RAFT runs at most 1024 px on the longer side and its flow is scaled back, since full-size 1440p GameIR frames ran out of memory in the first run), warping error (exact motion only) and temporal-change error. Methods: bicubic, jitter-aware bilinear, analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
 
 # %%
 ROWS = []

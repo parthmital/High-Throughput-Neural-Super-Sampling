@@ -173,6 +173,9 @@ def emit(kind, payload):
 def train_loop(cfg, model, step_fn, val_fn, rank, world, device, loader):
     """Generic loop. step_fn(batch, step) -> (loss tensor, logs dict of floats); val_fn(ema_model) -> metrics dict
     (rank 0 only). The schedule follows the fraction of cfg['train_seconds'] already used, agreed across ranks.
+    A run whose loss stays non-finite for cfg['max_nonfinite_steps'] steps (default 200) on any rank raises on
+    every rank, so a diverged run fails within minutes instead of using its whole budget (the gradient scaler
+    skips every such step, so the weights would never change).
     """
     from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -198,6 +201,8 @@ def train_loop(cfg, model, step_fn, val_fn, rank, world, device, loader):
     sync = torch.zeros(3 + world, device=device)
     acc, n_acc, seen, round_start = {}, 0, 0, time.time()
     history, best, step, done = [], -1e9, 0, False
+    loss, bad_checks = None, 0
+    max_bad = max(1, cfg.get("max_nonfinite_steps", 200) // cfg["sync_every"])
     it = iter(loader)
     while not done:
         if step % cfg["sync_every"] == 0:
@@ -209,10 +214,18 @@ def train_loop(cfg, model, step_fn, val_fn, rank, world, device, loader):
                     el - (last_val - start) >= cfg["val_interval_s"]
                     or el >= cfg["train_seconds"]
                 )
+            if loss is not None:  # last step's loss, flagged without a host sync
+                sync[2] = (~torch.isfinite(loss.detach())).float()
             sync[3 + rank] = torch.cuda.max_memory_allocated(device) / 2**30
             if world > 1:
                 dist.all_reduce(sync)
             el = sync[0].item()
+            bad_checks = bad_checks + 1 if sync[2].item() > 0 else 0
+            if bad_checks >= max_bad:
+                msg = f"loss non-finite for {bad_checks * cfg['sync_every']} steps at step {step}: run stopped"
+                if rank == 0:
+                    emit("LOG", {"msg": msg})
+                raise RuntimeError(msg)
             progress = min(1.0, el / cfg["train_seconds"])
             lr = lr_at(progress, cfg)
             for g in opt.param_groups:

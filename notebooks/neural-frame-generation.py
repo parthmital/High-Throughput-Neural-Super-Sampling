@@ -391,7 +391,7 @@ TILES = (
     .float()
     / 255.0
 )
-stills_t = torch.from_numpy(np.ascontiguousarray(st[:8])).to(DEVICES[0])
+stills_t = torch.from_numpy(np.array(st[:8])).to(DEVICES[0])
 cases = [
     ("interpolation", dict()),
     ("extrapolation + reversal", dict(extrap=True, p_flip=1.0)),
@@ -495,7 +495,7 @@ assert TIERS["parity_max_abs"].max() < 1e-3, "fusion parity failed"
 def probe(tier, with_teacher, sizes):
     rows, dev = [], DEVICES[0]
     total = torch.cuda.get_device_properties(dev).total_memory
-    stills = torch.from_numpy(np.ascontiguousarray(st[: max(sizes)])).to(dev)
+    stills = torch.from_numpy(np.array(st[: max(sizes)])).to(dev)
     for bs in sizes:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(dev)
@@ -753,10 +753,12 @@ with RUN.stage("train_pair"):
 # %% [markdown]
 # ## 15. Ablations (three parallel pairs)
 #
-# Short `low`-tier runs against a `reference` with the same budget: no UI training (no HUD / subtitle / menu overlays, no UI loss), no motion priors (no engine motion vectors or camera prior), interpolation only, extrapolation only, and no distillation. Expected output: final scores of the six runs.
+# Short `low`-tier runs against a `reference` with the same budget: no UI training (no HUD / subtitle / menu overlays, no UI loss), no motion priors (no engine motion vectors or camera prior), interpolation only, extrapolation only, and no distillation. Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Expected output: final scores of the six runs.
 
 # %%
 with RUN.stage("ablations"):
+    if TEACHER_CKPT is None:
+        log("no teacher checkpoint: abl_no_distillation repeats abl_reference")
     names = list(ABLATIONS)
     for a, b in zip(names[0::2], names[1::2]):
         cfgs = []
@@ -954,7 +956,7 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# For each suite and mode: every network (the privileged teacher is listed as an upper bound only, since it sees the target), the analytic baselines (frame repeat, average, motion-vector reprojection) and, on UI suites, the engine path (generate on HUD-less frames, composite the newest UI layer). The cut detector gates every network: frames it flags are replaced by the newest real frame. Models whose training failed are left out, and a model that fails on one suite is logged and skipped there. Expected output: number of metric rows.
+# For each suite and mode: every network (the privileged teacher is listed as an upper bound only, since it sees the target), the analytic baselines (frame repeat, average, motion-vector reprojection) and, on UI suites, the engine path (generate on HUD-less frames, composite the newest UI layer). The cut detector gates every network: frames it flags are replaced by the newest real frame. On real suites the motion-vector input of I1 is the exact flow on TartanAir and Sintel (frame 2 -> 1 composed with frame 1 -> 0, as an engine would provide) and RAFT on the video suites; the target's occlusion mask always comes from RAFT and is used by the metrics only. Models whose training failed are left out, and a model that fails on one suite is logged and skipped there. Expected output: number of metric rows.
 
 # %%
 ROWS = []
@@ -969,15 +971,18 @@ def quad_batch(clip, extrap, dev):
     target = fr[:, 3] if extrap else fr[:, 1]
     n, _, H, W = i0.shape
     z1 = torch.zeros(n, device=dev)
-    if RAFT is not None:
+    zeros2 = torch.zeros(n, 2, H, W, device=dev)
+    flow_t1, valid_t1 = zeros2, torch.ones(n, 1, H, W, device=dev)
+    mv1 = zeros2
+    # engine-style motion I1 -> I0 on exact-flow clips: compose frame 2 -> 1 with frame 1 -> 0
+    if clip.get("exact"):
+        mv = torch.from_numpy(clip["mv"][1:3]).to(dev).permute(0, 3, 1, 2).float()
+        m21, m10 = mv[1:2], mv[0:1]
+        mv1 = m21 + NM.backward_warp(m10, m21)
+    elif RAFT is not None:
         mv1, _ = M.raft_mv_and_valid(RAFT, i1, i0)
+    if RAFT is not None:  # occlusion mask of the target, used by the metrics only
         flow_t1, valid_t1 = M.raft_mv_and_valid(RAFT, target, i1)
-    else:
-        mv1, flow_t1, valid_t1 = (
-            torch.zeros(n, 2, H, W, device=dev),
-            torch.zeros(n, 2, H, W, device=dev),
-            torch.ones(n, 1, H, W, device=dev),
-        )
     return {
         "i0": i0,
         "i1": i1,
@@ -985,7 +990,8 @@ def quad_batch(clip, extrap, dev):
         "tau": torch.full((n,), 1.5 if extrap else 0.5, device=dev),
         "extrap": torch.full((n,), float(extrap), device=dev),
         "mv1": mv1,
-        "mv_avail": torch.ones(n, device=dev) * (RAFT is not None),
+        "mv_avail": torch.ones(n, device=dev)
+        * float(bool(clip.get("exact")) or RAFT is not None),
         "depth1": torch.zeros(n, 1, H, W, device=dev),
         "depth_avail": z1,
         "cam_prior": torch.zeros_like(mv1),
