@@ -5,8 +5,10 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,6 +20,7 @@ import torch
 WORK = Path("/kaggle/working")
 INPUT_ROOT = Path("/kaggle/input")
 SUBDIRS = ["code", "weights", "plots", "metrics", "logs", "predictions"]
+RUN_GRACE = (1.25, 900)  # training watchdog: budget * factor + seconds
 
 
 class Run:
@@ -157,8 +160,25 @@ def gpu_utilisation():
         return []
 
 
-def stream_process(cmd, env, on_line, log_path):
-    """Run a subprocess, call on_line for every stdout line, mirror everything into log_path; returns exit code."""
+def kill_process_tree(proc):
+    """Kill a process started with start_new_session=True together with its children (the DDP workers of
+    torch.distributed.run, which would otherwise keep the GPUs busy)."""
+    if proc.poll() is not None:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def stream_process(cmd, env, on_line, log_path, timeout_s=None):
+    """Run a subprocess, call on_line for every stdout line, mirror everything into log_path; returns exit code.
+    A watchdog kills the process tree after timeout_s seconds, so a hung run (a stuck data-loader worker or
+    collective) fails with a TimeoutError line instead of holding the notebook until the session limit. The tree is
+    also killed if the notebook cell is interrupted."""
     with open(log_path, "w") as logf:
         proc = subprocess.Popen(
             cmd,
@@ -167,12 +187,35 @@ def stream_process(cmd, env, on_line, log_path):
             text=True,
             bufsize=1,
             env=env,
+            start_new_session=True,
         )
-        for line in proc.stdout:
-            logf.write(line)
-            logf.flush()
-            on_line(line.rstrip("\n"))
-        return proc.wait()
+        timed_out = threading.Event()
+
+        def expire():
+            timed_out.set()
+            kill_process_tree(proc)
+
+        timer = threading.Timer(timeout_s, expire) if timeout_s else None
+        if timer:
+            timer.daemon = True
+            timer.start()
+        try:
+            for line in proc.stdout:
+                logf.write(line)
+                logf.flush()
+                on_line(line.rstrip("\n"))
+            code = proc.wait()
+        finally:
+            if timer:
+                timer.cancel()
+            kill_process_tree(proc)
+        if timed_out.is_set():
+            line = (
+                f"TimeoutError: watchdog killed the run after {timeout_s / 60:.0f} min"
+            )
+            logf.write(line + "\n")
+            on_line(line)
+        return code
 
 
 def launch_training(
@@ -180,7 +223,9 @@ def launch_training(
 ):
     """Run a training script on the given GPUs (torch.distributed.run for several GPUs, a plain process for one),
     write its config, mirror its output to log_path, drive a tqdm bar from PROGRESS lines and collect ROUND rows.
-    Returns (rounds, done). Raises with the log tail if the process fails."""
+    The process is killed if it runs RUN_GRACE beyond its time budget (start-up, final validation and checkpoint
+    saving fit well inside that). Returns (rounds, done). Raises with the log tail if the process fails.
+    """
     from tqdm.auto import tqdm
 
     with open(cfg_path, "w") as f:
@@ -245,7 +290,8 @@ def launch_training(
         elif "Error" in line or "Traceback" in line:
             print(f"[{desc}] {line}", flush=True)
 
-    code = stream_process(cmd, env, on_line, log_path)
+    timeout_s = cfg["train_seconds"] * RUN_GRACE[0] + RUN_GRACE[1]
+    code = stream_process(cmd, env, on_line, log_path, timeout_s=timeout_s)
     bar.n = 100
     bar.close()
     if code != 0:

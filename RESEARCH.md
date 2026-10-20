@@ -453,7 +453,7 @@ All of these remain unmeasured until the TSR and FG notebooks have run.
 
 ```text
 src/neuralss/          single source of the library (embedded into the notebooks at build time)
-  nss_common.py        run folders, logging, hardware report, pip helper, training launcher
+  nss_common.py        run folders, logging, hardware report, pip helper, training launcher with a watchdog
   nss_data.py          source registry, discovery, Hugging Face range access, decoding, window / crop workers, manifest I/O
   nss_dedup.py         hashes, embeddings, GPU neighbour search, SIFT + RANSAC verification, calibration copies, leakage-group split
   nss_pipeline.py      data-pipeline steps and the inline fallback
@@ -466,7 +466,7 @@ src/neuralss/          single source of the library (embedded into the notebooks
   train_tsr.py, train_fg.py
 notebooks/             percent-format notebook sources
 tools/build_notebooks.py   builds the .ipynb files whose sources changed (python tools/build_notebooks.py [--check])
-neural-data-pipeline/neural-data-pipeline.ipynb   executed Kaggle copy with saved outputs (run of 18 October 2026)
+neural-data-pipeline/neural-data-pipeline.ipynb   executed Kaggle copy with saved outputs (run of 18 October 2026); its embedded library cells follow src/neuralss, the code that ran is in outputs/code
 neural-data-pipeline/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, nss_data/nss_manifest.parquet, __notebook__.ipynb
 neural-data-pipeline/outputs.zip   the same files as the run's zip
 neural-supersampling/neural-supersampling.ipynb
@@ -481,10 +481,14 @@ neural-supersampling/outputs/   archived outputs of the superseded single-frame 
 
 Each notebook can also run alone (inline manifest, smaller caps). `QUICK_RUN = True` gives a short smoke test of every cell.
 
+**If a version shows no logs for a long time.** Kaggle mounts every attached input before the kernel starts, and no cell output exists until it does. A version that ends with `Mount data: ERRORED_MOUNTING_DATASET` for one dataset never ran any code (seen for `daehoyang/flickr2k` in both training notebooks in October 2026, a dataset that mounted normally for the data pipeline on 18 October). Stop the version, remove or re-add that dataset in the inputs and save again; the training notebooks leave out manifest sources whose data is not reachable and record the check in `metrics/reachable_sources.json`.
+
 **Run safeguards in the training notebooks.**
 
 - The library runs on PyTorch 2.0 (the Kaggle image of the data-pipeline run) and later: gradient scaling and ONNX export go through version-independent helpers.
-- Training caches go to `/tmp/nss_cache`, outside the 20 GB saved-output folder.
+- Training caches go to `/tmp/nss_cache`, outside the 20 GB saved-output folder. All caches share one decoding budget (`cache.build_min`, 30 minutes: a quarter for stills, three quarters for windows or quads, validation first), so slow data access shrinks the caches instead of the training time.
+- Sources of the manifest whose Kaggle dataset is not attached or not mounted are left out with a log line, instead of failing one decode at a time.
+- A watchdog kills a training run, with all its DDP processes, once it is 25 percent plus 15 minutes past its budget, so a hung data-loader worker or collective is recorded as a failed run instead of holding the session until Kaggle's limit. Interrupting the cell also kills the run's processes.
 - Batch sizes are probed to 75 percent of VRAM, and the notebook releases its cached GPU memory before every training run.
 - A run that runs out of GPU memory is retried once with half the batch. Any other failed run is recorded in `metrics/failed_runs.json` and does not stop the notebook: students train without distillation if the teacher failed, and evaluation skips missing models, unreadable clips and methods that fail on one suite.
 

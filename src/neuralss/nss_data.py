@@ -439,6 +439,24 @@ def kaggle_uri(ref, root, path):
     return f"kaggle:{ref}|{Path(path).relative_to(root).as_posix()}"
 
 
+def reachable_sources(manifest, data_root, input_root="/kaggle/input", probes=3):
+    """{source: bool}: whether any of the first `probes` items of each manifest source resolves to an existing
+    file. A Kaggle dataset that is not attached (or failed to mount) or missing materialised data is False, so its
+    items can be left out instead of failing one decode at a time."""
+    resolver = Resolver(data_root, input_root)
+    status = {}
+    for name, df in manifest.groupby("source"):
+        status[name] = False
+        for frames in df["frames"].head(probes):
+            try:
+                if frames and resolver.path(frames[0]).exists():
+                    status[name] = True
+                    break
+            except FileNotFoundError:
+                break
+    return status
+
+
 def read_video_frames(path, indices):
     import cv2
 

@@ -12,9 +12,9 @@
 # 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock cosine schedule. Loss per frame: Charbonnier + gradient + Fourier magnitude + LPIPS (perceptual) + temporal-change loss along exact motion; students also match the teacher's outputs (knowledge distillation).
 # 4. **Evaluation.** Spatial quality (PSNR / SSIM on Y, LPIPS, FLIP), temporal stability (warping error and temporal-change error along exact motion, tOF with RAFT), region metrics (disocclusions, fine detail, particles), static-scene convergence, motion-speed classes, a native-render generalisation test (GameIR 720p to 1440p), against bilinear, bicubic and an analytic TAA upscaler. Ablations: no history, no G-buffers, bicubic degradation, no temporal loss, no distillation. Latency of fused tiers at 1080p and 4K outputs, ONNX export.
 #
-# **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, Hugging Face data in the fallback path, RAFT / AlexNet / DINOv2 weights). Attach the output of the `neural-data-pipeline` notebook (**Add Input > Notebook output**) and the same Kaggle datasets it lists (`soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`). Optional secret `HF_TOKEN`.
+# **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, Hugging Face data in the fallback path, RAFT / AlexNet / DINOv2 weights). Attach the output of the `neural-data-pipeline` notebook (**Add Input > Notebook output**) and the same Kaggle datasets it lists (`soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`). Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget** (enforced; numbers in the configuration cell): caches about 25 min, teacher 100 min, main student 80 min, parallel `igpu` 3x and `low` 2x students 50 min, three parallel ablation pairs 20 min each, evaluation and export about 45 min: about 6.5 hours of a 9.5-hour ceiling. `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
+# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 100 min, main student 80 min, parallel `igpu` 3x and `low` 2x students 50 min, three parallel ablation pairs 20 min each, evaluation and export about 45 min: about 6.5 hours of a 9.5-hour ceiling. `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
 #
 # **Outputs** in `/kaggle/working/`:
 #
@@ -181,6 +181,7 @@ DEVICES = [torch.device("cuda", i) for i in range(HW["gpus"])]
 # * `p_real` is the share of each batch drawn from real sequences; the rest is synthetic.
 # * Loss weights follow the research plan: temporal 0.5, LPIPS 0.05, distillation 0.5.
 # * `minutes` are wall-clock training budgets per stage; they are scaled down automatically if the run budget is short.
+# * `cache.build_min` is the total decoding budget of all training caches.
 
 # %%
 QUICK_RUN = False
@@ -269,7 +270,7 @@ print(json.dumps(CFG["minutes"]), json.dumps(CFG["cache"]))
 # %% [markdown]
 # ## 5. Dataset manifest
 #
-# Looks for `nss_manifest.parquet` in an attached `neural-data-pipeline` output. If it is missing, the same pipeline runs inline with smaller caps (Kaggle discovery, Hugging Face subsets in `/tmp/nss_data`, quality filters, copy detection with DINOv2 candidates and SIFT verification, leakage-safe split with audit), which adds roughly 30 to 60 minutes. Expected output: where the manifest came from and the item counts per split.
+# Looks for `nss_manifest.parquet` in an attached `neural-data-pipeline` output. If it is missing, the same pipeline runs inline with smaller caps (Kaggle discovery, Hugging Face subsets in `/tmp/nss_data`, quality filters, copy detection with DINOv2 candidates and SIFT verification, leakage-safe split with audit), which adds roughly 30 to 60 minutes. Then checks that every source in the manifest is readable and leaves out sources whose Kaggle dataset is not attached (or failed to mount), so a run can go ahead with a subset of the datasets. Expected output: where the manifest came from, any sources left out, and the item counts per split.
 
 # %%
 with RUN.stage("manifest"):
@@ -279,6 +280,12 @@ with RUN.stage("manifest"):
         DATA_ROOT = Path("/tmp/nss_data")
         PL.build_manifest(DATA_ROOT, C.INPUT_ROOT, CFG["pipeline"], DEVICES, log=log)
     MANIFEST = D.load_manifest(DATA_ROOT / "nss_manifest.parquet")
+    REACHABLE = D.reachable_sources(MANIFEST, DATA_ROOT, C.INPUT_ROOT)
+    RUN.save_json(REACHABLE, "reachable_sources.json")
+    missing = sorted(s for s, ok in REACHABLE.items() if not ok)
+    if missing:
+        log(f"sources left out (dataset not attached or not mounted): {missing}")
+        MANIFEST = MANIFEST[~MANIFEST["source"].isin(missing)]
 log(f"data root: {DATA_ROOT}")
 print(pd.crosstab(MANIFEST["source"], MANIFEST["split"]).to_string())
 
@@ -310,15 +317,16 @@ assert ITEMS[
 # * still crops of 512x512 for the synthetic renderer (random down-scale per source for varied detail density, flat crops rejected);
 # * windows of 6 frames at 192x192 with motion vectors, validity and depth at half resolution.
 #
-# Windows from video sources get RAFT motion (frame to previous frame) with a forward-backward consistency mask, computed on both GPUs. Expected output: progress bars, counts per source and the cache size.
+# Windows from video sources get RAFT motion (frame to previous frame) with a forward-backward consistency mask, computed on both GPUs. Decoding shares one time budget, `build_min`: a quarter for stills, three quarters for windows; the small validation caches are built first and the training caches get the rest of each share, so a slow dataset mount shrinks the caches instead of the training time. Expected output: progress bars, counts per source and the cache size.
 
 # %%
 CACHE = Path("/tmp/nss_cache")
 CACHE.mkdir(parents=True, exist_ok=True)
 CACHES = {}
 with RUN.stage("caches"):
-    deadline = CFG["cache"]["build_min"] * 60
-    for split in ("train", "val"):
+    budget_s = CFG["cache"]["build_min"] * 60
+    t0 = time.time()
+    for split in ("val", "train"):
         n = CFG["cache"][f"still_{split}"]
         tasks = K.still_tasks(
             ITEMS[f"tex_{split}"],
@@ -334,7 +342,7 @@ with RUN.stage("caches"):
             n,
             CFG["still_size"],
             os.cpu_count(),
-            deadline,
+            max(60, 0.25 * budget_s - (time.time() - t0)),
             log=log,
         )
         CACHES[f"still_{split}"] = {
@@ -344,7 +352,8 @@ with RUN.stage("caches"):
     RAFTS = [M.load_raft(d, log=log) for d in DEVICES]
     RAFTS = RAFTS if all(r is not None for r in RAFTS) else []
     WIN_COUNTS = {}
-    for split in ("train", "val"):
+    t0 = time.time()
+    for split in ("val", "train"):
         prefix = CACHE / f"win_{split}"
         cnt, counts, need = K.build_window_cache(
             ITEMS[f"seq_{split}"],
@@ -354,7 +363,7 @@ with RUN.stage("caches"):
             T,
             P,
             os.cpu_count(),
-            deadline,
+            max(60, 0.75 * budget_s - (time.time() - t0)),
             CFG["seed"] + (split == "val"),
             log=log,
         )
@@ -635,7 +644,7 @@ RUN.save_csv(
 #
 # Builds one JSON config per run and launches `code/train_tsr.py`: DDP on both GPUs for the main stages, or two single-GPU runs in parallel threads for the paired stages and ablations. Each run streams `PROGRESS` lines into a progress bar (percent of its time budget, loss, sequences per second, learning rate, per-GPU memory) and `ROUND` lines (validation PSNR-Y, temporal-change error) into a live chart. Stage budgets are scaled down if the run budget is short.
 #
-# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: the planned minutes per stage.
+# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). A run still alive 25 percent plus 15 minutes past its budget (a hung data-loader worker or collective) is killed with all its processes by a watchdog. Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: the planned minutes per stage.
 
 # %%
 remaining_h = RUN_BUDGET_H - RUN.hours() - CFG["eval"]["eval_reserve_h"]
@@ -687,7 +696,7 @@ def run_cfg(name, tier, scale, minutes, batch, teacher_ckpt=None, **over):
         "val_caches": {"still": CACHES["still_val"], "seq": CACHES["seq_val"]},
         "val_bs": CFG["val_bs"],
         "val_batches": CFG["val_batches"],
-        "workers_per_rank": max(1, os.cpu_count() // 2 - 0),
+        "workers_per_rank": max(1, os.cpu_count() // 2),
         "weights_dir": str(RUN.dirs["weights"]),
         "metrics_dir": str(RUN.dirs["metrics"]),
     }

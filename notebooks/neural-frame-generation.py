@@ -10,9 +10,9 @@
 # 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock schedule. Loss: Charbonnier + census + LPIPS + flow supervision + UI-mask cross-entropy + distillation. Engine inputs are randomly dropped so one model serves engine integrations and post-process integrations.
 # 4. **Evaluation.** PSNR, SSIM, LPIPS, interpolation error, quality in occluded regions, UI-region PSNR and UI ghosting rate (with and without the engine's separate UI layer), scene-cut detection, menus, rapid camera reversals (with and without the camera prior), temporal consistency of the displayed sequence (tOF), motion classes; against frame repeat, frame averaging and motion-vector reprojection. Ablations: no UI training, no motion priors, interpolation-only, extrapolation-only, no distillation. Latency of fused tiers at 1080p and 1440p, an input-to-photon pacing model for native, interpolation, extrapolation and late-latched extrapolation, ONNX export.
 #
-# **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`.
+# **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget.** Caches about 25 min, teacher 70 min, main student 80 min, parallel `igpu` / `mid` students 50 min, three ablation pairs of 20 min, evaluation about 40 min: about 6 hours of a 9.5-hour ceiling. `QUICK_RUN = True` gives a 40-minute smoke test.
+# **Budget.** Caches at most 30 min, teacher 70 min, main student 80 min, parallel `igpu` / `mid` students 50 min, three ablation pairs of 20 min, evaluation about 40 min: about 6 hours of a 9.5-hour ceiling. `QUICK_RUN = True` gives a 40-minute smoke test.
 #
 # **Outputs** in `/kaggle/working/`: `code/`, `weights/` (checkpoints, fused models, ONNX), `plots/`, `metrics/`, `logs/`, `predictions/`, `outputs.zip` (training caches are deleted first).
 
@@ -165,6 +165,7 @@ DEVICES = [torch.device("cuda", i) for i in range(HW["gpus"])]
 # * `p_extrap` share of extrapolation samples (the low-latency mode); `p_ui`, `p_menu`, `p_cut`, `p_flip` control UI overlays, menus, scene cuts and rapid camera reversals in synthetic batches.
 # * Loss weights: census 0.5, LPIPS 0.1, flow 0.01 (per pixel of flow error), UI 0.2, distillation 0.5.
 # * `minutes`: wall-clock budgets per stage, scaled to the remaining run budget.
+# * `cache.build_min`: the total decoding budget of all training caches.
 
 # %%
 QUICK_RUN = False
@@ -252,7 +253,7 @@ print(json.dumps(CFG["minutes"]), json.dumps(CFG["cache"]))
 # %% [markdown]
 # ## 5. Dataset manifest
 #
-# Uses the attached `neural-data-pipeline` output, or builds a smaller manifest inline with the same code (adds about 30 to 60 minutes). Expected output: the data root and item counts per split.
+# Uses the attached `neural-data-pipeline` output, or builds a smaller manifest inline with the same code (adds about 30 to 60 minutes). Then checks that every source in the manifest is readable and leaves out sources whose Kaggle dataset is not attached (or failed to mount), so a run can go ahead with a subset of the datasets. Expected output: the data root, any sources left out, and item counts per split.
 
 # %%
 with RUN.stage("manifest"):
@@ -262,6 +263,12 @@ with RUN.stage("manifest"):
         DATA_ROOT = Path("/tmp/nss_data")
         PL.build_manifest(DATA_ROOT, C.INPUT_ROOT, CFG["pipeline"], DEVICES, log=log)
     MANIFEST = D.load_manifest(DATA_ROOT / "nss_manifest.parquet")
+    REACHABLE = D.reachable_sources(MANIFEST, DATA_ROOT, C.INPUT_ROOT)
+    RUN.save_json(REACHABLE, "reachable_sources.json")
+    missing = sorted(s for s, ok in REACHABLE.items() if not ok)
+    if missing:
+        log(f"sources left out (dataset not attached or not mounted): {missing}")
+        MANIFEST = MANIFEST[~MANIFEST["source"].isin(missing)]
 log(f"data root: {DATA_ROOT}")
 print(pd.crosstab(MANIFEST["source"], MANIFEST["split"]).to_string())
 
@@ -288,15 +295,16 @@ assert ITEMS[
 # %% [markdown]
 # ## 7. Training caches
 #
-# Memory-mapped 512x512 still crops (synthetic textures) and quads of four 192x192 frames in `/tmp/nss_cache` (local disk outside `/kaggle/working`, so about 10 GB of caches never count toward the 20 GB saved output), decoded with all CPU cores; RAFT teacher flows for each quad on both GPUs: 2 -> 0 (the engine-style motion vector of the newest real frame), 1 -> 0 and 1 -> 2 (interpolation targets) and 3 -> 2 (extrapolation target). Expected output: progress bars, counts per source, cache size.
+# Memory-mapped 512x512 still crops (synthetic textures) and quads of four 192x192 frames in `/tmp/nss_cache` (local disk outside `/kaggle/working`, so about 10 GB of caches never count toward the 20 GB saved output), decoded with all CPU cores; RAFT teacher flows for each quad on both GPUs: 2 -> 0 (the engine-style motion vector of the newest real frame), 1 -> 0 and 1 -> 2 (interpolation targets) and 3 -> 2 (extrapolation target). Decoding shares one time budget, `build_min`: a quarter for stills, three quarters for quads; the small validation caches are built first and the training caches get the rest of each share, so a slow dataset mount shrinks the caches instead of the training time. Expected output: progress bars, counts per source, cache size.
 
 # %%
 CACHE = Path("/tmp/nss_cache")
 CACHE.mkdir(parents=True, exist_ok=True)
 CACHES = {}
 with RUN.stage("caches"):
-    deadline = CFG["cache"]["build_min"] * 60
-    for split in ("train", "val"):
+    budget_s = CFG["cache"]["build_min"] * 60
+    t0 = time.time()
+    for split in ("val", "train"):
         n = CFG["cache"][f"still_{split}"]
         tasks = K.still_tasks(
             ITEMS[f"tex_{split}"],
@@ -312,7 +320,7 @@ with RUN.stage("caches"):
             n,
             CFG["still_size"],
             os.cpu_count(),
-            deadline,
+            max(60, 0.25 * budget_s - (time.time() - t0)),
             log=log,
         )
         CACHES[f"still_{split}"] = {
@@ -322,7 +330,8 @@ with RUN.stage("caches"):
     RAFTS = [M.load_raft(d, log=log) for d in DEVICES]
     RAFTS = RAFTS if all(r is not None for r in RAFTS) else []
     QUAD_COUNTS = {}
-    for split in ("train", "val"):
+    t0 = time.time()
+    for split in ("val", "train"):
         prefix = CACHE / f"quad_{split}"
         cnt, counts, need = K.build_window_cache(
             ITEMS[f"quad_{split}"],
@@ -332,7 +341,7 @@ with RUN.stage("caches"):
             4,
             P,
             os.cpu_count(),
-            deadline,
+            max(60, 0.75 * budget_s - (time.time() - t0)),
             CFG["seed"] + (split == "val"),
             flows=True,
             log=log,
@@ -561,7 +570,7 @@ RUN.save_csv(
 #
 # One JSON config per run; `code/train_fg.py` runs with DDP on both GPUs for main stages, or as two single-GPU processes in parallel for paired stages and ablations. Progress bars follow `PROGRESS` lines; validation rounds (PSNR overall, interpolation, extrapolation and UI regions) update a live chart.
 #
-# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: planned minutes per stage.
+# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). A run still alive 25 percent plus 15 minutes past its budget (a hung data-loader worker or collective) is killed with all its processes by a watchdog. Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: planned minutes per stage.
 
 # %%
 remaining_h = RUN_BUDGET_H - RUN.hours() - CFG["eval"]["eval_reserve_h"]
