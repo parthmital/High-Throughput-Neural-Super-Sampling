@@ -1,7 +1,14 @@
-{
-	"exported": true,
-	"error": null,
-	"onnxruntime_max_abs_diff": null,
-	"onnxruntime_check": "skipped: ModuleNotFoundError(\"No module named 'onnxruntime'\")",
-	"onnx_mb": 0.131
-}
+[
+	{
+		"model": "student_s3",
+		"exported": true,
+		"ort_max_abs": 6.258487701416016e-7,
+		"onnx_mb": 0.45
+	},
+	{
+		"model": "igpu_s3",
+		"exported": true,
+		"ort_max_abs": 1.0132789611816406e-6,
+		"onnx_mb": 0.136
+	}
+]

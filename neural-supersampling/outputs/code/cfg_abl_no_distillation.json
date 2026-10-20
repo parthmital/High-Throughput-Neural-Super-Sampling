@@ -1,0 +1,69 @@
+{
+	"name": "abl_no_distillation",
+	"tier": "low",
+	"scale": 3,
+	"seq_len": 6,
+	"patch": 192,
+	"seed": 11,
+	"batch_per_gpu": 48,
+	"p_real": 0.4,
+	"lr": 0.002,
+	"min_lr": 1e-6,
+	"warmup_frac": 0.03,
+	"weight_decay": 0.0001,
+	"ema_decay": 0.999,
+	"grad_clip": 1.0,
+	"w_grad": 0.1,
+	"w_fft": 0.05,
+	"w_temporal": 0.5,
+	"w_lpips": 0.05,
+	"w_distill": 0.5,
+	"teacher_ckpt": null,
+	"teacher_tier": "teacher",
+	"train_seconds": 1200.0,
+	"val_interval_s": 200.0,
+	"progress_interval_s": 15,
+	"sync_every": 10,
+	"select_metric": "psnr_y",
+	"caches": {
+		"still": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_train.npy"
+			},
+			"count": 6017
+		},
+		"seq": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/win_train_rgb.npy",
+				"mv": "/tmp/nss_cache/win_train_mv.npy",
+				"valid": "/tmp/nss_cache/win_train_valid.npy",
+				"depth": "/tmp/nss_cache/win_train_depth.npy",
+				"meta": "/tmp/nss_cache/win_train_meta.npy"
+			},
+			"count": 3600
+		}
+	},
+	"val_caches": {
+		"still": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_val.npy"
+			},
+			"count": 256
+		},
+		"seq": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/win_val_rgb.npy",
+				"mv": "/tmp/nss_cache/win_val_mv.npy",
+				"valid": "/tmp/nss_cache/win_val_valid.npy",
+				"depth": "/tmp/nss_cache/win_val_depth.npy",
+				"meta": "/tmp/nss_cache/win_val_meta.npy"
+			},
+			"count": 192
+		}
+	},
+	"val_bs": 8,
+	"val_batches": 4,
+	"workers_per_rank": 2,
+	"weights_dir": "/kaggle/working/weights",
+	"metrics_dir": "/kaggle/working/metrics"
+}

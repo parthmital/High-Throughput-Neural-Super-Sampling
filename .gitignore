@@ -4,3 +4,5 @@
 .agent-local/
 __pycache__/
 *.env
+*.zip
+__notebook__.ipynb

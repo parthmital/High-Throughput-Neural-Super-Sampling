@@ -1,0 +1,51 @@
+{
+	"caches": {
+		"still_val": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_val.npy"
+			},
+			"count": 256
+		},
+		"still_train": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_train.npy"
+			},
+			"count": 6017
+		},
+		"seq_val": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/win_val_rgb.npy",
+				"mv": "/tmp/nss_cache/win_val_mv.npy",
+				"valid": "/tmp/nss_cache/win_val_valid.npy",
+				"depth": "/tmp/nss_cache/win_val_depth.npy",
+				"meta": "/tmp/nss_cache/win_val_meta.npy"
+			},
+			"count": 192
+		},
+		"seq_train": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/win_train_rgb.npy",
+				"mv": "/tmp/nss_cache/win_train_mv.npy",
+				"valid": "/tmp/nss_cache/win_train_valid.npy",
+				"depth": "/tmp/nss_cache/win_train_depth.npy",
+				"meta": "/tmp/nss_cache/win_train_meta.npy"
+			},
+			"count": 3600
+		}
+	},
+	"window_sources": {
+		"val": {
+			"vimeo_septuplet": 188,
+			"reds": 4
+		},
+		"train": {
+			"vimeo_septuplet": 3267,
+			"vimeo1080p": 91,
+			"reds": 149,
+			"gameir": 26,
+			"tartanair": 39,
+			"sintel": 28
+		}
+	},
+	"cache_gb": 9.3
+}

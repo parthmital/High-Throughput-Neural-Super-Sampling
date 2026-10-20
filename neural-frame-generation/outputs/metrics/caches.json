@@ -1,0 +1,46 @@
+{
+	"caches": {
+		"still_val": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_val.npy"
+			},
+			"count": 256
+		},
+		"still_train": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_train.npy"
+			},
+			"count": 4616
+		},
+		"quad_val": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/quad_val_rgb.npy",
+				"flows": "/tmp/nss_cache/quad_val_flows.npy",
+				"meta": "/tmp/nss_cache/quad_val_meta.npy"
+			},
+			"count": 256
+		},
+		"quad_train": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/quad_train_rgb.npy",
+				"flows": "/tmp/nss_cache/quad_train_flows.npy",
+				"meta": "/tmp/nss_cache/quad_train_meta.npy"
+			},
+			"count": 3678
+		}
+	},
+	"quad_sources": {
+		"val": {
+			"vimeo_septuplet": 251,
+			"reds": 5
+		},
+		"train": {
+			"vimeo_septuplet": 3364,
+			"reds": 152,
+			"vimeo1080p": 89,
+			"sintel": 28,
+			"tartanair": 45
+		}
+	},
+	"cache_gb": 10.22
+}

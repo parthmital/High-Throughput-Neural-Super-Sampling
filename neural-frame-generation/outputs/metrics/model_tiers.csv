@@ -1,0 +1,6 @@
+tier,train_params,fused_params,gmac_per_1080p_frame,parity_max_abs
+igpu,16953,12089,1.55,0.0
+low,40497,28545,3.67,0.0
+mid,134610,94546,30.42,0.0
+high,342066,238770,76.98,0.0
+teacher,701202,487954,157.51,0.0

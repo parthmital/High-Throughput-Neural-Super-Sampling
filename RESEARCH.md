@@ -467,11 +467,11 @@ src/neuralss/          single source of the library (embedded into the notebooks
 notebooks/             percent-format notebook sources
 tools/build_notebooks.py   builds the .ipynb files whose sources changed (python tools/build_notebooks.py [--check])
 neural-data-pipeline/neural-data-pipeline.ipynb   executed Kaggle copy with saved outputs (run of 18 October 2026); its embedded library cells follow src/neuralss, the code that ran is in outputs/code
-neural-data-pipeline/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, nss_data/nss_manifest.parquet, __notebook__.ipynb
-neural-data-pipeline/outputs.zip   the same files as the run's zip
-neural-supersampling/neural-supersampling.ipynb
-neural-frame-generation/neural-frame-generation.ipynb
-neural-supersampling/outputs/   archived outputs of the superseded single-frame notebook (section 19)
+neural-data-pipeline/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, nss_data/nss_manifest.parquet
+neural-supersampling/neural-supersampling.ipynb   executed Kaggle copy with saved outputs
+neural-supersampling/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, weights/
+neural-frame-generation/neural-frame-generation.ipynb   executed Kaggle copy with saved outputs
+neural-frame-generation/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, weights/
 ```
 
 **Run order on Kaggle** (GPU T4 x2, Internet on):

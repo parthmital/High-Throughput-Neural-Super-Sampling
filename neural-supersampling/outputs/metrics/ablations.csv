@@ -1,0 +1,13 @@
+suite,method,psnr_y,ssim_y,lpips,temporal_err,psnr_disocc
+synthetic-game,abl_bicubic_degradation,26.7767,0.7527,0.2635,0.0416,31.8694
+synthetic-game,abl_no_distillation,32.3494,0.8987,0.1049,0.0123,34.3766
+synthetic-game,abl_no_gbuffers,29.7929,0.8287,0.1769,0.0224,34.0095
+synthetic-game,abl_no_history,30.7305,0.8495,0.1342,0.0224,35.7831
+synthetic-game,abl_no_temporal_loss,32.4514,0.9008,0.0952,0.0149,34.5471
+synthetic-game,abl_reference,32.3204,0.8979,0.107,0.0126,34.4106
+tartanair,abl_bicubic_degradation,29.815,0.8623,0.1307,0.0198,29.3181
+tartanair,abl_no_distillation,32.7535,0.9178,0.1034,0.0107,29.5372
+tartanair,abl_no_gbuffers,31.2039,0.8628,0.1585,0.0172,30.5577
+tartanair,abl_no_history,32.2166,0.9009,0.1276,0.013,31.0806
+tartanair,abl_no_temporal_loss,33.1445,0.9214,0.0949,0.0109,30.1269
+tartanair,abl_reference,32.662,0.9158,0.1093,0.0109,29.4637

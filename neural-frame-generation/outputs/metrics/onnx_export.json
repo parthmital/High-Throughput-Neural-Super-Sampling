@@ -1,0 +1,14 @@
+[
+	{
+		"model": "student",
+		"exported": true,
+		"ort_max_abs": 4.202127456665039e-6,
+		"onnx_mb": 0.325
+	},
+	{
+		"model": "igpu",
+		"exported": true,
+		"ort_max_abs": 2.86102294921875e-6,
+		"onnx_mb": 0.259
+	}
+]

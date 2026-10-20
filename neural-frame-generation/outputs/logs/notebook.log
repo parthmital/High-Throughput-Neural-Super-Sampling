@@ -1,0 +1,28 @@
+11:07:19 | start: manifest
+11:07:24 | done: manifest in 0.1 min (run total 0.01 h)
+11:07:24 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
+11:07:24 | start: caches
+11:08:16 | still_val.npy: 256 crops (0 decode failures)
+11:14:56 | still_train.npy: 4616 crops (1 decode failures)
+11:16:41 | quad_val: 256 windows (0 failures)
+11:37:30 | quad_train: 3678 windows (0 failures)
+11:38:12 | done: caches in 30.8 min (run total 0.52 h)
+11:38:19 | start: batch_probe
+11:38:48 | done: batch_probe in 0.5 min (run total 0.53 h)
+11:38:48 | start: train_teacher
+12:49:19 | done: train_teacher in 70.5 min (run total 1.71 h)
+12:49:19 | start: train_student
+14:09:33 | done: train_student in 80.2 min (run total 3.04 h)
+14:09:33 | start: train_pair
+14:59:51 | done: train_pair in 50.3 min (run total 3.88 h)
+14:59:51 | start: ablations
+16:00:43 | done: ablations in 60.9 min (run total 4.90 h)
+16:00:47 | start: test_suites
+16:03:11 | done: test_suites in 2.4 min (run total 4.94 h)
+16:03:11 | start: evaluation
+16:03:42 | vimeo_triplet done
+16:03:50 | tartanair done
+16:04:02 | sintel done
+16:04:18 | vimeo1080p done
+16:04:22 | vid4 done
+16:04:22 | done: evaluation in 1.2 min (run total 4.96 h)

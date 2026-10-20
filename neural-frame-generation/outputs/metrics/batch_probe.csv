@@ -1,0 +1,15 @@
+batch,fits,peak_vram_pct,samples_per_s,run
+8,True,6.6,43.5,teacher
+16,True,11.9,59.6,teacher
+24,True,17.4,63.4,teacher
+32,True,22.8,64.2,teacher
+48,True,33.6,65.0,teacher
+64,True,44.5,65.1,teacher
+96,True,66.0,64.9,teacher
+8,True,5.4,56.5,student
+16,True,9.6,63.4,student
+24,True,13.9,67.9,student
+32,True,18.1,69.0,student
+48,True,26.6,70.1,student
+64,True,35.2,70.6,student
+96,True,52.2,71.4,student

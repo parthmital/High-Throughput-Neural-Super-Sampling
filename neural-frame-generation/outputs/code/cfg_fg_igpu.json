@@ -1,0 +1,68 @@
+{
+	"name": "fg_igpu",
+	"tier": "igpu",
+	"patch": 192,
+	"seed": 21,
+	"batch_per_gpu": 96,
+	"p_real": 0.4,
+	"p_extrap": 0.5,
+	"p_ui": 0.5,
+	"p_menu": 0.03,
+	"p_cut": 0.03,
+	"p_flip": 0.1,
+	"lr": 0.002,
+	"min_lr": 1e-6,
+	"warmup_frac": 0.03,
+	"weight_decay": 0.0001,
+	"ema_decay": 0.999,
+	"grad_clip": 1.0,
+	"w_census": 0.5,
+	"w_lpips": 0.1,
+	"w_flow": 0.01,
+	"w_ui": 0.2,
+	"w_distill": 0.5,
+	"teacher_ckpt": "/kaggle/working/weights/fg_teacher_best.pt",
+	"ui_training": true,
+	"train_seconds": 3000.0,
+	"val_interval_s": 480,
+	"progress_interval_s": 15,
+	"sync_every": 10,
+	"select_metric": "psnr",
+	"caches": {
+		"still": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_train.npy"
+			},
+			"count": 4616
+		},
+		"quad": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/quad_train_rgb.npy",
+				"flows": "/tmp/nss_cache/quad_train_flows.npy",
+				"meta": "/tmp/nss_cache/quad_train_meta.npy"
+			},
+			"count": 3678
+		}
+	},
+	"val_caches": {
+		"still": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/still_val.npy"
+			},
+			"count": 256
+		},
+		"quad": {
+			"arrays": {
+				"rgb": "/tmp/nss_cache/quad_val_rgb.npy",
+				"flows": "/tmp/nss_cache/quad_val_flows.npy",
+				"meta": "/tmp/nss_cache/quad_val_meta.npy"
+			},
+			"count": 256
+		}
+	},
+	"val_bs": 16,
+	"val_batches": 4,
+	"workers_per_rank": 2,
+	"weights_dir": "/kaggle/working/weights",
+	"metrics_dir": "/kaggle/working/metrics"
+}
