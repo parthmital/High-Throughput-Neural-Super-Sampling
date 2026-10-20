@@ -610,7 +610,10 @@ def probe(student_tier, teacher_tier, scale, sizes):
                 }
             )
             del net, teacher, opt, outs, state, loss, b
-        except torch.cuda.OutOfMemoryError:
+        except RuntimeError as exc:  # CUDA OOM, or cuDNN / cuBLAS failing to allocate
+            msg = str(exc)
+            if "out of memory" not in msg.lower() and "ALLOC_FAILED" not in msg:
+                raise
             rows.append({"batch": bs, "fits": False})
             break
     torch.cuda.empty_cache()
@@ -705,7 +708,11 @@ def run_cfg(name, tier, scale, minutes, batch, teacher_ckpt=None, **over):
 
 
 def live_plot(title):
-    handle = display(plt.figure(), display_id=True)
+    placeholder = plt.figure()
+    handle = display(placeholder, display_id=True)
+    plt.close(
+        placeholder
+    )  # otherwise the inline backend shows it again, empty, when the cell ends
 
     def update(rounds):
         h = pd.DataFrame(rounds)
@@ -1443,12 +1450,13 @@ for key in ("igpu_s3", "student_s3", "student_s2", "teacher_s3"):
 LAT = pd.DataFrame(lat_rows)
 RUN.save_csv(LAT, "latency.csv", index=False)
 print(LAT.round(2).to_string(index=False))
-fig, ax = plt.subplots(figsize=(10, 3.8))
-LAT.pivot_table(index="model", columns="output", values="t4_mean_ms").plot.bar(
-    ax=ax, rot=0
-)
-ax.set_ylabel("ms per frame (T4, PyTorch FP16)")
-RUN.show(fig, "latency")
+if len(LAT):  # empty when no model trained
+    fig, ax = plt.subplots(figsize=(10, 3.8))
+    LAT.pivot_table(index="model", columns="output", values="t4_mean_ms").plot.bar(
+        ax=ax, rot=0
+    )
+    ax.set_ylabel("ms per frame (T4, PyTorch FP16)")
+    RUN.show(fig, "latency")
 
 # %% [markdown]
 # ## 27. ONNX export

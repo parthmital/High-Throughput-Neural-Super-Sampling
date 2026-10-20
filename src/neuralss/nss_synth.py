@@ -215,7 +215,9 @@ def foreground_alpha(n, size, g, device, centres):
 
 
 def make_text_bank(n, seed, height=40, width=320):
-    """RGBA uint8 tiles (n, 4, height, width) of HUD-like text, bars and icons rendered with PIL (CPU, once)."""
+    """RGBA uint8 tiles (n, 4, height, width) of HUD-like text, bars and icons rendered with PIL (CPU, once).
+    Font sizes and shapes scale with the tile height (designed at 40 px; works from about 16 px).
+    """
     import matplotlib.font_manager as fm
     from PIL import Image, ImageDraw, ImageFont
 
@@ -271,7 +273,7 @@ def make_text_bank(n, seed, height=40, width=320):
             fp = font_paths[int(rng.integers(0, len(font_paths)))]
             try:
                 font = (
-                    ImageFont.truetype(fp, int(rng.integers(14, 30)))
+                    ImageFont.truetype(fp, int(rng.integers(14, 30)) * height // 40)
                     if fp
                     else ImageFont.load_default()
                 )
@@ -287,14 +289,20 @@ def make_text_bank(n, seed, height=40, width=320):
             )
         elif kind == 1:  # health / progress bar
             frac = rng.uniform(0.1, 1.0)
+            m = height // 4  # vertical inset
             d.rectangle(
-                [4, 10, width - 5, height - 11], outline=(255, 255, 255, 255), width=2
+                [4, m, width - 5, height - 1 - m],
+                outline=(255, 255, 255, 255),
+                width=2,
             )
-            d.rectangle([7, 13, 7 + int((width - 15) * frac), height - 14], fill=col)
+            d.rectangle(
+                [7, m + 3, 7 + int((width - 15) * frac), height - 4 - m], fill=col
+            )
         else:  # crosshair / minimap frame
             cx, cy = width // 2, height // 2
-            d.line([cx - 14, cy, cx + 14, cy], fill=col, width=2)
-            d.line([cx, cy - 14, cx, cy + 14], fill=col, width=2)
+            arm = min(14, cy - 2)
+            d.line([cx - arm, cy, cx + arm, cy], fill=col, width=2)
+            d.line([cx, cy - arm, cx, cy + arm], fill=col, width=2)
             d.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=col, width=1)
         tiles.append(np.asarray(img).transpose(2, 0, 1))
     return np.stack(tiles)

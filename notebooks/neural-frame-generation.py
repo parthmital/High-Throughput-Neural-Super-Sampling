@@ -538,7 +538,10 @@ def probe(tier, with_teacher, sizes):
                 }
             )
             del net, teacher, opt, out, aux, loss, b
-        except torch.cuda.OutOfMemoryError:
+        except RuntimeError as exc:  # CUDA OOM, or cuDNN / cuBLAS failing to allocate
+            msg = str(exc)
+            if "out of memory" not in msg.lower() and "ALLOC_FAILED" not in msg:
+                raise
             rows.append({"batch": bs, "fits": False})
             break
     torch.cuda.empty_cache()
@@ -630,7 +633,11 @@ def run_cfg(name, tier, minutes, batch, teacher_ckpt=None, **over):
 
 
 def live_plot(title):
-    handle = display(plt.figure(), display_id=True)
+    placeholder = plt.figure()
+    handle = display(placeholder, display_id=True)
+    plt.close(
+        placeholder
+    )  # otherwise the inline backend shows it again, empty, when the cell ends
 
     def update(rounds):
         h = pd.DataFrame(rounds)
