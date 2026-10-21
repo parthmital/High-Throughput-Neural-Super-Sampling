@@ -6,8 +6,8 @@ Technical research plan for an open neural rendering and reconstruction stack th
 
 - The repository holds three Kaggle notebooks built from one shared library (`src/neuralss`): a data pipeline, temporal super-resolution (TSR) and frame generation (FG).
 - **The data pipeline ran end to end on Kaggle GPU T4 x2 on 18 October 2026** (0.63 hours, no cell errors, zero cross-split duplicates after the audit). Its measured results are in section 6.1 and its outputs in `neural-data-pipeline/outputs/`.
-- **The TSR and FG notebooks ran end to end on Kaggle GPU T4 x2 on 20 October 2026** (TSR 5.48 hours, FG 4.98 hours, no cell errors, no failed runs recorded). Measured results are in sections 7.1 and 8.1, outputs in `neural-supersampling/outputs/` and `neural-frame-generation/outputs/`.
-- **Two defects of the TSR run were fixed afterwards and are not yet re-measured** (section 7.1): the TSR teacher diverged to NaN from step 10, so no TSR model was distilled, and every GameIR native-render evaluation ran out of GPU memory. The FG evaluation on TartanAir and Sintel now feeds the exact motion vectors instead of RAFT motion. The repository notebooks hold these fixes without outputs; the executed copies are kept as `<notebook>/outputs/<notebook>.executed.ipynb`.
+- **The TSR and FG notebooks ran end to end on Kaggle GPU T4 x2 on 20 to 21 October 2026** (TSR 5.34 hours, FG 4.93 hours, no cell errors, no failed runs). This second pair of runs confirmed the fixes of the first (the TSR teacher trained, the GameIR native suite ran). Measured results are in sections 7.1 and 8.1, outputs in `neural-supersampling/outputs/` and `neural-frame-generation/outputs/`.
+- **Evaluation defects found in these runs were fixed afterwards and are not yet re-measured** (sections 7.1 and 8.1): the TSR bicubic baseline ignored the jitter, TSR motion vectors on video were estimated on jittered low-resolution frames, and blank, frozen or cut test clips distorted the Vimeo-1080p suites. Training budgets were also raised, since every validation curve was still rising. The repository notebooks hold these changes without outputs; the executed copies are kept as `<notebook>/outputs/<notebook>.executed.ipynb`.
 - Labels: _fact_ (with a source), _estimate_ (arithmetic), _measured_ (a Kaggle run, with its output file), _hypothesis_ (to be tested).
 
 ## 1. Objective
@@ -123,12 +123,12 @@ Inputs are at render resolution `h x w`; the output is `s` times larger.
 
 ### 4.4 Teacher networks
 
-- **TSR teacher.** The same architecture at 64 channels, 8 blocks and a 6-block U-Net level (1,373,508 fused parameters, measured in `neural-supersampling/outputs/metrics/model_tiers.csv`). It is trained first; students learn from its outputs as well as from ground truth. In the run of 20 October 2026 it diverged (section 7.1), so the students trained without distillation.
+- **TSR teacher.** The same architecture at 64 channels, 8 blocks and a 6-block U-Net level (1,373,508 fused parameters, measured in `neural-supersampling/outputs/metrics/model_tiers.csv`). It is trained first; students learn from its outputs as well as from ground truth. It diverged in the first run (FP16 overflow from the RepConv initialisation) and trained normally in the run of 20 to 21 October 2026 (33.72 dB validation PSNR-Y, section 7.1).
 - **FG privileged teacher.** It also sees the true target frame, following RIFE's privileged distillation; its flows and outputs supervise the students.
 
 ### 4.5 Tiers
 
-Arithmetic estimates from the definitions in `src/neuralss/nss_models.py`. The runs of 20 October 2026 measured the same parameter and GMAC counts with forward hooks (`model_tiers.csv` in each notebook's outputs), with fused-versus-unfused parity 0.0 for every tier.
+Arithmetic estimates from the definitions in `src/neuralss/nss_models.py`. The Kaggle runs measured the same parameter and GMAC counts with forward hooks (`model_tiers.csv` in each notebook's outputs), with fused-versus-unfused parity 0.0 for every tier.
 
 | TSR tier  | Width / blocks / U-Net blocks / hidden | Fused params (3x) | GMAC per 1080p frame, 3x (2x) | Intended hardware   |
 | :-------- | :------------------------------------- | :---------------- | :---------------------------- | :------------------ |
@@ -280,34 +280,35 @@ Compared with the first run, dropped items fell from 8,150 to 756 and training i
 - **Schedule.** Teacher first (both GPUs), then the main 3x student with distillation, then the `igpu` 3x and `low` 2x students in parallel (one per GPU), then six ablation runs in three parallel pairs. AdamW, cosine schedule over each run's wall-clock budget, EMA weights, best checkpoint by validation PSNR-Y.
 - **Ratios.** 3x is primary and 2x is trained. **1.5x is not trained yet.** The pixel-shuffle head needs an integer factor; options (section 14): an integer-factor model with a resampled output, or a fractional head with a learned resampling kernel.
 
-### 7.1 Measured results (Kaggle GPU T4 x2, run of 20 October 2026)
+### 7.1 Measured results (Kaggle GPU T4 x2, run of 20 to 21 October 2026)
 
-Source: `neural-supersampling/outputs/metrics/` (`test_results.csv`, `test_per_frame.csv`, `static_convergence.csv`, `ablations.csv`, `latency.csv`, `best_validation.csv`, `summary.json`); the README has every table. Image: PyTorch 2.0.0, CUDA 11.8, Python 3.10.
+Source: `neural-supersampling/outputs/metrics/` (`test_results.csv`, `test_per_frame.csv`, `static_convergence.csv`, `ablations.csv`, `latency.csv`, `best_validation.csv`, `summary.json`); the README has every table. Image: PyTorch 2.0.0, CUDA 11.8, Python 3.10. Budgets: teacher 100, student 80, pair 50, ablations 20 minutes.
 
-| Measurement                                 | Value                                                                                                                                                    |
-| :------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Caches                                      | 6,017 still crops, 3,600 training windows (3,267 Vimeo-90K, 149 REDS, 91 Vimeo-1080p, 39 TartanAir, 28 Sintel, 26 GameIR); 9.30 GB; 27.2 min             |
-| Window motion                               | 1.9 percent exact, 98.1 percent RAFT-estimated; validation windows are Vimeo-90K and REDS only (no exact-motion source has validation items)             |
-| Batch per GPU                               | 48 for every run (the largest probed size; 23.9 percent VRAM for the teacher)                                                                            |
-| Teacher (`tsr_teacher_s3`, 100 min)         | **Failed silently**: loss NaN from step 10 to the end (4,760 steps), no best checkpoint, so every student trained without distillation                   |
-| Best validation PSNR-Y                      | `low` 3x 32.33 dB (round 9), `igpu` 3x 31.41 dB, `low` 2x 36.63 dB                                                                                       |
-| 3x student vs analytic TAAU, synthetic-game | PSNR-Y 33.66 vs 29.36 dB, LPIPS 0.068 vs 0.261, temporal-change error 0.0106 vs 0.0110                                                                   |
-| 3x student vs analytic TAAU, TartanAir      | PSNR-Y 33.00 vs 30.64 dB, LPIPS 0.085 vs 0.243, temporal-change error 0.0107 vs 0.0104                                                                   |
-| 3x student vs analytic TAAU, Sintel         | PSNR-Y 34.00 vs 31.07 dB, LPIPS 0.127 vs 0.271, temporal-change error 0.0100 vs 0.0092                                                                   |
-| Video suites, 3x (RAFT motion)              | Jitter-aware bilinear is best on PSNR-Y: Vid4 24.55 dB (student 23.33), Vimeo-1080p 45.83 dB (student 42.34); the student has lower LPIPS on Vimeo-1080p |
-| Static convergence, last frame              | Student 33.69 dB / FLIP 0.037, `igpu` 31.95 / 0.040, no-history ablation 28.01 / 0.056, analytic TAAU 28.42 / 0.062, bilinear 27.29 / 0.068              |
-| Ablations, synthetic-game PSNR-Y delta      | No G-buffers -2.53 dB, no history -1.59, bicubic degradation -5.54, no temporal loss +0.13 (temporal error +0.002), no distillation +0.03 (no teacher)   |
-| T4 latency, fused FP16, 3x to 1080p         | `igpu` 10.14 ms, `low` 14.03 ms (4K: 39.84 and 56.06 ms); 2x `low` to 1080p 24.16 ms                                                                     |
-| ONNX                                        | `low` 3x 0.45 MB, `igpu` 3x 0.136 MB; ONNX Runtime max difference 6.3e-7 and 1.0e-6                                                                      |
-| GameIR native 2x                            | **Not measured**: every method ran out of GPU memory (RAFT tOF on 1440x1920 frames needs a 6.95 GiB correlation volume)                                  |
+| Measurement                                               | Value                                                                                                                                                                       |
+| :-------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Caches                                                    | 6,500 still crops, 3,600 training windows (3,267 Vimeo-90K, 149 REDS, 91 Vimeo-1080p, 39 TartanAir, 28 Sintel, 26 GameIR); 9.30 GB; 19.6 min                                |
+| Window motion                                             | 1.9 percent exact, 98.1 percent RAFT-estimated; validation windows are Vimeo-90K and REDS only (no exact-motion source has validation items)                                |
+| Batch per GPU                                             | 48 for every run (the largest probed size; 35.5 percent VRAM for the teacher); finite loss at initialisation for every size                                                 |
+| Best validation PSNR-Y                                    | Teacher 33.72 dB (round 12), `low` 3x 32.46, `igpu` 3x 31.55, `low` 2x 36.88; every curve still rising when its schedule ended                                              |
+| 3x student vs analytic TAAU, synthetic-game               | PSNR-Y 33.67 vs 29.36 dB, LPIPS 0.078 vs 0.261, temporal-change error 0.0110 vs 0.0110 (teacher 35.49 dB, 0.0086)                                                           |
+| 3x student vs analytic TAAU, TartanAir                    | PSNR-Y 32.88 vs 30.64 dB, LPIPS 0.098 vs 0.243, temporal-change error 0.0109 vs 0.0104                                                                                      |
+| 3x student vs analytic TAAU, Sintel                       | PSNR-Y 33.91 vs 31.07 dB, LPIPS 0.143 vs 0.271, temporal-change error 0.0102 vs 0.0092                                                                                      |
+| Video suites, 3x (RAFT motion)                            | Jitter-aware bilinear best on PSNR-Y: Vid4 24.55 dB (student 23.66, teacher 24.32), Vimeo-1080p 45.83 dB (student 42.61, teacher 45.30); the networks have the lowest LPIPS |
+| GameIR native 2x (a real renderer's low-resolution image) | Student 32.59 dB, bicubic 32.33, bilinear 32.30, analytic TAAU 30.77; LPIPS 0.141 against 0.169 for bicubic                                                                 |
+| Static convergence, last frame                            | Teacher 38.50 dB / FLIP 0.019, student 35.30 / 0.029, `igpu` 32.72 / 0.034, no-history ablation 28.10 / 0.054, analytic TAAU 28.42 / 0.062, bilinear 27.29 / 0.068          |
+| Ablations, synthetic-game PSNR-Y delta                    | Bicubic degradation -5.72 dB, no G-buffers -2.21, no history -1.99, no temporal loss -0.11 (temporal error +0.002), no distillation +0.11                                   |
+| T4 latency, fused FP16, 3x to 1080p                       | `igpu` 10.05 ms, `low` 13.93 ms, teacher 43.84 ms (4K: 39.81, 55.77, 184.59 ms); 2x `low` to 1080p 24.06 ms                                                                 |
+| ONNX                                                      | `low` 3x 0.45 MB, `igpu` 3x 0.136 MB; ONNX Runtime max difference 4.8e-7 and 6.0e-7                                                                                         |
 
-**Defects found and fixed (not yet re-measured).**
+**Defects found in this run's evaluation and fixed (not yet re-measured).**
 
-1. _Teacher divergence._ RepConv's default initialisation grows activations about 1.9x per block (section 4.2); the 15-block teacher overflowed FP16 at initialisation, the gradient scaler skipped every step, and the run spent its whole 100-minute budget unchanged. Fixes: zero-initialised side branches; the training loop stops a run whose loss is non-finite for 200 steps on any rank (it is then recorded in `failed_runs.json`); the batch probe reports `finite_loss`. The FG teacher (6 blocks per level) trained normally.
-2. _GameIR native OOM._ `raft_flow` now estimates flow at most 1024 px on the longer side and rescales it, which leaves every suite evaluated so far (all at most 1008 px) unchanged.
-3. Fusion parity is now also checked for the 2x model (it was blank), and the distillation ablation logs when it equals the reference.
+1. _Bicubic baseline._ `run_bicubic` ignored the per-frame jitter, shifting each frame by up to half a low-resolution pixel. It scored below bilinear everywhere except on the jitter-free GameIR native suite (32.33 against 32.30 dB) and had 1.4 to 2.2 times bilinear's temporal-change error. Both baselines now share `nss_models.jitter_upsample`.
+2. _Motion on video suites._ RAFT ran on the jittered low-resolution inputs, so the vectors also carried the jitter difference between frames, while the training caches estimate motion on clean full-resolution frames. Evaluation now runs RAFT on the full-resolution frames and samples the flow at the jittered positions, like exact motion. This is a plausible cause of the students' video results: the ablations without G-buffers and without history, which do not warp history along these vectors, both beat the reference on Vimeo-1080p (42.79 and 44.27 against 41.70 dB).
+3. _Blank test clip._ One Vimeo-1080p clip is blank: every baseline scores the 100 dB cap, the student 78.2 and the teacher 88.9. Without it, 3x reads bilinear 38.09, student 37.52, teacher 39.07, analytic TAAU 35.00 dB, and 2x reads student 43.17 against bilinear 41.38 dB. `nss_eval.test_clips` now skips blank clips.
 
-**Reading.** On the game-like suites with exact motion the 3x student beats the analytic TAA upscaler by 2.4 to 4.3 dB PSNR-Y at a quarter to a half of its LPIPS, with temporal-change error 4 percent lower on synthetic scenes and 3 to 9 percent higher on TartanAir and Sintel. On video with estimated motion it does not beat a jitter-aware bilinear upsample on PSNR-Y. Validation PSNR of the ablations is not comparable across ablations, because each one validates on batches built with its own recipe (the bicubic ablation validates on easier bicubic inputs and reports the highest score, 33.21 dB); the test suites are the comparison.
+The previous run's defects (teacher divergence from the RepConv initialisation, GameIR out of memory) are confirmed fixed by this run.
+
+**Reading.** On the game-like suites with exact motion the 3x student beats the analytic TAA upscaler by 2.2 to 4.3 dB PSNR-Y at a third to a half of its LPIPS, with equal temporal-change error on synthetic scenes and 5 to 11 percent higher on TartanAir and Sintel. The teacher is 0.6 to 1.8 dB above the student, and the 2x student wins on a real renderer's low-resolution images. Distillation from the trained teacher shows no gain within 20-minute ablations (the run without a teacher also made 27 percent more steps in the same time). The student's output shows a faint dot pattern at the 3x pixel-shuffle period on flat areas, less visible in the teacher's.
 
 ## 8. Frame-generation strategy
 
@@ -323,34 +324,35 @@ Source: `neural-supersampling/outputs/metrics/` (`test_results.csv`, `test_per_f
   - Rapid input reversal: measured with and without the camera prior.
   - Low base frame rate: generation becomes less reliable as motion between real frames grows, so integrations should offer a minimum base frame rate (FSR recommends rendering slightly below half the output rate; section 3.1).
 
-### 8.1 Measured results (Kaggle GPU T4 x2, run of 20 October 2026)
+### 8.1 Measured results (Kaggle GPU T4 x2, run of 20 to 21 October 2026)
 
-Source: `neural-frame-generation/outputs/metrics/` (`test_results.csv`, `test_per_sample.csv`, `ui_results.csv`, `temporal_consistency.csv`, `ablations.csv`, `latency.csv`, `pacing_model.csv`, `cut_detector.json`, `summary.json`); the README has every table. Image: PyTorch 2.11.0, CUDA 12.8, Python 3.13. The run used the library before commit `792f2cc` (HUD tiles drawn at fixed sizes); its code is archived in `neural-frame-generation/outputs/code/`.
+Source: `neural-frame-generation/outputs/metrics/` (`test_results.csv`, `test_per_sample.csv`, `ui_results.csv`, `temporal_consistency.csv`, `ablations.csv`, `latency.csv`, `pacing_model.csv`, `cut_detector.json`, `summary.json`); the README has every table. Image: PyTorch 2.0.0, CUDA 11.8, Python 3.10. Budgets: teacher 70, student 80, pair 50, ablations 20 minutes.
 
-| Measurement                               | Value                                                                                                                                                                   |
-| :---------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Caches                                    | 4,616 still crops, 3,678 training quads (3,364 Vimeo-90K, 152 REDS, 89 Vimeo-1080p, 45 TartanAir, 28 Sintel); 10.22 GB; 30.8 min                                        |
-| Batch per GPU                             | 96 for teacher and student (66.0 percent VRAM for the teacher)                                                                                                          |
-| Best validation PSNR                      | Privileged teacher 33.84 dB, `low` 27.20, `mid` 27.69, `igpu` 26.89                                                                                                     |
-| Student vs MV reprojection, interpolation | Vimeo-90K triplet 32.87 vs 31.83 dB, TartanAir 29.30 vs 28.06, Sintel 24.22 vs 24.16, Vid4 27.84 vs 27.35, Vimeo-1080p 44.25 vs 44.38, synthetic 35.79 vs 34.87         |
-| Student vs MV reprojection, extrapolation | TartanAir 26.87 vs 26.97 dB, Sintel 23.13 vs 23.10, Vid4 25.80 vs 25.89, Vimeo-1080p 44.22 vs 43.76, synthetic 31.78 vs 30.86                                           |
-| UI (synthetic-ui, interpolation)          | Ghosting rate: student 0.052, student with the engine UI layer 0.025, MV reprojection 0.396, average 0.294; UI PSNR 31.04, 47.03 and 13.79 dB                           |
-| Cuts and menus                            | Cut detector threshold 0.1686, detection rate 1.0 at the 1 percent false-alarm target; every gated network outputs the newest real frame on the cut suite               |
-| Camera reversal (extrapolation)           | Student 23.94 dB with and without the camera prior; frame repeat 24.86, MV reprojection 23.56: **the camera prior has no measurable effect**                            |
-| Displayed-sequence tOF (lower is better)  | Student is worse than MV reprojection on all three suites: TartanAir 0.854 vs 0.690, Vimeo-1080p 17.58 vs 14.18, Vimeo-90K triplet 0.328 vs 0.306                       |
-| Ablations, real interpolation PSNR        | No motion prior -7.8 dB on TartanAir and -6.0 dB on Vimeo-90K triplet; on Vimeo-90K triplet, no distillation +0.06 dB and interpolation-only +1.0 dB over the reference |
-| T4 latency, fused FP16                    | `igpu` 15.37 ms, `low` 16.28 ms, `mid` 38.01 ms at 1080p (1440p: 26.88, 28.56, 67.15 ms), against 0.8 to 15 ms arithmetic estimates at 4 TFLOPS                         |
-| Pacing model, 30 fps base (T4 FG time)    | Native 30 fps / 38.3 ms; interpolation 40 fps, game latency 79.4 ms; extrapolation 40 fps, 38.3 ms; late-latched camera latency 27.8 ms                                 |
-| ONNX                                      | `low` 0.325 MB, `igpu` 0.259 MB; ONNX Runtime max difference 4.2e-6 and 2.9e-6                                                                                          |
+| Measurement                               | Value                                                                                                                                                                                   |
+| :---------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Caches                                    | 5,682 still crops, 6,000 training quads (5,493 Vimeo-90K, 252 REDS, 142 Vimeo-1080p, 70 TartanAir, 43 Sintel); 10.22 GB; 27.9 min                                                       |
+| Batch per GPU                             | 96 for teacher and student (66.0 percent VRAM for the teacher)                                                                                                                          |
+| Best validation PSNR                      | Privileged teacher 33.59 dB, `low` 26.88, `mid` 27.39, `igpu` 26.51                                                                                                                     |
+| Student vs MV reprojection, interpolation | Vimeo-90K triplet 32.85 vs 31.83 dB, TartanAir 29.21 vs 27.98, Sintel 24.41 vs 24.46, Vid4 27.88 vs 27.35, synthetic 35.63 vs 34.87, Vimeo-1080p without defective clips 36.52 vs 35.92 |
+| Student vs MV reprojection, extrapolation | TartanAir 26.72 vs 26.91 dB, Sintel 23.06 vs 23.29, Vid4 25.79 vs 25.89, synthetic 31.88 vs 30.86, Vimeo-1080p without defective clips 34.38 vs 33.49                                   |
+| UI (synthetic-ui, interpolation)          | Ghosting rate: student 0.063, student with the engine UI layer 0.025, MV reprojection 0.336, average 0.296; UI PSNR 31.69, 48.74 and 14.99 dB                                           |
+| Cuts and menus                            | Cut detector threshold 0.1825, detection rate 1.0 at the 1 percent false-alarm target; every gated network outputs the newest real frame on the cut suite                               |
+| Camera reversal (extrapolation)           | Student 23.91 dB with and without the camera prior; frame repeat 24.86, MV reprojection 23.55: **the camera prior has no measurable effect**                                            |
+| Displayed-sequence tOF (lower is better)  | MV reprojection beats the student on all three suites: TartanAir 0.750 vs 0.838, Vimeo-90K triplet 0.306 vs 0.316, Vimeo-1080p 14.36 vs 17.07 (inflated by blank clips)                 |
+| Ablations, real interpolation PSNR        | No motion prior -7.9 dB on TartanAir and -6.1 dB on Vimeo-90K triplet; no UI training +1.6 dB on triplet but UI ghosting 0.224 against 0.077; distillation +0.4 dB on triplet           |
+| T4 latency, fused FP16                    | `igpu` 15.59 ms, `low` 16.52 ms, `mid` 38.54 ms at 1080p (1440p: 27.15, 28.99, 68.86 ms), against 0.8 to 15 ms arithmetic estimates at 4 TFLOPS                                         |
+| Pacing model, 30 fps base (T4 FG time)    | Native 30 fps / 38.3 ms; interpolation 40 fps, game latency 79.8 ms; extrapolation 40 fps, 38.3 ms; late-latched camera latency 27.9 ms                                                 |
+| ONNX                                      | `low` 0.327 MB, `igpu` 0.261 MB; ONNX Runtime max difference 4.4e-6 and 3.1e-6                                                                                                          |
+
+**Defects found in this run's evaluation and fixed (not yet re-measured).** Three of the twelve Vimeo-1080p test clips cannot measure frame generation: two are blank (repeat, average and reprojection reach the 100 dB cap, `mid` scores 74 to 86 and the teacher 71 to 72 dB, which is why the reported means put the teacher and `mid` below the student), and one has a scene cut inside its four frames. `nss_eval.test_clips` now skips blank and frozen clips and clips with a cut or flash; the synthetic cut suite still tests cut handling. The run summary also listed empty Vimeo-90K triplet extrapolation entries; they are gone.
 
 **Reading.**
 
-- Interpolation beats motion-vector reprojection on 5 of 6 suites; extrapolation is level with it on real suites (within 0.1 dB, except +0.46 dB on Vimeo-1080p).
-- UI handling works: the learned mask cuts UI ghosting about 8x against reprojection, and the engine UI layer halves it again.
-- Distillation from the privileged teacher does not help the students in this budget, and the teacher's 5 to 7 dB margin on real interpolation suites shows how much the target frame is worth, not a deployable bound.
+- Interpolation beats motion-vector reprojection on 5 of 6 suites (Sintel 0.05 dB below). With exact engine motion vectors (TartanAir, Sintel), extrapolation is 0.2 dB below reprojection; on synthetic scenes and Vimeo-1080p it is ahead.
+- UI handling works: the learned mask cuts UI ghosting about 5x against reprojection, and the engine UI layer more than halves it again.
+- Distillation from the privileged teacher now helps interpolation slightly (0.2 to 0.4 dB). The teacher's 4 to 7 dB margin on real suites shows how much the target frame is worth, not a deployable bound.
 - The camera prior is unused. `FGNet.priors` substitutes the camera flow only when no motion vector is available, so with engine motion vectors the network sees the camera prior only as an input channel, and reversals appear in only 10 percent of synthetic samples. Feeding a camera-warped I1 as an extra input, or substituting the camera flow for the background in extrapolation, is the next experiment (hypothesis).
-- T4 eager PyTorch time is far above the arithmetic estimate: FGNet warps at full resolution at every level and pads to multiples of 8, which a compute-shader implementation would fuse. At 16 ms per generated frame on a T4, the pacing model shows interpolation adding latency without doubling the frame rate.
-- Since the run, the TartanAir and Sintel evaluation feeds the exact motion vector of I1 (frame 2 to 1 composed with 1 to 0) instead of RAFT motion; those numbers will change in the next run.
+- T4 eager PyTorch time is far above the arithmetic estimate: FGNet warps at full resolution at every level and pads to multiples of 8, which a compute-shader implementation would fuse. At 16.5 ms per generated frame on a T4, the pacing model shows interpolation adding latency without doubling the frame rate.
 
 ## 9. UI and text handling
 
@@ -390,7 +392,7 @@ The model is driven by T4-measured generation times; on target hardware these mu
 
 | Teacher                                                                                                                                                                                                                                                                                                                  | Status          | Use                                                                                                                                                                                  |
 | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| In-notebook TSR teacher (1.37M params)                                                                                                                                                                                                                                                                                   | Implemented     | Output distillation for the `low` and `igpu` students; diverged in the run of 20 October 2026 (section 7.1), initialisation fixed, not yet re-run                                    |
+| In-notebook TSR teacher (1.37M params)                                                                                                                                                                                                                                                                                   | Implemented     | Output distillation for the `low` and `igpu` students; trained in the run of 20 to 21 October 2026, but distillation gave no measurable gain (section 7.1)                           |
 | In-notebook privileged FG teacher                                                                                                                                                                                                                                                                                        | Implemented     | Flow and output distillation; trained (33.84 dB validation PSNR) but distillation gave no measurable student gain (section 8.1)                                                      |
 | RAFT small ([torchvision](https://pytorch.org/vision/stable/models/raft.html), BSD-3)                                                                                                                                                                                                                                    | Implemented     | Motion for video, flow supervision, tOF metric                                                                                                                                       |
 | DINOv2-small                                                                                                                                                                                                                                                                                                             | Implemented     | Deduplication embeddings                                                                                                                                                             |
@@ -415,7 +417,7 @@ The model is driven by T4-measured generation times; on target hardware these mu
 
 **Baselines.**
 
-- TSR: bicubic, jitter-aware bilinear, and an analytic TAA upscaler (history reprojection, YCoCg 3x3 neighbourhood clamp, 10 percent blend).
+- TSR: jitter-aware bicubic and bilinear upsampling (both sample at the true jittered positions), and an analytic TAA upscaler (history reprojection, YCoCg 3x3 neighbourhood clamp, 10 percent blend).
 - FG: frame repeat, average, motion-vector reprojection.
 - FSR 3.1 itself needs engine captures; comparing against it is planned (section 17).
 
@@ -468,15 +470,15 @@ Next (not yet run):
 4. UI ghosting rate is far below the reprojection baseline.
 5. Fused-model parity is below 1e-3, and ONNX Runtime parity is checked.
 
-Status after the runs of 20 October 2026 (sections 7.1 and 8.1):
+Status after the runs of 20 to 21 October 2026 (sections 7.1 and 8.1):
 
 | Criterion                         | Result                                                                                                                                                                             |
 | :-------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Student beats analytic TAAU    | Partly met. PSNR-Y and LPIPS better on synthetic-game, TartanAir and Sintel; temporal-change error better on synthetic-game only (0.0106 vs 0.0110), worse on TartanAir and Sintel |
-| 2. Static convergence             | Met: 33.69 dB against 28.01 dB for the no-history ablation (last frame of 16)                                                                                                      |
-| 3. FG beats MV reprojection       | Met for interpolation on 5 of 6 suites; not met for extrapolation on real suites (level within 0.1 dB, one win)                                                                    |
-| 4. UI ghosting far below baseline | Met: 0.052 against 0.396 (0.025 with the engine UI layer)                                                                                                                          |
-| 5. Parity                         | Met: fused parity 0.0; ONNX Runtime at most 4.2e-6                                                                                                                                 |
+| 1. Student beats analytic TAAU    | Partly met. PSNR-Y and LPIPS better on synthetic-game, TartanAir and Sintel; temporal-change error equal on synthetic-game (0.0110), 5 to 11 percent worse on TartanAir and Sintel |
+| 2. Static convergence             | Met: 35.30 dB against 28.10 dB for the no-history ablation (last frame of 16)                                                                                                      |
+| 3. FG beats MV reprojection       | Met for interpolation on 5 of 6 suites (Sintel 0.05 dB below); not met for extrapolation with exact motion (TartanAir and Sintel 0.2 dB below)                                     |
+| 4. UI ghosting far below baseline | Met: 0.063 against 0.336 (0.025 with the engine UI layer)                                                                                                                          |
+| 5. Parity                         | Met: fused parity 0.0; ONNX Runtime at most 4.4e-6                                                                                                                                 |
 
 ## 15. Known limitations
 
@@ -491,11 +493,12 @@ Status after the runs of 20 October 2026 (sections 7.1 and 8.1):
 7. **No head-to-head with FSR 3.1, DLSS or XeSS yet** (it needs engine captures with their SDKs).
 8. **Perceptual deduplication is keyframe-based** with global thresholds (section 6).
 9. **1.5x is not trained.** Fractional ratios need a different output head.
-10. **No TSR distillation and no native-render result yet.** The teacher diverged and the GameIR native suite ran out of memory in the first TSR run; both are fixed in code but unmeasured.
+10. **Distillation is weak.** The trained TSR teacher gave no measurable gain in 20-minute ablations, and FG distillation 0.2 to 0.4 dB on interpolation. The 3x TSR student also shows a faint dot pattern at the pixel-shuffle period on flat areas.
 11. **Validation is not comparable across ablations.** Each ablation validates on batches built with its own recipe; only the shared test suites compare them.
 12. **TSR validation has no exact-motion source.** TartanAir and Sintel have no validation items in the manifest, so checkpoint selection uses Vimeo-90K and REDS windows with RAFT motion.
 13. **The FG camera prior is unused** in the trained models (section 8.1), so the late-latching benefit exists only in the pacing model, not in measured image quality.
 14. **T4 eager latency is 2.5x to 20x the arithmetic estimate** for FG (full-resolution warps per level); compute-shader fusion is needed before latency claims on any GPU.
+15. **The latest evaluation fixes are unmeasured.** The jitter-aware bicubic baseline, RAFT motion from full-resolution frames on video and the test-clip filter (sections 7.1 and 8.1) change the reported numbers; a new run measures by how much.
 
 ## 16. Licensing considerations
 
@@ -512,14 +515,14 @@ Status after the runs of 20 October 2026 (sections 7.1 and 8.1):
 
 ## 17. Roadmap
 
-| Phase                      | Deliverable                                                                                                                                                                               | Acceptance                                                                                            |
-| :------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------- |
-| 0. Kaggle validation (now) | Run the three notebooks; publish metrics, plots and weights (all three ran: 18 and 20 October 2026, sections 6.1, 7.1, 8.1); re-run TSR with the teacher and native-render fixes          | Section 14 success criteria; data audit with zero cross-split duplicates (met by the data pipeline)   |
-| 1. Data scale-up           | More TartanAir environments and trajectories (exact motion, depth), the native multi-resolution `uhecoms` renders, larger Vimeo-1080p subsets, optional Hugging Face token for throughput | Gains on held-out environments; native-LR gap measured                                                |
-| 2. Engine captures         | Open-content UE5 / Unity / Godot scenes captured with jitter, motion vectors, depth, reactive masks, HUD-less colour and UI layers, plus FSR 3.1 outputs for the same frames              | First head-to-head with FSR 3.1 at 3x and 2x                                                          |
-| 3. Quality                 | 1.5x head, perceptual / adversarial stage, multi-frame generation, INT8 for `igpu`                                                                                                        | Static convergence near native (PSNR / FLIP); UI ghosting under target                                |
-| 4. Runtime                 | DirectML and Vulkan (ncnn) integrations, async-compute FG, pacing thread, PresentMon latency on an integrated GPU, an entry GPU and a mid GPU                                             | Measured latency within tier budgets; click-to-photon reported separately for game and camera latency |
-| 5. Release                 | Weights trained only on permissive data; licences confirmed                                                                                                                               | Licence review complete                                                                               |
+| Phase                      | Deliverable                                                                                                                                                                                       | Acceptance                                                                                            |
+| :------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------------------------------------------------------- |
+| 0. Kaggle validation (now) | Run the three notebooks; publish metrics, plots and weights (all three ran: 18 and 20 to 21 October 2026, sections 6.1, 7.1, 8.1); re-run TSR and FG with the evaluation fixes and longer budgets | Section 14 success criteria; data audit with zero cross-split duplicates (met by the data pipeline)   |
+| 1. Data scale-up           | More TartanAir environments and trajectories (exact motion, depth), the native multi-resolution `uhecoms` renders, larger Vimeo-1080p subsets, optional Hugging Face token for throughput         | Gains on held-out environments; native-LR gap measured                                                |
+| 2. Engine captures         | Open-content UE5 / Unity / Godot scenes captured with jitter, motion vectors, depth, reactive masks, HUD-less colour and UI layers, plus FSR 3.1 outputs for the same frames                      | First head-to-head with FSR 3.1 at 3x and 2x                                                          |
+| 3. Quality                 | 1.5x head, perceptual / adversarial stage, multi-frame generation, INT8 for `igpu`                                                                                                                | Static convergence near native (PSNR / FLIP); UI ghosting under target                                |
+| 4. Runtime                 | DirectML and Vulkan (ncnn) integrations, async-compute FG, pacing thread, PresentMon latency on an integrated GPU, an entry GPU and a mid GPU                                                     | Measured latency within tier budgets; click-to-photon reported separately for game and camera latency |
+| 5. Release                 | Weights trained only on permissive data; licences confirmed                                                                                                                                       | Licence review complete                                                                               |
 
 ## 18. Repository layout and how to run
 
@@ -540,10 +543,10 @@ notebooks/             percent-format notebook sources
 tools/build_notebooks.py   builds the .ipynb files whose sources changed (python tools/build_notebooks.py [--check])
 neural-data-pipeline/neural-data-pipeline.ipynb   executed Kaggle copy with saved outputs (run of 18 October 2026); its embedded library cells follow src/neuralss, the code that ran is in outputs/code
 neural-data-pipeline/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, nss_data/nss_manifest.parquet
-neural-supersampling/neural-supersampling.ipynb   current notebook (fixes after the run of 20 October 2026), no outputs
+neural-supersampling/neural-supersampling.ipynb   current notebook (fixes after the run of 20 to 21 October 2026), no outputs
 neural-supersampling/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, weights/, predictions/,
                                 and neural-supersampling.executed.ipynb (the executed notebook with its outputs)
-neural-frame-generation/neural-frame-generation.ipynb   current notebook, no outputs
+neural-frame-generation/neural-frame-generation.ipynb   current notebook (fixes after the run), no outputs
 neural-frame-generation/outputs/   that run's downloaded outputs: metrics/, plots/, logs/, code/, weights/,
                                    and neural-frame-generation.executed.ipynb
 ```
@@ -567,13 +570,14 @@ Each notebook can also run alone (inline manifest, smaller caps). `QUICK_RUN = T
 - A run that runs out of GPU memory is retried once with half the batch. Any other failed run is recorded in `metrics/failed_runs.json` and does not stop the notebook: students train without distillation if the teacher failed, and evaluation skips missing models, unreadable clips and methods that fail on one suite.
 - A run whose loss stays non-finite for 200 steps on any rank stops with an error and is recorded as failed (the first TSR teacher ran its whole 100 minutes on NaN), and the batch probe reports whether the loss is finite at initialisation.
 - RAFT runs at most 1024 px on the longer side (the flow is rescaled), so 1440p clips fit in T4 memory.
+- Test clips go through `nss_eval.test_clips`, which skips unreadable and blank clips and, for frame generation, frozen clips and clips with a scene cut or flash, so no suite mean is set by clips every method reconstructs exactly or none can predict.
 
 ## 19. Prior evidence
 
 | Evidence                                                                                                               | Status                                                                                                                                                                                                                                                                                                                                     |
 | :--------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TSR, temporal redesign (Kaggle, 20 October 2026; `neural-supersampling/outputs`)                                       | _Measured_. 3x `low` student 33.66 dB PSNR-Y on synthetic-game against 29.36 dB for analytic TAAU; teacher diverged; 5.48 hours (section 7.1)                                                                                                                                                                                              |
-| FG (Kaggle, 20 October 2026; `neural-frame-generation/outputs`)                                                        | _Measured_. Interpolation beats MV reprojection on 5 of 6 suites; UI ghosting 0.052 against 0.396; 4.98 hours (section 8.1)                                                                                                                                                                                                                |
+| TSR, temporal redesign (Kaggle, 20 to 21 October 2026; `neural-supersampling/outputs`)                                 | _Measured_. 3x `low` student 33.67 dB PSNR-Y on synthetic-game against 29.36 dB for analytic TAAU; teacher 35.49 dB; 5.34 hours (section 7.1)                                                                                                                                                                                              |
+| FG (Kaggle, 20 to 21 October 2026; `neural-frame-generation/outputs`)                                                  | _Measured_. Interpolation beats MV reprojection on 5 of 6 suites; UI ghosting 0.063 against 0.336; 4.93 hours (section 8.1)                                                                                                                                                                                                                |
 | Single-frame Rep-TNSR v2 run (Kaggle, September 2026; its outputs were replaced in this repository by the October run) | _Measured_, superseded design. Set5 x3 PSNR-Y +2.29 dB and Set14 +1.67 dB over bicubic; fused 640x360 to 1080p in 4.2 ms on a T4. Validation plateaued after about 2 hours (capacity-bound), and 98 of the 100 "DIV2K" test images were also in its training split. These findings motivated the temporal, G-buffer, leakage-safe redesign |
 | Data pipeline, two-stage copy detection (Kaggle, 18 October 2026; `neural-data-pipeline/outputs`)                      | _Measured_. 12,300 items: 8,874 train, 1,087 val, 1,432 test, 756 dropped as test duplicates, 151 filtered; zero cross-split duplicates after 2 audit rounds; 0.63 hours (section 6.1)                                                                                                                                                     |
 | Data pipeline, global-similarity deduplication (Kaggle, October 2026; first run, superseded)                           | _Measured_. 11,392 items: 2,567 train, 134 val, 541 test, 8,150 dropped through one 8,354-item component; 2.73 hours. This motivated geometric verification (section 6)                                                                                                                                                                    |

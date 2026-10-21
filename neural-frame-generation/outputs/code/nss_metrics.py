@@ -223,9 +223,30 @@ def load_raft(device, log=print, large=False):
 
 
 @torch.no_grad()
-def raft_flow(net, a, b, iters=12):
-    """Flow from a to b (for each pixel of a, its displacement in b), pixels; a, b in [0, 1] (N, 3, H, W)."""
+def raft_flow(net, a, b, iters=12, max_side=1024):
+    """Flow from a to b (for each pixel of a, its displacement in b), pixels; a, b in [0, 1] (N, 3, H, W).
+    Inputs whose longer side exceeds max_side are estimated at reduced size and the flow is scaled back: RAFT's
+    all-pairs correlation grows with the square of the pixel count (6.95 GiB for one 1440x1920 pair).
+    """
     h, w = a.shape[-2:]
+    r = min(1.0, max_side / max(h, w))
+    if r < 1.0:
+        size = (max(8, round(h * r)), max(8, round(w * r)))
+        a, b = (
+            F.interpolate(
+                x.float(),
+                size=size,
+                mode="bilinear",
+                antialias=True,
+                align_corners=False,
+            )
+            for x in (a, b)
+        )
+        flow = raft_flow(net, a, b, iters, max_side)
+        flow = F.interpolate(flow, size=(h, w), mode="bilinear", align_corners=False)
+        return flow * torch.tensor([w / size[1], h / size[0]], device=flow.device).view(
+            1, 2, 1, 1
+        )
     ph, pw = (-h) % 8, (-w) % 8
     pa = F.pad(a.float() * 2 - 1, (0, pw, 0, ph), mode="replicate")
     pb = F.pad(b.float() * 2 - 1, (0, pw, 0, ph), mode="replicate")

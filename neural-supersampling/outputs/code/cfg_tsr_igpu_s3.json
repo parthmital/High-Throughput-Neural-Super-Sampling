@@ -18,7 +18,7 @@
 	"w_temporal": 0.5,
 	"w_lpips": 0.05,
 	"w_distill": 0.5,
-	"teacher_ckpt": null,
+	"teacher_ckpt": "/kaggle/working/weights/tsr_teacher_s3_best.pt",
 	"teacher_tier": "teacher",
 	"train_seconds": 3000.0,
 	"val_interval_s": 480,
@@ -30,7 +30,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 6017
+			"count": 6500
 		},
 		"seq": {
 			"arrays": {

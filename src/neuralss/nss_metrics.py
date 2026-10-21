@@ -3,6 +3,7 @@ latency simulator shared by the supersampling and frame-generation notebooks."""
 
 import math
 import os
+import warnings
 
 import numpy as np
 import torch
@@ -164,12 +165,11 @@ def load_lpips(device, log=print):
         import lpips
 
         try:
-            net = (
-                lpips.LPIPS(net="alex", verbose=False)
-                .to(device)
-                .eval()
-                .requires_grad_(False)
-            )
+            # lpips still passes torchvision's deprecated pretrained=True (two warnings per run)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                net = lpips.LPIPS(net="alex", verbose=False)
+            net = net.to(device).eval().requires_grad_(False)
             return lambda a, b: net(a.float(), b.float(), normalize=True).view(-1)
         except Exception as exc:
             log(
@@ -402,9 +402,8 @@ def simulate_latency(
             p_real = p_gen + period / 2
             shown += [p_gen, p_real]
             real_lat.append(p_real - t_input)
-            cam_lat.append(
-                p_gen - t_input
-            )  # the generated frame already moves toward frame k's camera (half way)
+            # the generated frame already moves toward frame k's camera (half way)
+            cam_lat.append(p_gen - t_input)
             ages += [p_gen - t_input, p_real - t_input]
         else:
             p_real = ready + present_ms
@@ -412,9 +411,8 @@ def simulate_latency(
             shown += [p_real, p_gen]
             real_lat.append(p_real - t_input)
             if mode == "extrap_late":
-                t_cam = (
-                    p_gen - fg_ms - present_ms
-                )  # camera re-sampled from input just before generation
+                # camera re-sampled from input just before generation
+                t_cam = p_gen - fg_ms - present_ms
                 cam_lat += [p_real - t_input, p_gen - t_cam]
             else:
                 cam_lat += [p_real - t_input, p_gen - t_input]

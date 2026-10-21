@@ -19,7 +19,12 @@ LAPLACIAN = [[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]]
 
 
 class RepConv(nn.Module):
-    """3x3 + 1x1 + identity + fixed edge filters, folded into one 3x3 convolution on every call."""
+    """3x3 + 1x1 + identity + fixed edge filters, folded into one 3x3 convolution on every call.
+
+    The 1x1 and edge-projection weights start at zero (they still train): with PyTorch's default initialisation
+    every branch adds gain, activations grow about 1.9x per block, and the deep teacher tiers overflow FP16
+    before the first step (the first TSR teacher run was NaN from step 10). At zero, a block starts as
+    3x3 + identity and activations stay of order 1 at any depth."""
 
     def __init__(self, cin, cout, act=True):
         super().__init__()
@@ -27,6 +32,8 @@ class RepConv(nn.Module):
         self.conv3 = nn.Conv2d(cin, cout, 3, padding=1)
         self.conv1 = nn.Conv2d(cin, cout, 1)
         self.edge_pw = nn.Conv2d(3 * cin, cout, 1)
+        nn.init.zeros_(self.conv1.weight)
+        nn.init.zeros_(self.edge_pw.weight)
         self.register_buffer(
             "edges", torch.tensor([SOBEL_X, SOBEL_Y, LAPLACIAN]), persistent=False
         )

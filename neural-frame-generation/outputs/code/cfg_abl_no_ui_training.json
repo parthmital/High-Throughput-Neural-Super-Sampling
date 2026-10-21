@@ -33,7 +33,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 4616
+			"count": 5682
 		},
 		"quad": {
 			"arrays": {
@@ -41,7 +41,7 @@
 				"flows": "/tmp/nss_cache/quad_train_flows.npy",
 				"meta": "/tmp/nss_cache/quad_train_meta.npy"
 			},
-			"count": 3678
+			"count": 6000
 		}
 	},
 	"val_caches": {

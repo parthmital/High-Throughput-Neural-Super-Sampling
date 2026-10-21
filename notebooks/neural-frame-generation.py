@@ -12,7 +12,7 @@
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget.** Caches at most 30 min, teacher 70 min, main student 80 min, parallel `igpu` / `mid` students 50 min, three ablation pairs of 20 min, evaluation about 40 min: about 6 hours of a 9.5-hour ceiling. `QUICK_RUN = True` gives a 40-minute smoke test.
+# **Budget.** Caches at most 30 min, teacher 100 min, main student 120 min, parallel `igpu` / `mid` students 75 min, three ablation pairs of 20 min, evaluation and export about 10 min: about 6.5 hours of a 9.5-hour ceiling (the run of 20 to 21 October 2026 took 4.93 hours with budgets of 70, 80, 50 and 20 minutes, and every validation curve was still rising when its cosine schedule ended). `QUICK_RUN = True` gives a 40-minute smoke test.
 #
 # **Outputs** in `/kaggle/working/`: `code/`, `weights/` (checkpoints, fused models, ONNX), `plots/`, `metrics/`, `logs/`, `predictions/`, `outputs.zip` (training caches are deleted first).
 
@@ -24,9 +24,7 @@
 # %%
 import os
 
-os.makedirs(
-    "/kaggle/working/code", exist_ok=True
-)  # %%writefile does not create folders
+os.makedirs("/kaggle/working/code", exist_ok=True)  # %%writefile does not create it
 
 # %% [markdown]
 # **`nss_common.py`**: run folders, logger, stage timer, figure and metric saving, hardware report, pip helper and the training-process launcher.
@@ -206,9 +204,9 @@ CFG = {
     "val_batches": 2 if QUICK_RUN else 4,
     "val_interval_min": 8,
     "minutes": {
-        "teacher": 4 if QUICK_RUN else 70,
-        "student": 4 if QUICK_RUN else 80,
-        "pair": 3 if QUICK_RUN else 50,
+        "teacher": 4 if QUICK_RUN else 100,
+        "student": 4 if QUICK_RUN else 120,
+        "pair": 3 if QUICK_RUN else 75,
         "ablation": 3 if QUICK_RUN else 20,
     },
     "eval": {
@@ -635,9 +633,8 @@ def run_cfg(name, tier, minutes, batch, teacher_ckpt=None, **over):
 def live_plot(title):
     placeholder = plt.figure()
     handle = display(placeholder, display_id=True)
-    plt.close(
-        placeholder
-    )  # otherwise the inline backend shows it again, empty, when the cell ends
+    # otherwise the inline backend shows it again, empty, when the cell ends
+    plt.close(placeholder)
 
     def update(rounds):
         h = pd.DataFrame(rounds)
@@ -753,7 +750,7 @@ with RUN.stage("train_pair"):
 # %% [markdown]
 # ## 15. Ablations (three parallel pairs)
 #
-# Short `low`-tier runs against a `reference` with the same budget: no UI training (no HUD / subtitle / menu overlays, no UI loss), no motion priors (no engine motion vectors or camera prior), interpolation only, extrapolation only, and no distillation. Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Expected output: final scores of the six runs.
+# Short `low`-tier runs against a `reference` with the same budget: no UI training (no HUD / subtitle / menu overlays, no UI loss), no motion priors (no engine motion vectors or camera prior), interpolation only, extrapolation only, and no distillation. The budgets are equal in wall-clock time, so the `no_distillation` run, which skips the teacher's forward pass, takes more steps (1,170 against 1,040 in the run of 20 to 21 October 2026). Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Each run validates on batches built with its own recipe (for example no UI for `no_ui_training`, interpolation only for `interp_only`), so validation scores are not comparable across ablations; section 25 compares them on the test suites. Expected output: final scores of the six runs.
 
 # %%
 with RUN.stage("ablations"):
@@ -896,7 +893,7 @@ RUN.show(fig, "cut_detector")
 # %% [markdown]
 # ## 19. Test suites
 #
-# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (192x192 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p and Vid4 (both modes, RAFT motion vectors). Clips that cannot be decoded are logged and skipped. Expected output: suite sizes.
+# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (192x192 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p and Vid4 (both modes, RAFT motion vectors). Clips that cannot be decoded are logged and skipped, and so are real clips that cannot test generation (`E.test_clips`): blank frames, frozen (duplicated) frames, where every method reaches the 100 dB PSNR cap, and scene cuts or flashes between the frames, which the synthetic cut suite covers. In the run of 20 to 21 October 2026, two blank Vimeo-1080p clips and one with a cut decided that suite's ranking. Expected output: suite sizes.
 
 # %%
 ev = CFG["eval"]
@@ -916,24 +913,17 @@ with RUN.stage("test_suites"):
     TEST_STILLS = torch.from_numpy(np.stack(crops)).to(DEVICES[0]) if crops else None
 
     def real_quads(source, crop, n, max_side=None):
-        out = []
-        for it in [
-            i
-            for i in TEST_ITEMS
-            if i["source"] == source
-            and i["n_frames"] >= (3 if source == "vimeo_triplet" else 4)
-        ][: n * 3]:
-            Tn = 3 if source == "vimeo_triplet" else 4
-            try:
-                c = E.load_clip(DATA_ROOT, it, 0, Tn, crop, max_side=max_side)
-            except Exception as exc:  # unreadable clip: skip it, keep the suite
-                log(f"{source} {it['item_id']}: skipped ({exc})")
-                c = None
-            if c is not None:
-                out.append((it["item_id"], c))
-            if len(out) >= n:
-                break
-        return out
+        return E.test_clips(
+            TEST_ITEMS,
+            DATA_ROOT,
+            source,
+            crop,
+            n,
+            3 if source == "vimeo_triplet" else 4,
+            max_side=max_side,
+            reject=("blank", "frozen", "cut"),
+            log=log,
+        )
 
     REAL = {
         "vimeo_triplet": real_quads("vimeo_triplet", (256, 448), ev["real_clips"] * 4),
@@ -964,10 +954,8 @@ ROWS = []
 
 def quad_batch(clip, extrap, dev):
     fr = torch.from_numpy(clip["rgb"]).to(dev).permute(0, 3, 1, 2).float()[None] / 255.0
-    i0, i1 = (
-        fr[:, 0],
-        fr[:, 2],
-    )  # triplets: (I0, middle, I1); quads add the extrapolation target as frame 3
+    # triplets: (I0, middle, I1); quads add the extrapolation target as frame 3
+    i0, i1 = fr[:, 0], fr[:, 2]
     target = fr[:, 3] if extrap else fr[:, 1]
     n, _, H, W = i0.shape
     z1 = torch.zeros(n, device=dev)
@@ -1267,10 +1255,13 @@ if len(TOF):
 # %% [markdown]
 # ## 24. Visual comparisons
 #
-# For a UI sample and a fast-motion extrapolation sample: target, baselines and student output, the predicted UI mask, blend weight and flow. Saved to `predictions/`. Expected output: two figures.
+# For a UI sample and a fast-motion extrapolation sample: target, baselines and student output, the predicted UI mask, blend weight and flow. Every image panel is also saved as a full-size PNG in `predictions/`. Expected output: two figures.
 
 
 # %%
+import PIL.Image as PImage
+
+
 def visual(b, title, fname):
     outs = dict(E.fg_baselines(b))
     out, aux = E.run_fg(MODELS["student"], b)
@@ -1280,8 +1271,12 @@ def visual(b, title, fname):
     panels = [("target", b["target"])] + list(outs.items())
     fig, axes = plt.subplots(1, len(panels) + 3, figsize=(3 * (len(panels) + 3), 3.4))
     for ax, (k, img) in zip(axes, panels):
-        ax.imshow(img[0].permute(1, 2, 0).float().cpu().clamp(0, 1).numpy())
+        rgb = img[0].permute(1, 2, 0).float().cpu().clamp(0, 1).numpy()
+        ax.imshow(rgb)
         ax.set_title(k, fontsize=8)
+        PImage.fromarray((rgb * 255).round().astype(np.uint8)).save(
+            RUN.dirs["predictions"] / f"{fname}_{k.replace('+', '_')}.png"
+        )
     axes[len(panels)].imshow(
         aux["ui"][0, 0].float().cpu().numpy(), cmap="gray", vmin=0, vmax=1
     )
@@ -1485,8 +1480,16 @@ summary = {
     "cut_threshold": CUT_THR,
     "cut_detection_rate": cut_rate,
 }
-for suite in ("vimeo_triplet", "tartanair", "vimeo1080p", "synthetic"):
-    for mode in ("interp", "extrap"):
+for suite in (
+    "vimeo_triplet",
+    "tartanair",
+    "sintel",
+    "vid4",
+    "vimeo1080p",
+    "synthetic",
+):
+    # triplets have no fourth frame, so no extrapolation target
+    for mode in ("interp",) if suite == "vimeo_triplet" else ("interp", "extrap"):
         for m in ("mv_reprojection", "student", "igpu"):
             summary[f"{suite}/{mode}/{m}/psnr"] = agg(suite, mode, m, "psnr")
 for m in ("mv_reprojection", "student", "student+ui_layer"):

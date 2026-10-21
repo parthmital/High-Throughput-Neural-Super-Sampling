@@ -10,11 +10,11 @@
 #    * *Real sequences*: TartanAir and Sintel with exact optical flow (played backwards so forward flow becomes the engine-style motion vector) and depth; REDS, Vimeo-90K, Vimeo-1080p and GameIR video with RAFT teacher motion (marked as estimated).
 # 2. **Model.** Per frame, at low resolution: jittered colour, depth and derived normals, motion vectors, a depth disocclusion cue, reactive mask, exposure, jitter offset, availability flags, the previous output warped by the upsampled motion vectors and folded to low resolution (space-to-depth), and a warped recurrent hidden state. A RepConv trunk (with an optional half-resolution U-Net level) predicts a per-pixel history weight and a residual, unfolded by pixel shuffle: `out = a * warped_history + (1 - a) * jitter-aware upsample + residual`. RepConv branches fold into plain 3x3 convolutions for deployment. Tiers: `igpu`, `low`, `mid`, `high`, and a `teacher` used for distillation.
 # 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock cosine schedule. Loss per frame: Charbonnier + gradient + Fourier magnitude + LPIPS (perceptual) + temporal-change loss along exact motion; students also match the teacher's outputs (knowledge distillation).
-# 4. **Evaluation.** Spatial quality (PSNR / SSIM on Y, LPIPS, FLIP), temporal stability (warping error and temporal-change error along exact motion, tOF with RAFT), region metrics (disocclusions, fine detail, particles), static-scene convergence, motion-speed classes, a native-render generalisation test (GameIR 720p to 1440p), against bilinear, bicubic and an analytic TAA upscaler. Ablations: no history, no G-buffers, bicubic degradation, no temporal loss, no distillation. Latency of fused tiers at 1080p and 4K outputs, ONNX export.
+# 4. **Evaluation.** Spatial quality (PSNR / SSIM on Y, LPIPS, FLIP), temporal stability (warping error and temporal-change error along exact motion, tOF with RAFT), region metrics (disocclusions, fine detail, particles), static-scene convergence, motion-speed classes, a native-render generalisation test (GameIR 720p to 1440p), against jitter-aware bilinear and bicubic upsampling and an analytic TAA upscaler. Ablations: no history, no G-buffers, bicubic degradation, no temporal loss, no distillation. Latency of fused tiers at 1080p and 4K outputs, ONNX export.
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, Hugging Face data in the fallback path, RAFT / AlexNet / DINOv2 weights). Attach the output of the `neural-data-pipeline` notebook (**Add Input > Notebook output**) and the same Kaggle datasets it lists (`soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`). Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 100 min, main student 80 min, parallel `igpu` 3x and `low` 2x students 50 min, three parallel ablation pairs 20 min each, evaluation and export about 45 min: about 6.5 hours of a 9.5-hour ceiling. `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
+# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 140 min, main student 120 min, parallel `igpu` 3x and `low` 2x students 75 min, three parallel ablation pairs 20 min each, evaluation and export about 15 min: about 7.2 hours of a 9.5-hour ceiling (the run of 20 to 21 October 2026 took 5.34 hours with budgets of 100, 80, 50 and 20 minutes, and every validation curve was still rising when its cosine schedule ended). `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
 #
 # **Outputs** in `/kaggle/working/`:
 #
@@ -36,9 +36,7 @@
 # %%
 import os
 
-os.makedirs(
-    "/kaggle/working/code", exist_ok=True
-)  # %%writefile does not create folders
+os.makedirs("/kaggle/working/code", exist_ok=True)  # %%writefile does not create it
 
 # %% [markdown]
 # **`nss_common.py`**: run folders, logger, stage timer, figure and metric saving, hardware report, pip helper and the training-process launcher.
@@ -220,9 +218,9 @@ CFG = {
     "val_batches": 2 if QUICK_RUN else 4,
     "val_interval_min": 8,
     "minutes": {
-        "teacher": 4 if QUICK_RUN else 100,
-        "student": 4 if QUICK_RUN else 80,
-        "pair": 3 if QUICK_RUN else 50,
+        "teacher": 4 if QUICK_RUN else 140,
+        "student": 4 if QUICK_RUN else 120,
+        "pair": 3 if QUICK_RUN else 75,
         "ablation": 3 if QUICK_RUN else 20,
     },
     "eval": {
@@ -516,10 +514,9 @@ for tier in NM.TSR_TIERS:
             "mv_quality": torch.ones(1),
         }
         with torch.no_grad():
+            # non-zero head so parity is tested on a non-trivial output
             for p in net.out.parameters():
-                p.normal_(
-                    0, 0.01
-                )  # non-zero head so parity is tested on a non-trivial output
+                p.normal_(0, 0.01)
             fused = NM.fuse_model(net)
             o1, st1 = net(f, None)
             o2, _ = fused(f, None)
@@ -714,9 +711,8 @@ def run_cfg(name, tier, scale, minutes, batch, teacher_ckpt=None, **over):
 def live_plot(title):
     placeholder = plt.figure()
     handle = display(placeholder, display_id=True)
-    plt.close(
-        placeholder
-    )  # otherwise the inline backend shows it again, empty, when the cell ends
+    # otherwise the inline backend shows it again, empty, when the cell ends
+    plt.close(placeholder)
 
     def update(rounds):
         h = pd.DataFrame(rounds)
@@ -838,7 +834,7 @@ print(done_pair)
 # %% [markdown]
 # ## 16. Ablations (three parallel pairs)
 #
-# Short runs of the `low` 3x student with one change each, against a `reference` run with the full recipe and the same short budget: no history (single-frame upscaling), no G-buffers (colour only: no depth or motion vectors), bicubic degradation (classic image super-resolution inputs instead of render-like jittered sampling), no temporal loss, and no distillation. Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged), as in the first Kaggle run, where both reached the same best validation score. Expected output: final scores of the six runs.
+# Short runs of the `low` 3x student with one change each, against a `reference` run with the full recipe and the same short budget: no history (single-frame upscaling), no G-buffers (colour only: no depth or motion vectors), bicubic degradation (classic image super-resolution inputs instead of render-like jittered sampling), no temporal loss, and no distillation. The budgets are equal in wall-clock time, so the `no_distillation` run, which skips the teacher's forward pass, takes more steps (1,380 against 1,090 in the run of 20 to 21 October 2026). Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Each run validates on batches built with its own recipe, so validation scores are not comparable across ablations; section 25 compares them on the test suites. Expected output: final scores of the six runs.
 
 # %%
 with RUN.stage("ablations"):
@@ -978,7 +974,7 @@ RAFT = RAFTS[0] if RAFTS else M.load_raft(DEVICES[0], log=log)
 # * **video**: Vid4 and held-out Vimeo-1080p clips with RAFT motion;
 # * **gameir-native**: held-out town 05, native 720p renders to 1440p ground truth (2x, a real renderer's low-resolution image instead of a simulated one).
 #
-# Clips that cannot be decoded are logged and skipped. Expected output: the number of sequences per suite.
+# Clips that cannot be decoded, and blank clips (a frame with almost no luma variation, which every upscaler reconstructs exactly), are logged and skipped (`E.test_clips`); in the run of 20 to 21 October 2026 one blank Vimeo-1080p clip scored the 100 dB PSNR cap for every baseline. Expected output: the number of sequences per suite.
 
 # %%
 ev = CFG["eval"]
@@ -1000,20 +996,9 @@ with RUN.stage("test_suites"):
     TEST_STILLS = torch.from_numpy(np.stack(crops)).to(DEVICES[0]) if crops else None
 
     def clips(source, crop, n, Tn, max_side=None):
-        out = []
-        for it in [
-            i for i in TEST_ITEMS if i["source"] == source and i["n_frames"] >= Tn
-        ][: n * 3]:
-            try:
-                c = E.load_clip(DATA_ROOT, it, 0, Tn, crop, max_side=max_side)
-            except Exception as exc:  # unreadable clip: skip it, keep the suite
-                log(f"{source} {it['item_id']}: skipped ({exc})")
-                c = None
-            if c is not None:
-                out.append((it["item_id"], c))
-            if len(out) >= n:
-                break
-        return out
+        return E.test_clips(
+            TEST_ITEMS, DATA_ROOT, source, crop, n, Tn, max_side=max_side, log=log
+        )
 
     REAL = {
         "tartanair": clips("tartanair", (480, 576), ev["real_clips"], ev["real_T"]),
@@ -1038,7 +1023,7 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame (RAFT runs at most 1024 px on the longer side and its flow is scaled back, since full-size 1440p GameIR frames ran out of memory in the first run), warping error (exact motion only) and temporal-change error. Methods: bicubic, jitter-aware bilinear, analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
+# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame (RAFT runs at most 1024 px on the longer side and its flow is scaled back, since full-size 1440p GameIR frames ran out of memory in the first run), warping error (exact motion only) and temporal-change error. On the video suites and GameIR the motion vectors come from RAFT on the clean full-resolution frames, the same teacher motion as the training caches, sampled at the jittered low-resolution positions like exact motion (the first run estimated them on the jittered low-resolution inputs, where RAFT also reports the jitter difference between frames as motion). Methods: jitter-aware bicubic and bilinear upsampling (both sample at the true jittered positions), analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
 
 # %%
 ROWS = []
@@ -1151,11 +1136,8 @@ METRIC_COLS = [
     "tof",
     "mv_px",
 ]
-for (
-    col
-) in (
-    METRIC_COLS
-):  # metrics that were not computable are None: make every metric column numeric (NaN)
+# metrics that were not computable are None: make every metric column numeric (NaN)
+for col in METRIC_COLS:
     RES[col] = pd.to_numeric(RES[col], errors="coerce")
 RUN.save_csv(RES, "test_per_frame.csv", index=False)
 print(len(RES), "metric rows")
@@ -1278,6 +1260,9 @@ if TEST_STILLS is not None:
 
 
 # %%
+import PIL.Image as PImage
+
+
 def visual(b, title, fname, crop=160):
     nets = [k for k in ("igpu_s3", "student_s3", "teacher_s3") if k in MODELS]
     if not nets:
@@ -1301,12 +1286,10 @@ def visual(b, title, fname, crop=160):
             o[0, -1, :, y0 : y0 + crop, x0 : x0 + crop].permute(1, 2, 0).cpu().numpy()
         )
         axes[0, c].set_title(k, fontsize=8)
-        axes[1, c].imshow(
-            o[0, :, :, row, :].permute(0, 2, 1).cpu().numpy(), aspect="auto"
-        )  # time down, x across
+        # time down, x across
+        xt = o[0, :, :, row, :].permute(0, 2, 1).cpu().numpy()
+        axes[1, c].imshow(xt, aspect="auto")
         axes[1, c].set_title("x-t slice", fontsize=8)
-        import PIL.Image as PImage
-
         PImage.fromarray(
             (o[0, -1].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
         ).save(RUN.dirs["predictions"] / f"{fname}_{k.replace(' ', '_')}.png")

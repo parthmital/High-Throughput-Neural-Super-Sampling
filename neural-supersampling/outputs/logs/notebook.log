@@ -1,48 +1,31 @@
-12:33:52 | start: manifest
-12:33:55 | done: manifest in 0.1 min (run total 0.01 h)
-12:33:55 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
-12:33:56 | start: caches
-12:34:34 | still_val.npy: 256 crops (0 decode failures)
-12:41:29 | still_train.npy: 6017 crops (5 decode failures)
-12:42:31 | win_val: 192 windows (0 failures)
-12:59:33 | win_train: 3600 windows (0 failures)
-13:01:10 | done: caches in 27.2 min (run total 0.46 h)
-13:01:22 | start: batch_probe
-13:01:49 | done: batch_probe in 0.5 min (run total 0.47 h)
-13:01:50 | start: train_teacher
-14:42:09 | done: train_teacher in 100.3 min (run total 2.15 h)
-14:42:09 | no teacher checkpoint: students train without distillation
-14:42:09 | start: train_student
-16:02:21 | done: train_student in 80.2 min (run total 3.48 h)
-16:02:21 | start: train_pair
-16:52:35 | done: train_pair in 50.2 min (run total 4.32 h)
-16:52:35 | start: ablations
-17:53:07 | done: ablations in 60.5 min (run total 5.33 h)
-17:53:11 | start: test_suites
-17:55:58 | done: test_suites in 2.8 min (run total 5.38 h)
-17:55:58 | start: evaluation
-17:56:17 | synthetic static done
-17:56:35 | synthetic slow done
-17:56:54 | synthetic medium done
-17:57:12 | synthetic fast done
-17:58:03 | tartanair done
-17:59:14 | sintel done
-17:59:52 | vid4 done
-18:01:32 | vimeo1080p done
-18:01:34 | evaluation gameir-native / bicubic at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 8.71 GiB already allocated; 5.33 GiB free; 9.07 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:34 | evaluation gameir-native / bilinear at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.58 GiB free; 8.82 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:34 | evaluation gameir-native / analytic_taau at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.58 GiB free; 8.82 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:35 | evaluation gameir-native / student_s2 at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.58 GiB free; 8.82 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:36 | evaluation gameir-native / bicubic at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:37 | evaluation gameir-native / bilinear at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:37 | evaluation gameir-native / analytic_taau at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:37 | evaluation gameir-native / student_s2 at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:39 | evaluation gameir-native / bicubic at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:39 | evaluation gameir-native / bilinear at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:39 | evaluation gameir-native / analytic_taau at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:40 | evaluation gameir-native / student_s2 at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 5.95 GiB free; 8.45 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:41 | evaluation gameir-native / bicubic at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 6.01 GiB free; 8.39 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:42 | evaluation gameir-native / bilinear at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 6.01 GiB free; 8.39 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:42 | evaluation gameir-native / analytic_taau at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 6.01 GiB free; 8.39 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:42 | evaluation gameir-native / student_s2 at 2x skipped: CUDA out of memory. Tried to allocate 6.95 GiB (GPU 0; 14.56 GiB total capacity; 1.76 GiB already allocated; 6.01 GiB free; 8.39 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
-18:01:42 | done: evaluation in 5.7 min (run total 5.47 h)
+20:31:48 | start: manifest
+20:31:49 | done: manifest in 0.0 min (run total 0.01 h)
+20:31:49 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
+20:31:50 | start: caches
+20:32:20 | still_val.npy: 256 crops (0 decode failures)
+20:38:35 | still_train.npy: 6500 crops (5 decode failures)
+20:39:13 | win_val: 192 windows (0 failures)
+20:49:48 | win_train: 3600 windows (0 failures)
+20:51:23 | done: caches in 19.6 min (run total 0.33 h)
+20:51:34 | start: batch_probe
+20:52:02 | done: batch_probe in 0.5 min (run total 0.34 h)
+20:52:02 | start: train_teacher
+22:32:16 | done: train_teacher in 100.2 min (run total 2.02 h)
+22:32:16 | start: train_student
+23:52:33 | done: train_student in 80.3 min (run total 3.35 h)
+23:52:33 | start: train_pair
+00:42:48 | done: train_pair in 50.2 min (run total 4.19 h)
+00:42:48 | start: ablations
+01:43:19 | done: ablations in 60.5 min (run total 5.20 h)
+01:43:23 | start: test_suites
+01:45:07 | done: test_suites in 1.7 min (run total 5.23 h)
+01:45:07 | start: evaluation
+01:45:26 | synthetic static done
+01:45:46 | synthetic slow done
+01:46:05 | synthetic medium done
+01:46:24 | synthetic fast done
+01:47:14 | tartanair done
+01:48:27 | sintel done
+01:49:03 | vid4 done
+01:50:44 | vimeo1080p done
+01:50:58 | done: evaluation in 5.8 min (run total 5.33 h)

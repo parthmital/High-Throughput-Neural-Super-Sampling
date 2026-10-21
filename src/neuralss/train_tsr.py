@@ -44,9 +44,8 @@ def frame_inputs(b, t, ablate_gbuffers=False):
         "has_depth": b["has_depth"],
         "mv_quality": b["mv_quality"],
     }
-    if (
-        ablate_gbuffers
-    ):  # colour-only input: no depth, no motion vectors (history warped with zero motion)
+    # colour-only input: no depth, no motion vectors (history warped with zero motion)
+    if ablate_gbuffers:
         f["depth"], f["mv"] = torch.zeros_like(f["depth"]), torch.zeros_like(f["mv"])
         f["has_depth"], f["mv_quality"] = torch.zeros(
             n, device=f["color"].device

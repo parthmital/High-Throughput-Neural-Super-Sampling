@@ -131,9 +131,8 @@ def random_layer(
     The path is centred so the view stays inside the texture for the whole duration where possible.
     """
     rnd = lambda *shape: torch.rand(*shape, device=device, generator=g)  # noqa: E731
-    k = 1.0 + 0.45 * rnd(
-        n
-    )  # texels per output pixel (> 1: minification, aliasing at low resolution)
+    # texels per output pixel (> 1: minification, aliasing at low resolution)
+    k = 1.0 + 0.45 * rnd(n)
     s0 = out_px * k / tex_px
     speed, cls = _speed_px(n, g, profile, device)
     ang = 2 * math.pi * rnd(n)
@@ -160,9 +159,8 @@ def random_layer(
         "t_flip": torch.full((n,), 1e9, device=device),
         "speed_class": cls,
     }
-    if (
-        centre_screen is not None
-    ):  # place a texture point (the object centre) at a screen position at t = 0
+    # place a texture point (the object centre) at a screen position at t = 0
+    if centre_screen is not None:
         m0 = layer_matrix(p, torch.zeros(n, device=device))
         tex_at = (
             torch.einsum("nij,nj->ni", m0[:, :, :2], centre_screen[1]) + m0[:, :, 2]
@@ -259,9 +257,8 @@ def make_text_bank(n, seed, height=40, width=320):
         d = ImageDraw.Draw(img)
         kind = rng.integers(0, 4)
         col = tuple(int(c) for c in rng.integers(150, 256, 3)) + (255,)
-        if (
-            kind == 0 or kind == 3
-        ):  # text, optionally with a translucent plate (subtitle style)
+        # text, optionally with a translucent plate (subtitle style)
+        if kind == 0 or kind == 3:
             if kind == 3:
                 d.rectangle(
                     [0, 0, width - 1, height - 1],
@@ -360,9 +357,8 @@ class Scene:
             foreground_alpha(n, S, g, dev, centre_tex)
             * (rnd(n) < fg_prob).float()[:, None, None, None]
         )
-        if (
-            text_bank is not None and world_text_prob > 0
-        ):  # world-space text moves with the background
+        # world-space text moves with the background
+        if text_bank is not None and world_text_prob > 0:
             tiles = text_bank.to(dev).float() / 255.0
             canvas, a = self.bg.clone(), torch.zeros(n, 1, S, S, device=dev)
             idx = torch.where(
@@ -632,9 +628,8 @@ def fg_batch(
     target -> I0 / I1 flows, UI composites and masks, and flags for cuts and menus."""
     n, dev = stills.shape[0], stills.device
     scene = Scene(stills, P, 2.0, g, profile=profile)
-    flip = (
-        torch.rand(n, device=dev, generator=g) < p_flip
-    )  # rapid input change: camera reverses after t = 1
+    # rapid input change: camera reverses after t = 1
+    flip = torch.rand(n, device=dev, generator=g) < p_flip
     scene.cam["flip"], scene.cam["t_flip"] = flip.float(), torch.ones(n, device=dev)
     extrap = torch.rand(n, device=dev, generator=g) < p_extrap
     tau = torch.where(
@@ -834,9 +829,9 @@ def fg_batch_from_frames(
     fx = torch.rand(n, device=dev, generator=g) < 0.5
     fy = torch.rand(n, device=dev, generator=g) < 0.5
     fr, fl = _flip_fields(fr, fx, fy), _flip_fields(fl, fx, fy, vec=True)
-    up = lambda x: F.interpolate(
+    up = lambda x: F.interpolate(  # noqa: E731
         x, scale_factor=2, mode="bilinear", align_corners=False
-    )  # noqa: E731
+    )
     extrap = torch.rand(n, device=dev, generator=g) < p_extrap
     e4 = extrap.view(n, 1, 1, 1)
     ok = flow_ok.float().view(n, 1, 1, 1).expand(n, 1, P, P)
