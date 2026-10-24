@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Downloaded Kaggle run logs keep tqdm output verbatim, including trailing spaces
+*.log -whitespace

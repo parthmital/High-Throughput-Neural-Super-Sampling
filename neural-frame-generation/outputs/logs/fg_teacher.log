@@ -1,208 +1,277 @@
-/opt/conda/lib/python3.10/site-packages/scipy/__init__.py:146: UserWarning: A NumPy version >=1.16.5 and <1.23.0 is required for this version of SciPy (detected version 1.24.3
-  warnings.warn(f"A NumPy version >={np_minversion} and <{np_maxversion}"
-/opt/conda/lib/python3.10/site-packages/scipy/__init__.py:146: UserWarning: A NumPy version >=1.16.5 and <1.23.0 is required for this version of SciPy (detected version 1.24.3
-  warnings.warn(f"A NumPy version >={np_minversion} and <{np_maxversion}"
-/opt/conda/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
-  warnings.warn(
-/opt/conda/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
-  warnings.warn(
-/opt/conda/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=AlexNet_Weights.IMAGENET1K_V1`. You can also use `weights=AlexNet_Weights.DEFAULT` to get the most up-to-date weights.
-  warnings.warn(msg)
-/opt/conda/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=AlexNet_Weights.IMAGENET1K_V1`. You can also use `weights=AlexNet_Weights.DEFAULT` to get the most up-to-date weights.
-  warnings.warn(msg)
 Downloading: "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth" to /root/.cache/torch/hub/checkpoints/alexnet-owt-7be5be79.pth
 Downloading: "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth" to /root/.cache/torch/hub/checkpoints/alexnet-owt-7be5be79.pth
 
   0%|          | 0.00/233M [00:00<?, ?B/s]
   0%|          | 0.00/233M [00:00<?, ?B/s]
-  4%|▍         | 8.80M/233M [00:00<00:02, 88.5MB/s]
-  3%|▎         | 7.02M/233M [00:00<00:03, 61.9MB/s]
- 12%|█▏        | 28.5M/233M [00:00<00:01, 151MB/s] 
- 16%|█▌        | 37.3M/233M [00:00<00:01, 203MB/s] 
- 20%|██        | 47.5M/233M [00:00<00:01, 172MB/s]
- 31%|███       | 72.0M/233M [00:00<00:00, 274MB/s]
- 28%|██▊       | 65.1M/233M [00:00<00:00, 177MB/s]
- 45%|████▌     | 105M/233M [00:00<00:00, 302MB/s] 
- 36%|███▌      | 83.1M/233M [00:00<00:00, 181MB/s]
- 58%|█████▊    | 134M/233M [00:00<00:00, 304MB/s]
- 44%|████▍     | 102M/233M [00:00<00:00, 188MB/s] 
- 72%|███████▏  | 169M/233M [00:00<00:00, 322MB/s]
- 52%|█████▏    | 122M/233M [00:00<00:00, 194MB/s]
- 86%|████████▌ | 199M/233M [00:00<00:00, 312MB/s]
- 60%|██████    | 141M/233M [00:00<00:00, 195MB/s]
-100%|█████████▉| 232M/233M [00:00<00:00, 322MB/s]
-100%|██████████| 233M/233M [00:00<00:00, 296MB/s]
+  2%|▏         | 5.62M/233M [00:00<00:04, 58.8MB/s]
+  3%|▎         | 7.88M/233M [00:00<00:02, 82.3MB/s]
+  8%|▊         | 18.0M/233M [00:00<00:02, 100MB/s] 
+ 14%|█▎        | 31.9M/233M [00:00<00:01, 181MB/s] 
+ 14%|█▎        | 31.8M/233M [00:00<00:01, 120MB/s]
+ 24%|██▎       | 55.1M/233M [00:00<00:00, 210MB/s]
+ 20%|█▉        | 45.8M/233M [00:00<00:01, 130MB/s]
+ 34%|███▎      | 78.2M/233M [00:00<00:00, 222MB/s]
+ 26%|██▌       | 60.5M/233M [00:00<00:01, 139MB/s]
+ 44%|████▍     | 102M/233M [00:00<00:00, 232MB/s] 
+ 32%|███▏      | 75.0M/233M [00:00<00:01, 143MB/s]
+ 54%|█████▎    | 125M/233M [00:00<00:00, 234MB/s]
+ 38%|███▊      | 89.6M/233M [00:00<00:01, 146MB/s]
+ 63%|██████▎   | 148M/233M [00:00<00:00, 236MB/s]
+ 44%|████▍     | 104M/233M [00:00<00:00, 146MB/s] 
+ 73%|███████▎  | 170M/233M [00:00<00:00, 232MB/s]
+ 51%|█████     | 118M/233M [00:00<00:00, 146MB/s]
+ 83%|████████▎ | 193M/233M [00:00<00:00, 232MB/s]
+ 57%|█████▋    | 132M/233M [00:01<00:00, 146MB/s]
+ 92%|█████████▏| 215M/233M [00:01<00:00, 232MB/s]
+100%|██████████| 233M/233M [00:01<00:00, 225MB/s]
 
- 70%|██████▉   | 162M/233M [00:00<00:00, 204MB/s]
- 79%|███████▉  | 185M/233M [00:01<00:00, 215MB/s]
- 90%|█████████ | 210M/233M [00:01<00:00, 229MB/s]
-100%|██████████| 233M/233M [00:01<00:00, 202MB/s]
-PROGRESS {"progress": 0.005515368779500326, "step": 10, "elapsed_min": 0.39, "lr": 0.0001838456259833442, "loss": 0.6168949127197265, "samples_per_s": 82.79699165837958, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.011830808548700241, "step": 30, "elapsed_min": 0.83, "lr": 0.00039436028495667475, "loss": 0.5470984141031902, "samples_per_s": 115.9184688553734, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.018090455191476004, "step": 50, "elapsed_min": 1.27, "lr": 0.0006030151730492001, "loss": 0.4570578384399414, "samples_per_s": 126.34808052660397, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.02437471662248884, "step": 70, "elapsed_min": 1.71, "lr": 0.0008124905540829614, "loss": 0.4122762680053711, "samples_per_s": 131.28267652228286, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.03065964835030692, "step": 90, "elapsed_min": 2.15, "lr": 0.0009999988600479868, "loss": 0.3723269992404514, "samples_per_s": 134.1913941814048, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.036926556541806176, "step": 110, "elapsed_min": 2.58, "lr": 0.0009998743164822577, "loss": 0.3347388874400746, "samples_per_s": 136.17709144739825, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.04320131574358259, "step": 130, "elapsed_min": 3.02, "lr": 0.0009995435112805373, "loss": 0.30608717111440803, "samples_per_s": 137.56145582270506, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.04952136448451451, "step": 150, "elapsed_min": 3.47, "lr": 0.0009990019841489154, "loss": 0.28486905415852865, "samples_per_s": 138.46789320788506, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.05578888666062128, "step": 170, "elapsed_min": 3.91, "lr": 0.0009982586965219115, "loss": 0.2660699732163373, "samples_per_s": 139.24266656850463, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.062081582205636164, "step": 190, "elapsed_min": 4.35, "lr": 0.0009973060931699384, "loss": 0.2515601509495785, "samples_per_s": 139.90773431878102, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.06834298996698289, "step": 210, "elapsed_min": 4.78, "lr": 0.0009961534132694506, "loss": 0.2389148712158203, "samples_per_s": 140.46762178893914, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.0746096438453311, "step": 230, "elapsed_min": 5.22, "lr": 0.0009947956836853446, "loss": 0.22786201808763587, "samples_per_s": 140.92360790501579, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.08086894444056919, "step": 250, "elapsed_min": 5.66, "lr": 0.0009932362950161033, "loss": 0.21860821533203126, "samples_per_s": 141.3218344479321, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.08714250837053572, "step": 270, "elapsed_min": 6.1, "lr": 0.0009914701689095532, "loss": 0.2102034674750434, "samples_per_s": 141.63966285840792, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.09341225760323661, "step": 290, "elapsed_min": 6.54, "lr": 0.0009895026147546037, "loss": 0.20268507332637392, "samples_per_s": 141.92057719326655, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.09969261532738095, "step": 310, "elapsed_min": 6.98, "lr": 0.0009873295909971005, "loss": 0.19567105693201864, "samples_per_s": 142.15101310256608, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.10595496041434152, "step": 330, "elapsed_min": 7.42, "lr": 0.000984962251646127, "loss": 0.18949068242853337, "samples_per_s": 142.37835756269158, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.11220728556315104, "step": 350, "elapsed_min": 7.85, "lr": 0.0009823998922690639, "loss": 0.18444739205496652, "samples_per_s": 142.59302059583533, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 0, "elapsed_min": 8.07, "step": 360, "lr": 0.0009810453144894124, "samples_per_s": 142.69383529414682, "mem_gb": [9.22, 9.2], "train_loss": 0.18196665445963542, "train_pix": 0.045130681991577146, "train_census": 0.023910098605685763, "train_flow": 1.7415145874023437, "train_ui": 0.48812912835015193, "train_distill": 0.0, "val_psnr": 30.258403778076172, "val_psnr_interp": 31.148120880126953, "val_psnr_extrap": 29.39606285095215, "val_psnr_ui": 30.455121994018555, "best": 30.258403778076172}
-PROGRESS {"progress": 0.11861828031994047, "step": 370, "elapsed_min": 8.3, "lr": 0.0009795673329318962, "loss": 0.09259420037269592, "samples_per_s": 145.53653880703018, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.12490815662202381, "step": 390, "elapsed_min": 8.74, "lr": 0.0009765875628887336, "loss": 0.08684328397115072, "samples_per_s": 145.41743378787413, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.13117178780691965, "step": 410, "elapsed_min": 9.18, "lr": 0.0009734238932116759, "loss": 0.08806140899658203, "samples_per_s": 145.63712212384692, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.13743328276134673, "step": 430, "elapsed_min": 9.62, "lr": 0.0009700667830193886, "loss": 0.09066147804260254, "samples_per_s": 145.7454041805644, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.14369890485491071, "step": 450, "elapsed_min": 10.06, "lr": 0.0009665141638242519, "loss": 0.09276474846733941, "samples_per_s": 145.7844507096355, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.14998920259021578, "step": 470, "elapsed_min": 10.5, "lr": 0.0009627545230964321, "loss": 0.09187568317760121, "samples_per_s": 145.7049022603477, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.15626252673921132, "step": 490, "elapsed_min": 10.94, "lr": 0.0009588139503356177, "loss": 0.09100873653705303, "samples_per_s": 145.71061279391418, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.16252798897879464, "step": 510, "elapsed_min": 11.38, "lr": 0.0009546894800733799, "loss": 0.08973901748657226, "samples_per_s": 145.73912162971308, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.16878747849237352, "step": 530, "elapsed_min": 11.82, "lr": 0.0009503821898086315, "loss": 0.08932708852431354, "samples_per_s": 145.7772215341532, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.17506253197079613, "step": 550, "elapsed_min": 12.25, "lr": 0.0009458786090380572, "loss": 0.08920459747314453, "samples_per_s": 145.76930839729906, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.18133579799107144, "step": 570, "elapsed_min": 12.69, "lr": 0.0009411924370912709, "loss": 0.08862182980492002, "samples_per_s": 145.76679872314938, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.18760480608258928, "step": 590, "elapsed_min": 13.13, "lr": 0.0009363277173080165, "loss": 0.08922333095384681, "samples_per_s": 145.77332698817207, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.19388157435825892, "step": 610, "elapsed_min": 13.57, "lr": 0.0009312769817584355, "loss": 0.0897398681640625, "samples_per_s": 145.7644707543161, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.20013301304408482, "step": 630, "elapsed_min": 14.01, "lr": 0.0009260696826154381, "loss": 0.08987240261501736, "samples_per_s": 145.8004674123609, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.20640792120070683, "step": 650, "elapsed_min": 14.45, "lr": 0.00092066740265025, "loss": 0.08969502942315463, "samples_per_s": 145.79386275874856, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.21268216087704614, "step": 670, "elapsed_min": 14.89, "lr": 0.0009150921943056651, "loss": 0.08960199663715977, "samples_per_s": 145.78916277376752, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.21895108177548364, "step": 690, "elapsed_min": 15.33, "lr": 0.0009093507366443737, "loss": 0.08991627548680162, "samples_per_s": 145.7924870460031, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.22523966471354168, "step": 710, "elapsed_min": 15.77, "lr": 0.0009034219444796641, "loss": 0.08957593645368303, "samples_per_s": 145.76921099985944, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 1, "elapsed_min": 16.21, "step": 730, "lr": 0.000897339680966795, "samples_per_s": 145.76613322806708, "mem_gb": [9.22, 9.2], "train_loss": 0.08880718334301098, "train_pix": 0.01936537252890097, "train_census": 0.012185693431544948, "train_flow": 1.5689345901076859, "train_ui": 0.2170281899941934, "train_distill": 0.0, "val_psnr": 31.760738372802734, "val_psnr_interp": 32.3138313293457, "val_psnr_extrap": 31.22467041015625, "val_psnr_ui": 31.491775512695312, "best": 31.760738372802734}
-PROGRESS {"progress": 0.23151434035528273, "step": 730, "elapsed_min": 16.21, "lr": 0.000897339680966795, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.23788856143043155, "step": 750, "elapsed_min": 16.65, "lr": 0.0008909931329451697, "loss": 0.08435184359550477, "samples_per_s": 144.91322748051317, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.24414408365885418, "step": 770, "elapsed_min": 17.09, "lr": 0.0008846029503786374, "loss": 0.07814599871635437, "samples_per_s": 145.5323753753578, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.25042712983630955, "step": 790, "elapsed_min": 17.53, "lr": 0.0008780259551825028, "loss": 0.07688316504160563, "samples_per_s": 145.52710940069804, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.2566942196800595, "step": 810, "elapsed_min": 17.97, "lr": 0.0008713099304266592, "loss": 0.07639545798301697, "samples_per_s": 145.6167698309157, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.2629638381231399, "step": 830, "elapsed_min": 18.41, "lr": 0.0008644383386038455, "loss": 0.07675529003143311, "samples_per_s": 145.65891087242238, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.26923057919456844, "step": 850, "elapsed_min": 18.85, "lr": 0.0008574199479491762, "loss": 0.07668309211730957, "samples_per_s": 145.69826677258388, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.2754997326078869, "step": 870, "elapsed_min": 19.28, "lr": 0.0008502517445563178, "loss": 0.07676018306187221, "samples_per_s": 145.71827877795891, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.28177452450706847, "step": 890, "elapsed_min": 19.72, "lr": 0.0008429327157385848, "loss": 0.07648040056228637, "samples_per_s": 145.71696119790826, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.2880277506510417, "step": 910, "elapsed_min": 20.16, "lr": 0.0008354981449118944, "loss": 0.07595785988701714, "samples_per_s": 145.77161099236568, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.2943034435453869, "step": 930, "elapsed_min": 20.6, "lr": 0.0008278987236155929, "loss": 0.07573492527008056, "samples_per_s": 145.76313375248895, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3005796886625744, "step": 950, "elapsed_min": 21.04, "lr": 0.0008201633644871685, "loss": 0.07607968070290305, "samples_per_s": 145.75503012866568, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.30683393205915177, "step": 970, "elapsed_min": 21.48, "lr": 0.0008123237329607193, "loss": 0.07558021545410157, "samples_per_s": 145.79088318368164, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.31308832077752974, "step": 990, "elapsed_min": 21.92, "lr": 0.000804355976665996, "loss": 0.07526958905733548, "samples_per_s": 145.82095285314324, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3193699428013393, "step": 1010, "elapsed_min": 22.36, "lr": 0.0007962280410695736, "loss": 0.07491177831377302, "samples_per_s": 145.8015356414769, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3256674049014137, "step": 1030, "elapsed_min": 22.8, "lr": 0.0007879567502743243, "loss": 0.07497710545857747, "samples_per_s": 145.76015831338168, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.33192315964471725, "step": 1050, "elapsed_min": 23.23, "lr": 0.0007796218407270768, "loss": 0.07478500604629516, "samples_per_s": 145.78451805337627, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3382117571149554, "step": 1070, "elapsed_min": 23.67, "lr": 0.0007711276988481783, "loss": 0.07455599167767693, "samples_per_s": 145.7611034609079, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3444900076729911, "step": 1090, "elapsed_min": 24.11, "lr": 0.0007625355487385747, "loss": 0.07453015115525988, "samples_per_s": 145.75370000831487, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 2, "elapsed_min": 24.33, "step": 1100, "lr": 0.000758193789894108, "samples_per_s": 145.74591822196194, "mem_gb": [9.22, 9.2], "train_loss": 0.07446712287696632, "train_pix": 0.01665585620983227, "train_census": 0.010866147118645746, "train_flow": 1.567782180373733, "train_ui": 0.16517243256440034, "train_distill": 0.0, "val_psnr": 32.545989990234375, "val_psnr_interp": 32.990211486816406, "val_psnr_extrap": 32.115440368652344, "val_psnr_ui": 32.22366714477539, "best": 32.545989990234375}
-PROGRESS {"progress": 0.3508505103701637, "step": 1110, "elapsed_min": 24.56, "lr": 0.0007537203719624642, "loss": 0.07636876702308655, "samples_per_s": 144.91504245115206, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.35712271554129466, "step": 1130, "elapsed_min": 25.0, "lr": 0.000744922325009743, "loss": 0.07341870466868082, "samples_per_s": 145.48246518391986, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3633803885323661, "step": 1150, "elapsed_min": 25.44, "lr": 0.000736044148970213, "loss": 0.0711590051651001, "samples_per_s": 145.73118479334312, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.36965924944196427, "step": 1170, "elapsed_min": 25.88, "lr": 0.0007270386770380841, "loss": 0.06986912318638393, "samples_per_s": 145.69765939366155, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3759222702752976, "step": 1190, "elapsed_min": 26.31, "lr": 0.0007179625951505913, "loss": 0.0698016537560357, "samples_per_s": 145.7605862979902, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.38220711844308036, "step": 1210, "elapsed_min": 26.75, "lr": 0.0007087649448632281, "loss": 0.07002589052373713, "samples_per_s": 145.7085037115133, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.3884831310453869, "step": 1230, "elapsed_min": 27.19, "lr": 0.0006994941178590743, "loss": 0.0689374043391301, "samples_per_s": 145.70408338557223, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.39475536528087796, "step": 1250, "elapsed_min": 27.63, "lr": 0.0006901467310114691, "loss": 0.06920847574869791, "samples_per_s": 145.712460935464, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4010345749627976, "step": 1270, "elapsed_min": 28.07, "lr": 0.0006807105611884549, "loss": 0.06883409163531135, "samples_per_s": 145.69979178699, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4073127964564732, "step": 1290, "elapsed_min": 28.51, "lr": 0.0006712013636976972, "loss": 0.06843409789235969, "samples_per_s": 145.6922541466485, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4135782586960565, "step": 1310, "elapsed_min": 28.95, "lr": 0.0006616411290042498, "loss": 0.06801487604777018, "samples_per_s": 145.7143158689421, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.41985258556547617, "step": 1330, "elapsed_min": 29.39, "lr": 0.0006520008770922377, "loss": 0.06818563212519106, "samples_per_s": 145.71475282434736, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4261174955822173, "step": 1350, "elapsed_min": 29.83, "lr": 0.0006423126734296875, "loss": 0.06828374481201172, "samples_per_s": 145.73250520100774, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.43238682338169643, "step": 1370, "elapsed_min": 30.27, "lr": 0.000632559194220262, "loss": 0.06837695086443865, "samples_per_s": 145.7400486066174, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4386800711495536, "step": 1390, "elapsed_min": 30.71, "lr": 0.0006227137505625184, "loss": 0.0682043404414736, "samples_per_s": 145.70831085077643, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.44495279947916666, "step": 1410, "elapsed_min": 31.15, "lr": 0.0006128498816021701, "loss": 0.0681703382922757, "samples_per_s": 145.71133084363018, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4512341599237351, "step": 1430, "elapsed_min": 31.59, "lr": 0.0006029259758422337, "loss": 0.06806403651381984, "samples_per_s": 145.7019109727282, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4575126429966518, "step": 1450, "elapsed_min": 32.03, "lr": 0.0005929642549749749, "loss": 0.06819979531424386, "samples_per_s": 145.6973022553366, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 3, "elapsed_min": 32.47, "step": 1470, "lr": 0.0005829592475565412, "samples_per_s": 145.68930306725775, "mem_gb": [9.22, 9.2], "train_loss": 0.06790924072265625, "train_pix": 0.014783962352855786, "train_census": 0.009936989964665594, "train_flow": 1.5705968908361487, "train_ui": 0.14574529286977408, "train_distill": 0.0, "val_psnr": 32.9638557434082, "val_psnr_interp": 33.49172592163086, "val_psnr_extrap": 32.45222473144531, "val_psnr_ui": 32.40623474121094, "best": 32.9638557434082}
-PROGRESS {"progress": 0.4637942940848214, "step": 1470, "elapsed_min": 32.47, "lr": 0.0005829592475565412, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4701540120442708, "step": 1490, "elapsed_min": 32.91, "lr": 0.0005727951495639475, "loss": 0.06105105876922608, "samples_per_s": 145.22936716925406, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.4764111037481399, "step": 1510, "elapsed_min": 33.35, "lr": 0.0005627651136694655, "loss": 0.06249895691871643, "samples_per_s": 145.67329570341298, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.48268528529575894, "step": 1530, "elapsed_min": 33.79, "lr": 0.0005526820118688585, "loss": 0.06115233898162842, "samples_per_s": 145.68964685929595, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.48896304175967265, "step": 1550, "elapsed_min": 34.23, "lr": 0.0005425716007922655, "loss": 0.06141466498374939, "samples_per_s": 145.67702480898961, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.49524472191220237, "step": 1570, "elapsed_min": 34.67, "lr": 0.00053243746353715, "loss": 0.061451735496521, "samples_per_s": 145.65106522356498, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5015341331845238, "step": 1590, "elapsed_min": 35.11, "lr": 0.0005222776122582129, "loss": 0.062337390581766766, "samples_per_s": 145.60408383951733, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.507790759858631, "step": 1610, "elapsed_min": 35.55, "lr": 0.0005121617482414339, "loss": 0.06244942801339286, "samples_per_s": 145.678965080999, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5140606398809524, "step": 1630, "elapsed_min": 35.98, "lr": 0.0005020196552650863, "loss": 0.06236748099327087, "samples_per_s": 145.69689644284747, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5203333682105655, "step": 1650, "elapsed_min": 36.42, "lr": 0.0004918723284821603, "loss": 0.06253665288289388, "samples_per_s": 145.70346627518083, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5266189429873512, "step": 1670, "elapsed_min": 36.86, "lr": 0.00048170779475243655, "loss": 0.06275415897369385, "samples_per_s": 145.67882107999108, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5329041689918155, "step": 1690, "elapsed_min": 37.3, "lr": 0.00047155161200019375, "loss": 0.0624406641179865, "samples_per_s": 145.6593580834151, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5391718401227679, "step": 1710, "elapsed_min": 37.74, "lr": 0.00046143573694272104, "loss": 0.06257516940434774, "samples_per_s": 145.67723947196913, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5454296875, "step": 1730, "elapsed_min": 38.18, "lr": 0.0004513517737725367, "loss": 0.06258856700016902, "samples_per_s": 145.7098115171941, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5517225864955357, "step": 1750, "elapsed_min": 38.62, "lr": 0.0004412316940411835, "loss": 0.062275259835379466, "samples_per_s": 145.67962447748613, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5579869442894345, "step": 1770, "elapsed_min": 39.06, "lr": 0.0004311819587184401, "loss": 0.062061551411946615, "samples_per_s": 145.6976329458843, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5642654854910715, "step": 1790, "elapsed_min": 39.5, "lr": 0.000421138102012476, "loss": 0.061784178018569946, "samples_per_s": 145.6928448317907, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5705217052641369, "step": 1810, "elapsed_min": 39.94, "lr": 0.0004111625883715393, "loss": 0.06176117167753332, "samples_per_s": 145.71911999077776, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5767889113653274, "step": 1830, "elapsed_min": 40.38, "lr": 0.0004012063335663682, "loss": 0.06183844672309028, "samples_per_s": 145.72827671773126, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 4, "elapsed_min": 40.59, "step": 1840, "lr": 0.00039623602564257097, "samples_per_s": 145.72673412585218, "mem_gb": [9.22, 9.2], "train_loss": 0.06185053232553843, "train_pix": 0.013787227063565641, "train_census": 0.009557138906942831, "train_flow": 1.5330188648120777, "train_ui": 0.12419822280471389, "train_distill": 0.0, "val_psnr": 33.25754928588867, "val_psnr_interp": 33.78640365600586, "val_psnr_extrap": 32.74497604370117, "val_psnr_ui": 32.738609313964844, "best": 33.25754928588867}
-PROGRESS {"progress": 0.5831443568638393, "step": 1850, "elapsed_min": 40.82, "lr": 0.0003911516950996707, "loss": 0.05907486081123352, "samples_per_s": 144.97427820554623, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5894110979352678, "step": 1870, "elapsed_min": 41.26, "lr": 0.00038128273496137484, "loss": 0.060906020800272624, "samples_per_s": 145.58773543277235, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.5956806291852679, "step": 1890, "elapsed_min": 41.7, "lr": 0.0003714585235429739, "loss": 0.06125577926635742, "samples_per_s": 145.6843615028206, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6019447544642857, "step": 1910, "elapsed_min": 42.14, "lr": 0.0003616959167812653, "loss": 0.06074411528451102, "samples_per_s": 145.76178965174412, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6082308523995535, "step": 1930, "elapsed_min": 42.58, "lr": 0.00035195650143022823, "loss": 0.0610698488023546, "samples_per_s": 145.69160711555665, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.614496082124256, "step": 1950, "elapsed_min": 43.01, "lr": 0.00034231067604144924, "loss": 0.060839934782548385, "samples_per_s": 145.7349116426301, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6207879348028273, "step": 1970, "elapsed_min": 43.46, "lr": 0.0003326894155612474, "loss": 0.06060691613417405, "samples_per_s": 145.66973783430902, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6270571754092262, "step": 1990, "elapsed_min": 43.89, "lr": 0.00032317203420496036, "loss": 0.06056767145792643, "samples_per_s": 145.6920811461532, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6333151971726191, "step": 2010, "elapsed_min": 44.33, "lr": 0.000313744591054222, "loss": 0.06081004984238569, "samples_per_s": 145.73963445306345, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6395813569568453, "step": 2030, "elapsed_min": 44.77, "lr": 0.00030438175619551853, "loss": 0.06030862707840769, "samples_per_s": 145.7574637806279, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6458548409598214, "step": 2050, "elapsed_min": 45.21, "lr": 0.00029508889299898286, "loss": 0.06023689905802409, "samples_per_s": 145.7555250592932, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.652122047061012, "step": 2070, "elapsed_min": 45.65, "lr": 0.00028588999815828704, "loss": 0.06023347274116848, "samples_per_s": 145.76673527914292, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6584036690848214, "step": 2090, "elapsed_min": 46.09, "lr": 0.0002767586697917547, "loss": 0.06011162567138672, "samples_per_s": 145.74909435309323, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6646797688802083, "step": 2110, "elapsed_min": 46.53, "lr": 0.00026772784997110044, "loss": 0.05965247684054904, "samples_per_s": 145.74402444304582, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6709301176525297, "step": 2130, "elapsed_min": 46.97, "lr": 0.00025882966049712756, "loss": 0.059368317702720906, "samples_per_s": 145.78063045744858, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6772002883184524, "step": 2150, "elapsed_min": 47.4, "lr": 0.00025000275888128624, "loss": 0.05934357796945879, "samples_per_s": 145.782928834955, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6834853980654761, "step": 2170, "elapsed_min": 47.84, "lr": 0.00024125849960209757, "loss": 0.05906789953058416, "samples_per_s": 145.763794636996, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.6897431291852678, "step": 2190, "elapsed_min": 48.28, "lr": 0.0002326590418710928, "loss": 0.05884033203125, "samples_per_s": 145.78319885812184, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 5, "elapsed_min": 48.72, "step": 2210, "lr": 0.00022420093500589964, "samples_per_s": 145.8298602988726, "mem_gb": [9.22, 9.2], "train_loss": 0.05869239085429424, "train_pix": 0.013153426711623733, "train_census": 0.009251637716551084, "train_flow": 1.5296124432538007, "train_ui": 0.11308334969185493, "train_distill": 0.0, "val_psnr": 33.432708740234375, "val_psnr_interp": 33.9536018371582, "val_psnr_extrap": 32.92784118652344, "val_psnr_ui": 32.82313537597656, "best": 33.432708740234375}
-PROGRESS {"progress": 0.6959776088169642, "step": 2210, "elapsed_min": 48.72, "lr": 0.00022420093500589964, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7023287527901786, "step": 2230, "elapsed_min": 49.16, "lr": 0.00021570040457350774, "loss": 0.05339678525924683, "samples_per_s": 145.38678812839694, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7086051432291667, "step": 2250, "elapsed_min": 49.6, "lr": 0.00020741829257001486, "loss": 0.05532827377319336, "samples_per_s": 145.52841665408573, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.714887927827381, "step": 2270, "elapsed_min": 50.04, "lr": 0.0001992490309420261, "loss": 0.057802367210388186, "samples_per_s": 145.52632177269405, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7211520531063988, "step": 2290, "elapsed_min": 50.48, "lr": 0.00019122820380751125, "loss": 0.05715397000312805, "samples_per_s": 145.63340743909248, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7274054827008929, "step": 2310, "elapsed_min": 50.92, "lr": 0.000183348036581409, "loss": 0.05691583156585693, "samples_per_s": 145.74749140018778, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7336918131510417, "step": 2330, "elapsed_min": 51.36, "lr": 0.0001755575343620766, "loss": 0.056199987729390465, "samples_per_s": 145.69630209031487, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7399616350446429, "step": 2350, "elapsed_min": 51.8, "lr": 0.00016792165003339313, "loss": 0.05571582998548235, "samples_per_s": 145.71437632230806, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7462288992745536, "step": 2370, "elapsed_min": 52.24, "lr": 0.00016042593049348146, "loss": 0.055820626020431516, "samples_per_s": 145.7354511903827, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7524833751860119, "step": 2390, "elapsed_min": 52.67, "lr": 0.00015308518588104985, "loss": 0.055814901987711586, "samples_per_s": 145.78473280417484, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7587400599888393, "step": 2410, "elapsed_min": 53.11, "lr": 0.000145884476055607, "loss": 0.05596273422241211, "samples_per_s": 145.8191266359496, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7650100562686012, "step": 2430, "elapsed_min": 53.55, "lr": 0.00013881452220168645, "loss": 0.05611148314042525, "samples_per_s": 145.81918654879235, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7712932477678571, "step": 2450, "elapsed_min": 53.99, "lr": 0.00013187930719095868, "loss": 0.055838382244110106, "samples_per_s": 145.7935320554299, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7775555129278274, "step": 2470, "elapsed_min": 54.43, "lr": 0.00012511906989919467, "loss": 0.05588858310992901, "samples_per_s": 145.80938725846886, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7838240559895834, "step": 2490, "elapsed_min": 54.87, "lr": 0.00011850669905959831, "loss": 0.055737638473510744, "samples_per_s": 145.81250708613442, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7900829496837798, "step": 2510, "elapsed_min": 55.31, "lr": 0.00011206158765669406, "loss": 0.055364214579264326, "samples_per_s": 145.83017961237667, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.7963438778831845, "step": 2530, "elapsed_min": 55.74, "lr": 0.0001057740688267334, "loss": 0.05515229105949402, "samples_per_s": 145.84261949895185, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8026146879650298, "step": 2550, "elapsed_min": 56.18, "lr": 9.963931042590796e-05, "loss": 0.05516127418069278, "samples_per_s": 145.84012419666837, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8088847423735119, "step": 2570, "elapsed_min": 56.62, "lr": 9.367060290936982e-05, "loss": 0.05517648061116536, "samples_per_s": 145.83890440597247, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 6, "elapsed_min": 56.84, "step": 2580, "lr": 9.075903948617448e-05, "samples_per_s": 145.8519883027788, "mem_gb": [9.22, 9.2], "train_loss": 0.05514668129585885, "train_pix": 0.012592328561318887, "train_census": 0.009015263093484415, "train_flow": 1.4996890506228886, "train_ui": 0.10085124453982791, "train_distill": 0.0, "val_psnr": 33.53216552734375, "val_psnr_interp": 34.047367095947266, "val_psnr_extrap": 33.03282165527344, "val_psnr_ui": 32.88766860961914, "best": 33.53216552734375}
-PROGRESS {"progress": 0.8152152506510416, "step": 2590, "elapsed_min": 57.07, "lr": 8.781455198932363e-05, "loss": 0.05618784427642822, "samples_per_s": 145.40796642292443, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8214582170758928, "step": 2610, "elapsed_min": 57.5, "lr": 8.220936439971557e-05, "loss": 0.05378243923187256, "samples_per_s": 146.10089988589235, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8277305966331845, "step": 2630, "elapsed_min": 57.94, "lr": 7.67499846103877e-05, "loss": 0.05474475860595703, "samples_per_s": 145.96642863215962, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.834012683686756, "step": 2650, "elapsed_min": 58.38, "lr": 7.145743304421525e-05, "loss": 0.05487654209136963, "samples_per_s": 145.84368514074396, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8402814011346726, "step": 2670, "elapsed_min": 58.82, "lr": 6.635317977712307e-05, "loss": 0.05442763964335124, "samples_per_s": 145.8449882248263, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8465240769159226, "step": 2690, "elapsed_min": 59.26, "lr": 6.144796585955451e-05, "loss": 0.05455968163230202, "samples_per_s": 145.9559668353389, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8527934337797619, "step": 2710, "elapsed_min": 59.7, "lr": 5.6702415142954817e-05, "loss": 0.054440538699810324, "samples_per_s": 145.9371390401365, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8590841238839285, "step": 2730, "elapsed_min": 60.14, "lr": 5.21246202732342e-05, "loss": 0.05426433563232422, "samples_per_s": 145.85710135064528, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.865384753999256, "step": 2750, "elapsed_min": 60.58, "lr": 4.772614852677853e-05, "loss": 0.05432440813849954, "samples_per_s": 145.7689402952291, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8716664341517857, "step": 2770, "elapsed_min": 61.02, "lr": 4.352858863700579e-05, "loss": 0.05391625856098376, "samples_per_s": 145.7456864765916, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8779236421130953, "step": 2790, "elapsed_min": 61.45, "lr": 3.953541499109545e-05, "loss": 0.053879383632114954, "samples_per_s": 145.78093651647427, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8841838727678571, "step": 2810, "elapsed_min": 61.89, "lr": 3.5729758316027684e-05, "loss": 0.053845733145008914, "samples_per_s": 145.80404128019606, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8904600888206845, "step": 2830, "elapsed_min": 62.33, "lr": 3.2106173522781146e-05, "loss": 0.05373219299316406, "samples_per_s": 145.7935567915903, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.8967181105840774, "step": 2850, "elapsed_min": 62.77, "lr": 2.868578110410245e-05, "loss": 0.05359875007911965, "samples_per_s": 145.81617197382465, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9029926409040179, "step": 2870, "elapsed_min": 63.21, "lr": 2.545094916650621e-05, "loss": 0.05355031901392444, "samples_per_s": 145.80914445609977, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9092742047991071, "step": 2890, "elapsed_min": 63.65, "lr": 2.2408995884766257e-05, "loss": 0.05347257429553617, "samples_per_s": 145.7923839872774, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9155453636532738, "step": 2910, "elapsed_min": 64.09, "lr": 1.956946279049386e-05, "loss": 0.053288604273940575, "samples_per_s": 145.79235443506502, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9218260556175595, "step": 2930, "elapsed_min": 64.53, "lr": 1.692445612720957e-05, "loss": 0.053372557503836494, "samples_per_s": 145.7796980038923, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 7, "elapsed_min": 64.97, "step": 2950, "lr": 1.4483031026454702e-05, "samples_per_s": 145.78018871370455, "mem_gb": [9.22, 9.2], "train_loss": 0.053198644277211785, "train_pix": 0.012394982415276605, "train_census": 0.008850515210950698, "train_flow": 1.518597412109375, "train_ui": 0.09171269391034101, "train_distill": 0.0, "val_psnr": 33.574562072753906, "val_psnr_interp": 34.07942199707031, "val_psnr_extrap": 33.085243225097656, "val_psnr_ui": 32.92577362060547, "best": 33.574562072753906}
-PROGRESS {"progress": 0.928097388857887, "step": 2950, "elapsed_min": 64.97, "lr": 1.4483031026454702e-05, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9344547526041667, "step": 2970, "elapsed_min": 65.41, "lr": 1.2212762431070244e-05, "loss": 0.05445581674575806, "samples_per_s": 145.28067199275264, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9407327706473214, "step": 2990, "elapsed_min": 65.85, "lr": 1.0173966036303639e-05, "loss": 0.05479985475540161, "samples_per_s": 145.45605755636055, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9469995698474702, "step": 3010, "elapsed_min": 66.29, "lr": 8.340977710528647e-06, "loss": 0.05412756601969401, "samples_per_s": 145.60164082151005, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9532613699776785, "step": 3030, "elapsed_min": 66.73, "lr": 6.71194836590669e-06, "loss": 0.054673945903778075, "samples_per_s": 145.70355667498654, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9595138113839285, "step": 3050, "elapsed_min": 67.17, "lr": 5.287984540312496e-06, "loss": 0.05379698276519775, "samples_per_s": 145.8082118224115, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9657870047433036, "step": 3070, "elapsed_min": 67.61, "lr": 4.063370712147311e-06, "loss": 0.053643989562988284, "samples_per_s": 145.79762850526947, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9720455496651785, "step": 3090, "elapsed_min": 68.04, "lr": 3.04581805148479e-06, "loss": 0.053388752256120955, "samples_per_s": 145.83885893077152, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9783015950520834, "step": 3110, "elapsed_min": 68.48, "lr": 2.2329306503470356e-06, "loss": 0.053348541259765625, "samples_per_s": 145.87681431508673, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9845774042038691, "step": 3130, "elapsed_min": 68.92, "lr": 1.6229976775739058e-06, "loss": 0.05376299752129449, "samples_per_s": 145.8554659409261, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9908483305431548, "step": 3150, "elapsed_min": 69.36, "lr": 1.2193969722653114e-06, "loss": 0.053500728607177736, "samples_per_s": 145.84963848492694, "mem_gb": [9.22, 9.2]}
-PROGRESS {"progress": 0.9971098400297619, "step": 3170, "elapsed_min": 69.8, "lr": 1.0218827735374517e-06, "loss": 0.0532662651755593, "samples_per_s": 145.86475965028427, "mem_gb": [9.22, 9.2]}
-ROUND {"round": 8, "elapsed_min": 70.02, "step": 3180, "lr": 1e-06, "samples_per_s": 145.87385157560277, "mem_gb": [9.22, 9.2], "train_loss": 0.053327328225840694, "train_pix": 0.0124173060707424, "train_census": 0.008985047755034073, "train_flow": 1.5257232666015625, "train_ui": 0.09152617247208306, "train_distill": 0.0, "val_psnr": 33.58637619018555, "val_psnr_interp": 34.087493896484375, "val_psnr_extrap": 33.100677490234375, "val_psnr_ui": 32.925262451171875, "best": 33.58637619018555}
-DONE {"steps": 3180, "train_seconds": 4201.3, "best": 33.58637619018555}
+ 64%|██████▎   | 148M/233M [00:01<00:00, 154MB/s]
+ 71%|███████   | 165M/233M [00:01<00:00, 160MB/s]
+ 78%|███████▊  | 181M/233M [00:01<00:00, 163MB/s]
+ 85%|████████▍ | 198M/233M [00:01<00:00, 165MB/s]
+ 92%|█████████▏| 214M/233M [00:01<00:00, 168MB/s]
+100%|██████████| 233M/233M [00:01<00:00, 153MB/s]
+PROGRESS {"progress": 0.006009298324584961, "step": 10, "elapsed_min": 0.6, "lr": 0.00020030994415283206, "loss": 0.6190686225891113, "samples_per_s": 53.195549077136526, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.010322669982910156, "step": 30, "elapsed_min": 1.03, "lr": 0.00034408899943033855, "loss": 0.5923037846883138, "samples_per_s": 92.99789920873538, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.014587557474772136, "step": 50, "elapsed_min": 1.46, "lr": 0.00048625191582573794, "loss": 0.4996269989013672, "samples_per_s": 109.68151320033472, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.01884872817993164, "step": 70, "elapsed_min": 1.88, "lr": 0.0006282909393310548, "loss": 0.4310596193586077, "samples_per_s": 118.84011255499632, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.023148712158203126, "step": 90, "elapsed_min": 2.31, "lr": 0.0007716237386067709, "loss": 0.3797763824462891, "samples_per_s": 124.41227414322132, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.027440053304036458, "step": 110, "elapsed_min": 2.74, "lr": 0.000914668443467882, "loss": 0.34262140447443185, "samples_per_s": 128.2788324376385, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.03175747426350911, "step": 130, "elapsed_min": 3.18, "lr": 0.0009999919083228032, "loss": 0.31354176447941706, "samples_per_s": 130.99217123356814, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.036064486185709635, "step": 150, "elapsed_min": 3.61, "lr": 0.0009999036535240989, "loss": 0.2908135223388672, "samples_per_s": 133.09433432779431, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.04037412261962891, "step": 170, "elapsed_min": 4.04, "lr": 0.0009997180814385418, "loss": 0.2714434455422794, "samples_per_s": 134.73933514131545, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.04469696044921875, "step": 190, "elapsed_min": 4.47, "lr": 0.0009994342366337675, "loss": 0.25599800912957443, "samples_per_s": 136.02676501088627, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.04902678934733073, "step": 210, "elapsed_min": 4.9, "lr": 0.000999051897358516, "loss": 0.24470376514253162, "samples_per_s": 137.06757290212994, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.05339176940917969, "step": 230, "elapsed_min": 5.34, "lr": 0.0009985672177631854, "loss": 0.23313444386357846, "samples_per_s": 137.8486072738464, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.0577457021077474, "step": 250, "elapsed_min": 5.77, "lr": 0.0009979846014354172, "loss": 0.22348411560058593, "samples_per_s": 138.53813105202386, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.062110997517903645, "step": 270, "elapsed_min": 6.21, "lr": 0.000997301155323067, "loss": 0.21423673276548033, "samples_per_s": 139.10549575051203, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.0664650166829427, "step": 290, "elapsed_min": 6.65, "lr": 0.000996520556757418, "loss": 0.20633235799855199, "samples_per_s": 139.6220194931656, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.07077474975585937, "step": 310, "elapsed_min": 7.08, "lr": 0.0009956507624684571, "loss": 0.1991886754189768, "samples_per_s": 140.16272406335557, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.07516560363769531, "step": 330, "elapsed_min": 7.52, "lr": 0.0009946653877694433, "loss": 0.19298471393007222, "samples_per_s": 140.48952361091827, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.07955851745605469, "step": 350, "elapsed_min": 7.96, "lr": 0.0009935795451097974, "loss": 0.18793474469866073, "samples_per_s": 140.77664017470084, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 0, "elapsed_min": 8.18, "step": 360, "lr": 0.0009929979286915516, "samples_per_s": 140.9006520589433, "mem_gb": [9.22, 9.2], "train_loss": 0.18556474049886068, "train_pix": 0.04159155421786838, "train_census": 0.02347049978044298, "train_flow": 1.6532513088650174, "train_ui": 0.5324357350667318, "train_distill": 0.0, "val_psnr": 30.410005569458008, "val_psnr_interp": 31.135360717773438, "val_psnr_extrap": 29.706972122192383, "val_psnr_ui": 29.51950454711914, "best": 30.410005569458008}
+/usr/local/lib/python3.13/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+PROGRESS {"progress": 0.08406651814778646, "step": 370, "elapsed_min": 8.41, "lr": 0.000992361491479578, "loss": 0.1043750524520874, "samples_per_s": 144.7827652735755, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.08846514892578125, "step": 390, "elapsed_min": 8.85, "lr": 0.0009910719242032487, "loss": 0.0939811627070109, "samples_per_s": 145.25970412709987, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.09286154174804688, "step": 410, "elapsed_min": 9.29, "lr": 0.0009896835285599331, "loss": 0.09201251983642578, "samples_per_s": 145.38518258356984, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.09725710042317709, "step": 430, "elapsed_min": 9.73, "lr": 0.0009881962469143399, "loss": 0.09117039271763393, "samples_per_s": 145.4465898213715, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.10166457112630209, "step": 450, "elapsed_min": 10.17, "lr": 0.0009866056942720042, "loss": 0.09138675265842014, "samples_per_s": 145.39367770731576, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1060638936360677, "step": 470, "elapsed_min": 10.61, "lr": 0.0009849193055079806, "loss": 0.09201656688343395, "samples_per_s": 145.4089197314803, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1104432373046875, "step": 490, "elapsed_min": 11.04, "lr": 0.0009831429009125507, "loss": 0.09241038102370042, "samples_per_s": 145.52104676278643, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.11482670084635417, "step": 510, "elapsed_min": 11.48, "lr": 0.000981267594094094, "loss": 0.09168914794921874, "samples_per_s": 145.58521576017552, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.11920311482747396, "step": 530, "elapsed_min": 11.92, "lr": 0.0009792986376657333, "loss": 0.09085651846492991, "samples_per_s": 145.66169024707537, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.12357611083984375, "step": 550, "elapsed_min": 12.36, "lr": 0.000977235139595324, "loss": 0.09093700208162006, "samples_per_s": 145.7341824407827, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.12794276936848958, "step": 570, "elapsed_min": 12.79, "lr": 0.0009750792117452681, "loss": 0.0904808589390346, "samples_per_s": 145.8128962262627, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.13230884806315105, "step": 590, "elapsed_min": 13.23, "lr": 0.0009728286693908967, "loss": 0.08994333847709324, "samples_per_s": 145.8790696404446, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.13668263753255208, "step": 610, "elapsed_min": 13.67, "lr": 0.0009704794579135895, "loss": 0.0900961685180664, "samples_per_s": 145.91526024771096, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1410360107421875, "step": 630, "elapsed_min": 14.1, "lr": 0.0009680475638422312, "loss": 0.08985491152162906, "samples_per_s": 145.99598804040642, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.14539738972981772, "step": 650, "elapsed_min": 14.54, "lr": 0.0009655179961825419, "loss": 0.08919456745016163, "samples_per_s": 146.04725189369827, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1497508748372396, "step": 670, "elapsed_min": 14.98, "lr": 0.0009629004757636409, "loss": 0.08915898722987022, "samples_per_s": 146.10889593801687, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.15411867268880208, "step": 690, "elapsed_min": 15.41, "lr": 0.0009601819699456791, "loss": 0.08922886125969165, "samples_per_s": 146.1341795979281, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.15847503662109375, "step": 710, "elapsed_min": 15.85, "lr": 0.0009573789528928992, "loss": 0.08874397277832032, "samples_per_s": 146.1783467486313, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 1, "elapsed_min": 16.28, "step": 730, "lr": 0.0009544843690030808, "samples_per_s": 146.21612085542736, "mem_gb": [9.22, 9.2], "train_loss": 0.08836124523265941, "train_pix": 0.019136901803918787, "train_census": 0.012087221403379698, "train_flow": 1.5577640017947636, "train_ui": 0.21707382202148437, "train_distill": 0.0, "val_psnr": 31.965347290039062, "val_psnr_interp": 32.44446563720703, "val_psnr_extrap": 31.500972747802734, "val_psnr_ui": 31.396854400634766, "best": 31.965347290039062}
+PROGRESS {"progress": 0.16283231608072918, "step": 730, "elapsed_min": 16.28, "lr": 0.0009544843690030808, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.16724558512369792, "step": 750, "elapsed_min": 16.72, "lr": 0.0009514604322646651, "loss": 0.08485576510429382, "samples_per_s": 146.556387178676, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.17160992431640626, "step": 770, "elapsed_min": 17.16, "lr": 0.0009483794146040204, "loss": 0.07963845729827881, "samples_per_s": 146.5995364547662, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.175972412109375, "step": 790, "elapsed_min": 17.6, "lr": 0.0009452102764268918, "loss": 0.07833921114603679, "samples_per_s": 146.63486667383742, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1803378702799479, "step": 810, "elapsed_min": 18.03, "lr": 0.0009419501140543607, "loss": 0.07925630807876587, "samples_per_s": 146.6274329559706, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1846915079752604, "step": 830, "elapsed_min": 18.47, "lr": 0.0009386108917635991, "loss": 0.07907341003417968, "samples_per_s": 146.70248316409217, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.18907676188151043, "step": 850, "elapsed_min": 18.91, "lr": 0.0009351593665822517, "loss": 0.07867546081542968, "samples_per_s": 146.5754956172922, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.1934906005859375, "step": 870, "elapsed_min": 19.35, "lr": 0.0009315968080637993, "loss": 0.07892556871686662, "samples_per_s": 146.34815817297883, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.19787677001953125, "step": 890, "elapsed_min": 19.79, "lr": 0.0009279693113786177, "loss": 0.07845820784568787, "samples_per_s": 146.29361523591538, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.20226458740234374, "step": 910, "elapsed_min": 20.23, "lr": 0.0009242541402278519, "loss": 0.07784990734524197, "samples_per_s": 146.24505585796302, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2066461181640625, "step": 930, "elapsed_min": 20.66, "lr": 0.0009204588978507206, "loss": 0.07758657932281494, "samples_per_s": 146.22731220183923, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2110149943033854, "step": 950, "elapsed_min": 21.1, "lr": 0.0009165904137858468, "loss": 0.07772281820123846, "samples_per_s": 146.25124486156602, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.21538505045572917, "step": 970, "elapsed_min": 21.54, "lr": 0.0009126375451931419, "loss": 0.0769896109898885, "samples_per_s": 146.2679332662781, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.21975789388020833, "step": 990, "elapsed_min": 21.98, "lr": 0.0009085995174284558, "loss": 0.07700920838576097, "samples_per_s": 146.27478935517192, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2241197713216146, "step": 1010, "elapsed_min": 22.41, "lr": 0.0009044900684035772, "loss": 0.07636890411376954, "samples_per_s": 146.30694388693894, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2284815673828125, "step": 1030, "elapsed_min": 22.85, "lr": 0.0009003000738699151, "loss": 0.07656232833862305, "samples_per_s": 146.3349370148314, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.23283787027994793, "step": 1050, "elapsed_min": 23.28, "lr": 0.0008960357211833454, "loss": 0.0764842689037323, "samples_per_s": 146.37100443775387, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.23720188395182293, "step": 1070, "elapsed_min": 23.72, "lr": 0.0008916848762559367, "loss": 0.07612351810230929, "samples_per_s": 146.38764271932465, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.241562744140625, "step": 1090, "elapsed_min": 24.16, "lr": 0.0008872591143862987, "loss": 0.07672134505377876, "samples_per_s": 146.40823996924152, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 2, "elapsed_min": 24.37, "step": 1100, "lr": 0.0008850117319090704, "samples_per_s": 146.4080968614799, "mem_gb": [9.22, 9.2], "train_loss": 0.07676988550134607, "train_pix": 0.01727501121727196, "train_census": 0.011221035106762036, "train_flow": 1.5884384567673142, "train_ui": 0.17081539050952807, "train_distill": 0.0, "val_psnr": 32.45305633544922, "val_psnr_interp": 32.918270111083984, "val_psnr_extrap": 32.002159118652344, "val_psnr_ui": 32.046573638916016, "best": 32.45305633544922}
+PROGRESS {"progress": 0.24596742757161458, "step": 1110, "elapsed_min": 24.6, "lr": 0.0008827105636219441, "loss": 0.07956146001815796, "samples_per_s": 147.18151509825864, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.25033650716145833, "step": 1130, "elapsed_min": 25.03, "lr": 0.0008781219353211617, "loss": 0.07858999570210774, "samples_per_s": 146.71565813895657, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.254713134765625, "step": 1150, "elapsed_min": 25.47, "lr": 0.0008734495729951745, "loss": 0.07565702915191651, "samples_per_s": 146.52125715882045, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2590824991861979, "step": 1170, "elapsed_min": 25.91, "lr": 0.0008687102166467617, "loss": 0.07354860986982073, "samples_per_s": 146.5082088520677, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.26344755045572915, "step": 1190, "elapsed_min": 26.34, "lr": 0.0008639019112014541, "loss": 0.07251485188802083, "samples_per_s": 146.5326505227701, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2678218790690104, "step": 1210, "elapsed_min": 26.78, "lr": 0.0008590105254960085, "loss": 0.07305858785455877, "samples_per_s": 146.49179617369754, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2721714884440104, "step": 1230, "elapsed_min": 27.22, "lr": 0.0008540754307332643, "loss": 0.07250205553494966, "samples_per_s": 146.59107117876079, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2765229288736979, "step": 1250, "elapsed_min": 27.65, "lr": 0.0008490680474672548, "loss": 0.07290205001831054, "samples_per_s": 146.65569208289813, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2808807576497396, "step": 1270, "elapsed_min": 28.09, "lr": 0.0008439839294847033, "loss": 0.0722255875082577, "samples_per_s": 146.68004561189312, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.2852625528971354, "step": 1290, "elapsed_min": 28.53, "lr": 0.0008388028651087392, "loss": 0.07163735941836709, "samples_per_s": 146.61441341047683, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.28964420572916666, "step": 1310, "elapsed_min": 28.96, "lr": 0.0008335538392300839, "loss": 0.07142366681780134, "samples_per_s": 146.56180938927744, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.29399763997395834, "step": 1330, "elapsed_min": 29.4, "lr": 0.0008282721905307341, "loss": 0.07149122486943783, "samples_per_s": 146.60073515786442, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.29834566243489585, "step": 1350, "elapsed_min": 29.83, "lr": 0.000822932067885342, "loss": 0.07144818878173828, "samples_per_s": 146.64790025431418, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.3026968994140625, "step": 1370, "elapsed_min": 30.27, "lr": 0.0008175239868529205, "loss": 0.0713319566514757, "samples_per_s": 146.68022152247937, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.3070531005859375, "step": 1390, "elapsed_min": 30.71, "lr": 0.0008120466682493254, "loss": 0.07103952210524987, "samples_per_s": 146.6963783681324, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.31142759195963543, "step": 1410, "elapsed_min": 31.14, "lr": 0.0008064839489381775, "loss": 0.07092108572683027, "samples_per_s": 146.67100195669929, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.31579439290364586, "step": 1430, "elapsed_min": 31.58, "lr": 0.0008008697511856471, "loss": 0.07085377086292613, "samples_per_s": 146.66434221802183, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.32015132649739586, "step": 1450, "elapsed_min": 32.02, "lr": 0.0007952083617826156, "loss": 0.07098347800118583, "samples_per_s": 146.6773276067366, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 3, "elapsed_min": 32.45, "step": 1470, "lr": 0.0007894904113783041, "samples_per_s": 146.6918484705496, "mem_gb": [9.22, 9.2], "train_loss": 0.07066406559299779, "train_pix": 0.015627011737307985, "train_census": 0.010270584596169962, "train_flow": 1.5575855152027027, "train_ui": 0.15436270430281357, "train_distill": 0.0, "val_psnr": 32.855812072753906, "val_psnr_interp": 33.31817626953125, "val_psnr_extrap": 32.40766906738281, "val_psnr_ui": 32.59884262084961, "best": 32.855812072753906}
+PROGRESS {"progress": 0.32450665283203123, "step": 1470, "elapsed_min": 32.45, "lr": 0.0007894904113783041, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.32891387939453126, "step": 1490, "elapsed_min": 32.89, "lr": 0.0007836457949794007, "loss": 0.06269835829734802, "samples_per_s": 146.71083138483317, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.333255615234375, "step": 1510, "elapsed_min": 33.33, "lr": 0.0007778316138153825, "loss": 0.06442939043045044, "samples_per_s": 147.0574714698572, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.3376211954752604, "step": 1530, "elapsed_min": 33.76, "lr": 0.00077193021408675, "loss": 0.06385731299718221, "samples_per_s": 146.90538589930387, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.34196500651041667, "step": 1550, "elapsed_min": 34.2, "lr": 0.000766004383820773, "loss": 0.06413705945014954, "samples_per_s": 147.01259929133707, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.34631424967447916, "step": 1570, "elapsed_min": 34.63, "lr": 0.0007600184961380662, "loss": 0.0641661024093628, "samples_per_s": 147.04068034952914, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.3506675211588542, "step": 1590, "elapsed_min": 35.07, "lr": 0.0007539755004670992, "loss": 0.06505339543024699, "samples_per_s": 147.0364518475503, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.355023681640625, "step": 1610, "elapsed_min": 35.5, "lr": 0.0007478780577552799, "loss": 0.0655543599809919, "samples_per_s": 147.0195848967407, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.35937821451822916, "step": 1630, "elapsed_min": 35.94, "lr": 0.0007417336806948961, "loss": 0.06557165384292603, "samples_per_s": 147.01373303217983, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.36374381510416665, "step": 1650, "elapsed_min": 36.37, "lr": 0.0007355255236316648, "loss": 0.06555572085910373, "samples_per_s": 146.96773727802676, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.36812239583333334, "step": 1670, "elapsed_min": 36.81, "lr": 0.0007292517152570053, "loss": 0.06574788093566894, "samples_per_s": 146.88711661500326, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.37247184244791665, "step": 1690, "elapsed_min": 37.25, "lr": 0.0007229741043991586, "loss": 0.06535828330300071, "samples_per_s": 146.9105620544313, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.3768203938802083, "step": 1710, "elapsed_min": 37.68, "lr": 0.0007166536525814947, "loss": 0.06577417055765787, "samples_per_s": 146.93264169612218, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.38117460123697916, "step": 1730, "elapsed_min": 38.12, "lr": 0.0007102820222789595, "loss": 0.06612716087928185, "samples_per_s": 146.93663911662844, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.38555594889322914, "step": 1750, "elapsed_min": 38.56, "lr": 0.0007038285694751407, "loss": 0.06592679704938616, "samples_per_s": 146.87462761555383, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.3899261474609375, "step": 1770, "elapsed_min": 38.99, "lr": 0.0006973507522108362, "loss": 0.06569175720214844, "samples_per_s": 146.84608512845986, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.394282470703125, "step": 1790, "elapsed_min": 39.43, "lr": 0.0006908542525749394, "loss": 0.06527420282363891, "samples_per_s": 146.8502462354614, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.398669677734375, "step": 1810, "elapsed_min": 39.87, "lr": 0.0006842734033692208, "loss": 0.06521293415742761, "samples_per_s": 146.7926739114787, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4030467529296875, "step": 1830, "elapsed_min": 40.3, "lr": 0.000677670776509963, "loss": 0.06505614916483561, "samples_per_s": 146.76052680428424, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 4, "elapsed_min": 40.52, "step": 1840, "lr": 0.0006743756827714945, "samples_per_s": 146.76935439938742, "mem_gb": [9.22, 9.2], "train_loss": 0.0650246542853278, "train_pix": 0.014595285621849266, "train_census": 0.009830051499444084, "train_flow": 1.5359528412690033, "train_ui": 0.13452963957915434, "train_distill": 0.0, "val_psnr": 33.237701416015625, "val_psnr_interp": 33.73825454711914, "val_psnr_extrap": 32.75255584716797, "val_psnr_ui": 32.825111389160156, "best": 33.237701416015625}
+PROGRESS {"progress": 0.40743526204427083, "step": 1850, "elapsed_min": 40.74, "lr": 0.0006710151587681495, "loss": 0.0619623601436615, "samples_per_s": 147.6310875503723, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4117823486328125, "step": 1870, "elapsed_min": 41.18, "lr": 0.0006643883978892474, "loss": 0.06348318656285604, "samples_per_s": 147.35949140535413, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.41618485514322917, "step": 1890, "elapsed_min": 41.62, "lr": 0.0006576440501053486, "loss": 0.06490255832672119, "samples_per_s": 146.557943480548, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.42058097330729166, "step": 1910, "elapsed_min": 42.06, "lr": 0.0006508776094496727, "loss": 0.0635941505432129, "samples_per_s": 146.2776623115463, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.424956298828125, "step": 1930, "elapsed_min": 42.5, "lr": 0.0006441129023820113, "loss": 0.06451695230272081, "samples_per_s": 146.27717211401244, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.42933199055989585, "step": 1950, "elapsed_min": 42.93, "lr": 0.0006373187876597342, "loss": 0.06438434774225409, "samples_per_s": 146.2746867852791, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.43370003255208334, "step": 1970, "elapsed_min": 43.37, "lr": 0.0006305091436761555, "loss": 0.06424315525935247, "samples_per_s": 146.31219572701386, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.43806429036458333, "step": 1990, "elapsed_min": 43.81, "lr": 0.0006236794131654001, "loss": 0.06424144744873046, "samples_per_s": 146.35648830602548, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.442417724609375, "step": 2010, "elapsed_min": 44.24, "lr": 0.0006168421012662742, "loss": 0.06441407484166763, "samples_per_s": 146.43314068580054, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.446773193359375, "step": 2030, "elapsed_min": 44.68, "lr": 0.0006099784494267595, "loss": 0.06371149263883892, "samples_per_s": 146.48647684182305, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.45116642252604167, "step": 2050, "elapsed_min": 45.12, "lr": 0.0006030332274826713, "loss": 0.06342903318859282, "samples_per_s": 146.40918581073436, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.45553641764322916, "step": 2070, "elapsed_min": 45.55, "lr": 0.0005961041401834668, "loss": 0.06338768834653108, "samples_per_s": 146.41300892304423, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4599300537109375, "step": 2090, "elapsed_min": 45.99, "lr": 0.000589118263681286, "loss": 0.0630840187072754, "samples_per_s": 146.35294499967733, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4642953287760417, "step": 2110, "elapsed_min": 46.43, "lr": 0.0005821597074468508, "loss": 0.06255712862367983, "samples_per_s": 146.3720873752788, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4686695556640625, "step": 2130, "elapsed_min": 46.87, "lr": 0.000575170509836296, "loss": 0.062124568018419986, "samples_per_s": 146.3678832957991, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4730434977213542, "step": 2150, "elapsed_min": 47.3, "lr": 0.0005681667822472513, "loss": 0.06211717051844443, "samples_per_s": 146.36488056931722, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4773957112630208, "step": 2170, "elapsed_min": 47.74, "lr": 0.0005611843668267535, "loss": 0.06179527513908618, "samples_per_s": 146.40631116862696, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.481776123046875, "step": 2190, "elapsed_min": 48.18, "lr": 0.0005541445403365163, "loss": 0.061574674333844864, "samples_per_s": 146.38904151545276, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 5, "elapsed_min": 48.61, "step": 2210, "lr": 0.0005471057794929686, "samples_per_s": 146.38697638923657, "mem_gb": [9.22, 9.2], "train_loss": 0.061543047105943834, "train_pix": 0.013812492989205026, "train_census": 0.009389399837803196, "train_flow": 1.549896240234375, "train_ui": 0.12236058003193623, "train_distill": 0.0, "val_psnr": 33.482269287109375, "val_psnr_interp": 33.992488861083984, "val_psnr_extrap": 32.98774719238281, "val_psnr_ui": 33.046348571777344, "best": 33.482269287109375}
+PROGRESS {"progress": 0.486149169921875, "step": 2210, "elapsed_min": 48.61, "lr": 0.0005471057794929686, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4905667724609375, "step": 2230, "elapsed_min": 49.06, "lr": 0.0005399858155089847, "loss": 0.05784592032432556, "samples_per_s": 146.36327717890313, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.49493436686197917, "step": 2250, "elapsed_min": 49.49, "lr": 0.0005329384994242705, "loss": 0.05971453785896301, "samples_per_s": 146.44781108785472, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.4993129475911458, "step": 2270, "elapsed_min": 49.93, "lr": 0.0005258669423237637, "loss": 0.062040305137634276, "samples_per_s": 146.3540120838365, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5037050374348958, "step": 2290, "elapsed_min": 50.37, "lr": 0.0005187684440451759, "loss": 0.06108236312866211, "samples_per_s": 146.19397298826746, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.508063720703125, "step": 2310, "elapsed_min": 50.81, "lr": 0.000511720279440645, "loss": 0.060548205375671384, "samples_per_s": 146.3213290874816, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5124471842447916, "step": 2330, "elapsed_min": 51.24, "lr": 0.000504629791770595, "loss": 0.059502136707305905, "samples_per_s": 146.26826490762372, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5168175862630209, "step": 2350, "elapsed_min": 51.68, "lr": 0.0004975596017580586, "loss": 0.05885658264160156, "samples_per_s": 146.29283186505953, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5211816813151041, "step": 2370, "elapsed_min": 52.12, "lr": 0.0004905002019574116, "loss": 0.05904850959777832, "samples_per_s": 146.33741595988886, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5255364176432291, "step": 2390, "elapsed_min": 52.55, "lr": 0.00048345793118022084, "loss": 0.05892984602186415, "samples_per_s": 146.4071677289423, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5299010416666666, "step": 2410, "elapsed_min": 52.99, "lr": 0.00047640307307847017, "loss": 0.05912318229675293, "samples_per_s": 146.4297238999109, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5342698974609374, "step": 2430, "elapsed_min": 53.43, "lr": 0.0004693461974096626, "loss": 0.05928698886524547, "samples_per_s": 146.43528777043173, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5386378173828125, "step": 2450, "elapsed_min": 53.86, "lr": 0.0004622970686052795, "loss": 0.058901838461558026, "samples_per_s": 146.44261169713113, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5429884033203125, "step": 2470, "elapsed_min": 54.3, "lr": 0.0004552835121033258, "loss": 0.05888205308180589, "samples_per_s": 146.49345651526437, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.547343017578125, "step": 2490, "elapsed_min": 54.73, "lr": 0.0004482724516804957, "loss": 0.05876976421901158, "samples_per_s": 146.5274363514768, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.55171337890625, "step": 2510, "elapsed_min": 55.17, "lr": 0.0004412464844911369, "loss": 0.05844062169392904, "samples_per_s": 146.52163864684005, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5560876057942709, "step": 2530, "elapsed_min": 55.61, "lr": 0.0004342261903312232, "loss": 0.05830142498016357, "samples_per_s": 146.50849530009194, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5604462890625, "step": 2550, "elapsed_min": 56.04, "lr": 0.0004272440712847205, "loss": 0.058457475550034464, "samples_per_s": 146.5276215113781, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5648187255859375, "step": 2570, "elapsed_min": 56.48, "lr": 0.00042025459001585204, "loss": 0.05845069885253906, "samples_per_s": 146.51887842040946, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 6, "elapsed_min": 56.7, "step": 2580, "lr": 0.0004167678406878691, "samples_per_s": 146.51723539718918, "mem_gb": [9.22, 9.2], "train_loss": 0.05841009810164168, "train_pix": 0.013226271964408256, "train_census": 0.009217439471064386, "train_flow": 1.4992062130489865, "train_ui": 0.11312838373957454, "train_distill": 0.0, "val_psnr": 33.640106201171875, "val_psnr_interp": 34.11972427368164, "val_psnr_extrap": 33.17524719238281, "val_psnr_ui": 33.22993469238281, "best": 33.640106201171875}
+PROGRESS {"progress": 0.56926318359375, "step": 2590, "elapsed_min": 56.93, "lr": 0.00041316647996061175, "loss": 0.058632957935333255, "samples_per_s": 144.48057580499292, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5736284993489583, "step": 2610, "elapsed_min": 57.36, "lr": 0.00040622219397372703, "loss": 0.05541936953862508, "samples_per_s": 145.8926997057585, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5779917805989583, "step": 2630, "elapsed_min": 57.8, "lr": 0.00039929997578970705, "loss": 0.057468223571777347, "samples_per_s": 146.20596505598675, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.582370849609375, "step": 2650, "elapsed_min": 58.24, "lr": 0.0003923730318009193, "loss": 0.05686901637486049, "samples_per_s": 146.18986521507856, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5867428792317708, "step": 2670, "elapsed_min": 58.67, "lr": 0.0003854789191369161, "loss": 0.056368811925252275, "samples_per_s": 146.23364063804308, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5910924479166667, "step": 2690, "elapsed_min": 59.11, "lr": 0.00037864310641708696, "loss": 0.05680576237765225, "samples_per_s": 146.39769382990715, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5954597981770834, "step": 2710, "elapsed_min": 59.55, "lr": 0.000371803680358343, "loss": 0.05692925819983849, "samples_per_s": 146.41976189866998, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.5998371175130208, "step": 2730, "elapsed_min": 59.98, "lr": 0.00036497448009985083, "loss": 0.05654372533162435, "samples_per_s": 146.3915846791302, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6042191975911458, "step": 2750, "elapsed_min": 60.42, "lr": 0.00035816513611108787, "loss": 0.056550368140725525, "samples_per_s": 146.35123199917652, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6085824788411458, "step": 2770, "elapsed_min": 60.86, "lr": 0.0003514134871358702, "loss": 0.056103139174611946, "samples_per_s": 146.38568199598197, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6129603678385417, "step": 2790, "elapsed_min": 61.3, "lr": 0.00034466915802594517, "loss": 0.05584989729381743, "samples_per_s": 146.36693558461343, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6173206787109375, "step": 2810, "elapsed_min": 61.73, "lr": 0.00033798304650281883, "loss": 0.0558172143023947, "samples_per_s": 146.40255808401005, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6216750081380208, "step": 2830, "elapsed_min": 62.17, "lr": 0.00033133844994601646, "loss": 0.05561541748046875, "samples_per_s": 146.4486416131181, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.626060302734375, "step": 2850, "elapsed_min": 62.61, "lr": 0.0003246806070889331, "loss": 0.05551505971837927, "samples_per_s": 146.4110017023549, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6304007161458334, "step": 2870, "elapsed_min": 63.04, "lr": 0.000318125822741101, "loss": 0.055377769470214847, "samples_per_s": 146.48236277752358, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6347296956380208, "step": 2890, "elapsed_min": 63.47, "lr": 0.0003116242013642626, "loss": 0.05545992082165133, "samples_per_s": 146.56919722743362, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.639115966796875, "step": 2910, "elapsed_min": 63.91, "lr": 0.0003050744081908366, "loss": 0.055239452015269884, "samples_per_s": 146.52902553288814, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6435026041666667, "step": 2930, "elapsed_min": 64.35, "lr": 0.0002985635117376399, "loss": 0.0553473881312779, "samples_per_s": 146.4928753308702, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 7, "elapsed_min": 64.79, "step": 2950, "lr": 0.000292114432694365, "samples_per_s": 146.48647968079067, "mem_gb": [9.22, 9.2], "train_loss": 0.055108812693003065, "train_pix": 0.0126873931369266, "train_census": 0.008936459953720504, "train_flow": 1.5367306271114864, "train_ui": 0.09869189906764675, "train_distill": 0.0, "val_psnr": 33.736968994140625, "val_psnr_interp": 34.18021774291992, "val_psnr_extrap": 33.3073616027832, "val_psnr_ui": 33.19715881347656, "best": 33.736968994140625}
+PROGRESS {"progress": 0.6478749186197916, "step": 2950, "elapsed_min": 64.79, "lr": 0.000292114432694365, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6523111572265625, "step": 2970, "elapsed_min": 65.23, "lr": 0.00028561378086881394, "loss": 0.054164767265319824, "samples_per_s": 145.74485892830867, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6567306722005208, "step": 2990, "elapsed_min": 65.67, "lr": 0.000279181742416534, "loss": 0.05416346788406372, "samples_per_s": 145.27941199412234, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6611495361328125, "step": 3010, "elapsed_min": 66.11, "lr": 0.0002727959849184949, "loss": 0.053738876183827715, "samples_per_s": 145.13032986831678, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6655430094401041, "step": 3030, "elapsed_min": 66.55, "lr": 0.00026649315416603993, "loss": 0.05540677309036255, "samples_per_s": 145.26510045486825, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6699337565104166, "step": 3050, "elapsed_min": 66.99, "lr": 0.0002602415699210714, "loss": 0.0545390510559082, "samples_per_s": 145.36395372314746, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6743179931640625, "step": 3070, "elapsed_min": 67.43, "lr": 0.000254047731886915, "loss": 0.05423574050267537, "samples_per_s": 145.4657963538789, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6787173258463541, "step": 3090, "elapsed_min": 67.87, "lr": 0.0002478825153708247, "loss": 0.05390119893210275, "samples_per_s": 145.4672757750257, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6831070149739583, "step": 3110, "elapsed_min": 68.31, "lr": 0.00024178192838301594, "loss": 0.05381847023963928, "samples_per_s": 145.50834610890718, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.687520263671875, "step": 3130, "elapsed_min": 68.75, "lr": 0.00023570131630664795, "loss": 0.05446722772386339, "samples_per_s": 145.4538043538358, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.69188623046875, "step": 3150, "elapsed_min": 69.19, "lr": 0.00022973907706707455, "loss": 0.05434061050415039, "samples_per_s": 145.56632980998992, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.6962535807291667, "step": 3170, "elapsed_min": 69.63, "lr": 0.0002238291116174561, "loss": 0.05401905233209783, "samples_per_s": 145.6546578587624, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7006348470052083, "step": 3190, "elapsed_min": 70.06, "lr": 0.0002179559348445889, "loss": 0.054002439975738524, "samples_per_s": 145.6895767935942, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7050082194010416, "step": 3210, "elapsed_min": 70.5, "lr": 0.00021215007542681698, "loss": 0.05411030695988582, "samples_per_s": 145.73944220743485, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7093701171875, "step": 3230, "elapsed_min": 70.94, "lr": 0.00020641707040368012, "loss": 0.05401228836604527, "samples_per_s": 145.80934293634076, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7137242024739583, "step": 3250, "elapsed_min": 71.37, "lr": 0.00020075286615352453, "loss": 0.05381738662719727, "samples_per_s": 145.8874739590518, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.71809716796875, "step": 3270, "elapsed_min": 71.81, "lr": 0.00019512409773763455, "loss": 0.05379296541213989, "samples_per_s": 145.91649307874553, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7224601236979167, "step": 3290, "elapsed_min": 72.25, "lr": 0.00018956925682686492, "loss": 0.053734661551082835, "samples_per_s": 145.96181965879188, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.726877685546875, "step": 3310, "elapsed_min": 72.69, "lr": 0.00018400815064260353, "loss": 0.05366156366136339, "samples_per_s": 145.90095817427365, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 8, "elapsed_min": 72.91, "step": 3320, "lr": 0.00018127900890060452, "samples_per_s": 145.91246725846764, "mem_gb": [9.22, 9.2], "train_loss": 0.05352146045581715, "train_pix": 0.012439798664402318, "train_census": 0.00882500442298683, "train_flow": 1.512907615867821, "train_ui": 0.09362022812302048, "train_distill": 0.0, "val_psnr": 33.81903076171875, "val_psnr_interp": 34.25882339477539, "val_psnr_extrap": 33.39278030395508, "val_psnr_ui": 33.289207458496094, "best": 33.81903076171875}
+PROGRESS {"progress": 0.731293212890625, "step": 3330, "elapsed_min": 73.13, "lr": 0.00017851434603071431, "loss": 0.056484824419021605, "samples_per_s": 146.5944186832736, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7356476236979167, "step": 3350, "elapsed_min": 73.56, "lr": 0.00017316106601800646, "loss": 0.05418762763341268, "samples_per_s": 146.85002137906415, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7399952799479167, "step": 3370, "elapsed_min": 74.0, "lr": 0.00016788104173880405, "loss": 0.05291605949401856, "samples_per_s": 146.99208011182802, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.744375, "step": 3390, "elapsed_min": 74.44, "lr": 0.00016262876014299778, "loss": 0.052063001905168806, "samples_per_s": 146.744379198597, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.748736328125, "step": 3410, "elapsed_min": 74.87, "lr": 0.00015746608742241478, "loss": 0.05260907279120551, "samples_per_s": 146.74430207700837, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.753117919921875, "step": 3430, "elapsed_min": 75.31, "lr": 0.00015234834928362135, "loss": 0.052133066003972835, "samples_per_s": 146.62022703877298, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.75749658203125, "step": 3450, "elapsed_min": 75.75, "lr": 0.00014730407272860185, "loss": 0.05159476353571965, "samples_per_s": 146.54984442495464, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.761859130859375, "step": 3470, "elapsed_min": 76.19, "lr": 0.00014234899699500406, "loss": 0.05191489537556966, "samples_per_s": 146.57022399945325, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.766221923828125, "step": 3490, "elapsed_min": 76.62, "lr": 0.00013746514829955764, "loss": 0.05189394670374253, "samples_per_s": 146.58468873300515, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7706028645833334, "step": 3510, "elapsed_min": 77.06, "lr": 0.00013263392001862712, "loss": 0.051720990632709705, "samples_per_s": 146.53241624809016, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7749700520833334, "step": 3530, "elapsed_min": 77.5, "lr": 0.0001278915674789691, "loss": 0.05171541032337007, "samples_per_s": 146.53381375470536, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.77933984375, "step": 3550, "elapsed_min": 77.93, "lr": 0.00012322099668234362, "loss": 0.05199498300967009, "samples_per_s": 146.52728031843435, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.783715087890625, "step": 3570, "elapsed_min": 78.37, "lr": 0.00011862030715385634, "loss": 0.051838249206542966, "samples_per_s": 146.50727809946258, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7880819498697916, "step": 3590, "elapsed_min": 78.81, "lr": 0.00011410489055868804, "loss": 0.05173664446230288, "samples_per_s": 146.51113897765484, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.7924554036458333, "step": 3610, "elapsed_min": 79.25, "lr": 0.0001096601228018155, "loss": 0.0515914851221545, "samples_per_s": 146.49906902217282, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.796837646484375, "step": 3630, "elapsed_min": 79.68, "lr": 0.00010528507440036665, "loss": 0.051455666941981164, "samples_per_s": 146.4696828556216, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8011952311197916, "step": 3650, "elapsed_min": 80.12, "lr": 0.00010101358281162771, "loss": 0.051320578835227275, "samples_per_s": 146.49391133283817, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8055528971354167, "step": 3670, "elapsed_min": 80.56, "lr": 9.682158247362923e-05, "loss": 0.051302947998046876, "samples_per_s": 146.51510160232394, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 9, "elapsed_min": 80.99, "step": 3690, "lr": 9.271014093840878e-05, "samples_per_s": 146.53454048363457, "mem_gb": [9.22, 9.2], "train_loss": 0.05133379858893317, "train_pix": 0.012221030931215028, "train_census": 0.008743789389326765, "train_flow": 1.4714465991870778, "train_ui": 0.08636231293549408, "train_distill": 0.0, "val_psnr": 33.86380386352539, "val_psnr_interp": 34.3082389831543, "val_psnr_extrap": 33.43304443359375, "val_psnr_ui": 33.32408142089844, "best": 33.86380386352539}
+PROGRESS {"progress": 0.809910400390625, "step": 3690, "elapsed_min": 80.99, "lr": 9.271014093840878e-05, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8143116861979167, "step": 3710, "elapsed_min": 81.43, "lr": 8.863983974105343e-05, "loss": 0.050610148906707765, "samples_per_s": 146.95448910388433, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.818673828125, "step": 3730, "elapsed_min": 81.87, "lr": 8.468831019753672e-05, "loss": 0.050831520557403566, "samples_per_s": 146.83701284732106, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8230453287760416, "step": 3750, "elapsed_min": 82.3, "lr": 8.081156444972833e-05, "loss": 0.05044982035954793, "samples_per_s": 146.69111248238565, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8274078776041667, "step": 3770, "elapsed_min": 82.74, "lr": 7.702662595997137e-05, "loss": 0.050357472896575925, "samples_per_s": 146.69426736433664, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.83176904296875, "step": 3790, "elapsed_min": 83.18, "lr": 7.332738621084316e-05, "loss": 0.05026983737945557, "samples_per_s": 146.70553813490406, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8361455078125, "step": 3810, "elapsed_min": 83.61, "lr": 6.970084207836204e-05, "loss": 0.05114374955495198, "samples_per_s": 146.62745220036493, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8405172526041667, "step": 3830, "elapsed_min": 84.05, "lr": 6.61646197084172e-05, "loss": 0.050868139948163714, "samples_per_s": 146.59410532108834, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8448765462239584, "step": 3850, "elapsed_min": 84.49, "lr": 6.272516962879798e-05, "loss": 0.05053226351737976, "samples_per_s": 146.62136187982975, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8492500813802083, "step": 3870, "elapsed_min": 84.93, "lr": 5.936217530389696e-05, "loss": 0.05063376426696777, "samples_per_s": 146.58928133056006, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.853636474609375, "step": 3890, "elapsed_min": 85.36, "lr": 5.607819445267476e-05, "loss": 0.05069021701812744, "samples_per_s": 146.5207589080674, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8580052083333334, "step": 3910, "elapsed_min": 85.8, "lr": 5.289658621755025e-05, "loss": 0.05070884877985174, "samples_per_s": 146.51834765399244, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8623838704427084, "step": 3930, "elapsed_min": 86.24, "lr": 4.979766303403171e-05, "loss": 0.050689303874969484, "samples_per_s": 146.48874955714624, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8667747395833333, "step": 3950, "elapsed_min": 86.68, "lr": 4.678112086201678e-05, "loss": 0.05054946679335374, "samples_per_s": 146.43223232881914, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8711978352864583, "step": 3970, "elapsed_min": 87.12, "lr": 4.383520953093766e-05, "loss": 0.05035552297319685, "samples_per_s": 146.30665985220062, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.875584228515625, "step": 3990, "elapsed_min": 87.56, "lr": 4.1006291134828166e-05, "loss": 0.05041187922159831, "samples_per_s": 146.27994185548167, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.879959228515625, "step": 4010, "elapsed_min": 88.0, "lr": 3.8277094104098645e-05, "loss": 0.050518745183944704, "samples_per_s": 146.28025396059826, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8843321940104166, "step": 4030, "elapsed_min": 88.43, "lr": 3.5641903265454796e-05, "loss": 0.05047647251802332, "samples_per_s": 146.28467340801654, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.8887158203125, "step": 4050, "elapsed_min": 88.87, "lr": 3.309387393110678e-05, "loss": 0.05040597915649414, "samples_per_s": 146.26865322657127, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 10, "elapsed_min": 89.09, "step": 4060, "lr": 3.1861307897092213e-05, "samples_per_s": 146.28111663248575, "mem_gb": [9.22, 9.2], "train_loss": 0.05037730964454445, "train_pix": 0.01207446407627415, "train_census": 0.008577995042543153, "train_flow": 1.5075361921980575, "train_ui": 0.08109314377243454, "train_distill": 0.0, "val_psnr": 33.89555358886719, "val_psnr_interp": 34.34721755981445, "val_psnr_extrap": 33.45778274536133, "val_psnr_ui": 33.32291030883789, "best": 33.89555358886719}
+PROGRESS {"progress": 0.8931306966145833, "step": 4070, "elapsed_min": 89.31, "lr": 3.0622904145896376e-05, "loss": 0.04802426397800445, "samples_per_s": 146.2329882924286, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.89753564453125, "step": 4090, "elapsed_min": 89.75, "lr": 2.825323313146309e-05, "loss": 0.04980292320251465, "samples_per_s": 145.60227877124896, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9018895670572916, "step": 4110, "elapsed_min": 90.19, "lr": 2.6005462997370094e-05, "loss": 0.04921467781066895, "samples_per_s": 146.15596605405798, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9062888997395834, "step": 4130, "elapsed_min": 90.63, "lr": 2.3830081946918883e-05, "loss": 0.04921696526663644, "samples_per_s": 145.9609388820233, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.910656494140625, "step": 4150, "elapsed_min": 91.07, "lr": 2.1766119039299717e-05, "loss": 0.050044578976101345, "samples_per_s": 146.08834005366901, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9150234375, "step": 4170, "elapsed_min": 91.5, "lr": 1.9798234035090863e-05, "loss": 0.04987854524092241, "samples_per_s": 146.1730822071818, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9194004720052084, "step": 4190, "elapsed_min": 91.94, "lr": 1.792229225659039e-05, "loss": 0.04980150369497446, "samples_per_s": 146.1801939502566, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.923752197265625, "step": 4210, "elapsed_min": 92.38, "lr": 1.6153336157843074e-05, "loss": 0.04984649658203125, "samples_per_s": 146.29758546582678, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.92811572265625, "step": 4230, "elapsed_min": 92.81, "lr": 1.4476187151881066e-05, "loss": 0.04971212499281939, "samples_per_s": 146.34144701433777, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9324765625, "step": 4250, "elapsed_min": 93.25, "lr": 1.2897049929429295e-05, "loss": 0.049870114577443975, "samples_per_s": 146.38543816970113, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9368736979166666, "step": 4270, "elapsed_min": 93.69, "lr": 1.1403252754023226e-05, "loss": 0.04998801549275716, "samples_per_s": 146.30554052684113, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9412420247395833, "step": 4290, "elapsed_min": 94.12, "lr": 1.0017462670882298e-05, "loss": 0.050001629539158036, "samples_per_s": 146.3232822765135, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9456013997395833, "step": 4310, "elapsed_min": 94.56, "lr": 8.732386108430083e-06, "loss": 0.049892646789550785, "samples_per_s": 146.3619719171862, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9499557291666667, "step": 4330, "elapsed_min": 95.0, "lr": 7.546656333821437e-06, "loss": 0.04986143112182617, "samples_per_s": 146.40750754357217, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9543258463541666, "step": 4350, "elapsed_min": 95.43, "lr": 6.455200177506444e-06, "loss": 0.05018121456277781, "samples_per_s": 146.41034930656963, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9586913248697917, "step": 4370, "elapsed_min": 95.87, "lr": 5.463714490588949e-06, "loss": 0.04994441924556609, "samples_per_s": 146.4229035097201, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9630576985677083, "step": 4390, "elapsed_min": 96.31, "lr": 4.571013687171652e-06, "loss": 0.04982059363162879, "samples_per_s": 146.43210109312534, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.967427978515625, "step": 4410, "elapsed_min": 96.74, "lr": 3.776824287876743e-06, "loss": 0.04976143973214286, "samples_per_s": 146.4328699574787, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 11, "elapsed_min": 97.18, "step": 4430, "lr": 3.0776117018219065e-06, "samples_per_s": 146.3776557396722, "mem_gb": [9.22, 9.2], "train_loss": 0.049688241288468646, "train_pix": 0.011981418970468881, "train_census": 0.008537707457671294, "train_flow": 1.4885006466427364, "train_ui": 0.07924265474886508, "train_distill": 0.0, "val_psnr": 33.91621398925781, "val_psnr_interp": 34.376399993896484, "val_psnr_extrap": 33.470191955566406, "val_psnr_ui": 33.346893310546875, "best": 33.91621398925781}
+PROGRESS {"progress": 0.9718290201822917, "step": 4430, "elapsed_min": 97.18, "lr": 3.0776117018219065e-06, "loss": 0.0, "samples_per_s": 0.0, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9762750651041666, "step": 4450, "elapsed_min": 97.63, "lr": 2.473866471027418e-06, "loss": 0.04989462494850159, "samples_per_s": 145.43866654042696, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.980626220703125, "step": 4470, "elapsed_min": 98.06, "lr": 1.9829874517293333e-06, "loss": 0.05000120401382446, "samples_per_s": 146.257367579444, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9849806315104167, "step": 4490, "elapsed_min": 98.5, "lr": 1.5908530475128729e-06, "loss": 0.0499222993850708, "samples_per_s": 146.49710118553415, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9893746744791667, "step": 4510, "elapsed_min": 98.94, "lr": 1.295735460598807e-06, "loss": 0.04958591163158417, "samples_per_s": 146.2843231956265, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9937328287760416, "step": 4530, "elapsed_min": 99.37, "lr": 1.1028939839758253e-06, "loss": 0.04989586353302002, "samples_per_s": 146.39746945149088, "mem_gb": [9.22, 9.2]}
+PROGRESS {"progress": 0.9980888671875, "step": 4550, "elapsed_min": 99.81, "lr": 1.0095684617523875e-06, "loss": 0.04974370400110881, "samples_per_s": 146.48499687532674, "mem_gb": [9.22, 9.2]}
+ROUND {"round": 12, "elapsed_min": 100.03, "step": 4560, "lr": 1e-06, "samples_per_s": 146.51619708852706, "mem_gb": [9.22, 9.2], "train_loss": 0.04959413088285006, "train_pix": 0.01212091537622305, "train_census": 0.0086724748978248, "train_flow": 1.5052406897911659, "train_ui": 0.07675947042611929, "train_distill": 0.0, "val_psnr": 33.92020797729492, "val_psnr_interp": 34.38309097290039, "val_psnr_extrap": 33.47156524658203, "val_psnr_ui": 33.35955810546875, "best": 33.92020797729492}
+DONE {"steps": 4560, "train_seconds": 6001.9, "best": 33.92020797729492}

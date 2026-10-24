@@ -111,6 +111,24 @@ def upsample_flow(flow, scale):
     )
 
 
+def jitter_upsample(color, jitter, scale, mode="bilinear"):
+    """Reconstruction at output pixel centres that undoes the sub-pixel jitter of the low-resolution samples:
+    color (N, 3, h, w), jitter (N, 2) in low-resolution pixels; mode is a grid_sample mode (bilinear, bicubic).
+    """
+    n, _, h, w = color.shape
+    H, W = h * scale, w * scale
+    ys = (torch.arange(H, device=color.device, dtype=torch.float32) + 0.5) / scale
+    xs = (torch.arange(W, device=color.device, dtype=torch.float32) + 0.5) / scale
+    gy, gx = torch.meshgrid(ys, xs, indexing="ij")
+    jx, jy = jitter[:, 0, None, None].float(), jitter[:, 1, None, None].float()
+    grid = torch.stack(
+        [(gx[None] - jx) * (2.0 / w) - 1.0, (gy[None] - jy) * (2.0 / h) - 1.0], -1
+    )
+    return F.grid_sample(
+        color.float(), grid, mode=mode, padding_mode="border", align_corners=False
+    )
+
+
 def pad_to(x, multiple):
     h, w = x.shape[-2:]
     ph, pw = (-h) % multiple, (-w) % multiple
@@ -192,23 +210,7 @@ class TSRNet(nn.Module):
 
     def base_upsample(self, color, jitter):
         """Bilinear reconstruction at output pixel centres that undoes the sub-pixel jitter of the samples."""
-        n, _, h, w = color.shape
-        s = self.scale
-        H, W = h * s, w * s
-        ys = (torch.arange(H, device=color.device, dtype=torch.float32) + 0.5) / s
-        xs = (torch.arange(W, device=color.device, dtype=torch.float32) + 0.5) / s
-        gy, gx = torch.meshgrid(ys, xs, indexing="ij")
-        jx, jy = jitter[:, 0, None, None].float(), jitter[:, 1, None, None].float()
-        grid = torch.stack(
-            [(gx[None] - jx) * (2.0 / w) - 1.0, (gy[None] - jy) * (2.0 / h) - 1.0], -1
-        )
-        return F.grid_sample(
-            color.float(),
-            grid,
-            mode="bilinear",
-            padding_mode="border",
-            align_corners=False,
-        )
+        return jitter_upsample(color, jitter, self.scale)
 
     def forward(self, f, state=None, use_history=True):
         """f: dict with color (N,3,h,w), depth (N,1,h,w), mv (N,2,h,w), reactive (N,1,h,w), exposure (N,),
@@ -401,9 +403,9 @@ class FGNet(nn.Module):
                 x.append(down(gt))
             x += [F.avg_pool2d(blend, d), F.avg_pool2d(ui, d)]
             y = net["head"](net["trunk"](torch.cat(x, 1))).float()
-            up = lambda t: F.interpolate(
+            up = lambda t: F.interpolate(  # noqa: E731
                 t, scale_factor=d, mode="bilinear", align_corners=False
-            )  # noqa: E731
+            )
             f0 = f0 + up(y[:, 0:2]) * d
             f1 = f1 + up(y[:, 2:4]) * d
             blend = blend + up(y[:, 4:5])

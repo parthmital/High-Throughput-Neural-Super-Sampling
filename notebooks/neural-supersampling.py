@@ -14,7 +14,7 @@
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, Hugging Face data in the fallback path, RAFT / AlexNet / DINOv2 weights). Attach the output of the `neural-data-pipeline` notebook (**Add Input > Notebook output**) and the same Kaggle datasets it lists (`soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`). Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 140 min, main student 120 min, parallel `igpu` 3x and `low` 2x students 75 min, three parallel ablation pairs 20 min each, evaluation and export about 15 min: about 7.2 hours of a 9.5-hour ceiling (the run of 20 to 21 October 2026 took 5.34 hours with budgets of 100, 80, 50 and 20 minutes, and every validation curve was still rising when its cosine schedule ended). `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
+# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 140 min, main student 120 min, parallel `igpu` 3x and `low` 2x students 75 min, three parallel ablation pairs 20 min each, evaluation and export about 15 min: about 7.2 hours of a 9.5-hour ceiling (the run of 24 October 2026 with these budgets took 7.13 hours; validation PSNR-Y gained at most 0.05 dB over each run's last three rounds). `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
 #
 # **Outputs** in `/kaggle/working/`:
 #
@@ -974,7 +974,7 @@ RAFT = RAFTS[0] if RAFTS else M.load_raft(DEVICES[0], log=log)
 # * **video**: Vid4 and held-out Vimeo-1080p clips with RAFT motion;
 # * **gameir-native**: held-out town 05, native 720p renders to 1440p ground truth (2x, a real renderer's low-resolution image instead of a simulated one).
 #
-# Clips that cannot be decoded, and blank clips (a frame with almost no luma variation, which every upscaler reconstructs exactly), are logged and skipped (`E.test_clips`); in the run of 20 to 21 October 2026 one blank Vimeo-1080p clip scored the 100 dB PSNR cap for every baseline. Expected output: the number of sequences per suite.
+# Clips that cannot be decoded, and blank clips (a frame with almost no luma variation, which every upscaler reconstructs exactly), are logged and skipped (`E.test_clips`); without this filter, one blank Vimeo-1080p clip scored the 100 dB PSNR cap for every baseline in the run of 20 to 21 October 2026, and the run of 24 October 2026 skipped two blank clips. Expected output: the number of sequences per suite.
 
 # %%
 ev = CFG["eval"]

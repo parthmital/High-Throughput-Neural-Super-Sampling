@@ -37,9 +37,9 @@
 		"val_batches": 4,
 		"val_interval_min": 8,
 		"minutes": {
-			"teacher": 70,
-			"student": 80,
-			"pair": 50,
+			"teacher": 100,
+			"student": 120,
+			"pair": 75,
 			"ablation": 20
 		},
 		"eval": {

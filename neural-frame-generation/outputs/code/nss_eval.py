@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import nss_data as D
 import nss_metrics as M
 import nss_synth as S
-from nss_models import backward_warp
+from nss_models import backward_warp, jitter_upsample
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -79,9 +79,66 @@ def load_clip(data_root, item, start, T, crop_hw, max_side=None):
     return out
 
 
+def clip_defects(rgb, min_std=2.0, min_change=0.1, max_hist=0.5):
+    """Defects of a test clip, uint8 (T, H, W, 3), as a set of names (empty when usable):
+    'blank': a frame whose luma standard deviation is below min_std (0-255 scale), which every upscaler
+    reconstructs exactly (the 100 dB PSNR cap);
+    'frozen': consecutive frames with a mean absolute luma difference below min_change (duplicated frames make
+    frame generation trivial);
+    'cut': a scene cut or flash, where the half-L1 distance of the 32-bin luma histograms of consecutive frames
+    exceeds max_hist (nothing can predict the frame after it)."""
+    w = np.array([0.299, 0.587, 0.114], np.float32)
+    y = [f.astype(np.float32) @ w for f in rgb]
+    out = set()
+    if min(float(f.std()) for f in y) < min_std:
+        out.add("blank")
+    hist = [np.histogram(f, bins=32, range=(0.0, 256.0))[0] / f.size for f in y]
+    for a, b, ha, hb in zip(y[:-1], y[1:], hist[:-1], hist[1:]):
+        if float(np.abs(b - a).mean()) < min_change:
+            out.add("frozen")
+        if 0.5 * float(np.abs(hb - ha).sum()) > max_hist:
+            out.add("cut")
+    return out
+
+
+def test_clips(
+    items,
+    data_root,
+    source,
+    crop_hw,
+    n,
+    T,
+    max_side=None,
+    reject=("blank",),
+    log=print,
+):
+    """Up to n test clips of T frames from one source (see load_clip), skipping clips that cannot be decoded and
+    clips with any defect named in reject (see clip_defects). Tries at most 4 n items. Returns [(item_id, clip)].
+    """
+    out = []
+    for it in [i for i in items if i["source"] == source and i["n_frames"] >= T][
+        : n * 4
+    ]:
+        try:
+            c = load_clip(data_root, it, 0, T, crop_hw, max_side=max_side)
+        except Exception as exc:  # unreadable clip: skip it, keep the suite
+            log(f"{source} {it['item_id']}: skipped ({exc})")
+            continue
+        if c is None:
+            continue
+        bad = clip_defects(c["rgb"]) & set(reject)
+        if bad:
+            log(f"{source} {it['item_id']}: skipped ({', '.join(sorted(bad))})")
+            continue
+        out.append((it["item_id"], c))
+        if len(out) >= n:
+            break
+    return out
+
+
 def sr_inputs(clip, scale, device, raft=None, jitter=True, native=False, phases=16):
     """Batch (N = 1) for the TSR network from a clip: jittered single-sample low-resolution frames (or the
-    native low-resolution render), motion vectors (exact, or RAFT on consecutive low-resolution frames),
+    native low-resolution render), motion vectors (exact, or RAFT on consecutive full-resolution frames),
     validity, depth, full-resolution targets."""
     hr = (
         torch.from_numpy(clip["rgb"]).to(device).permute(0, 3, 1, 2).float()[None]
@@ -129,6 +186,7 @@ def sr_inputs(clip, scale, device, raft=None, jitter=True, native=False, phases=
     lr_all = torch.stack(lrs, 1)
     quality = 0.0
     for t in range(T):
+        m = v = None
         if clip.get("exact"):
             m = (
                 torch.from_numpy(clip["mv"][t])
@@ -137,6 +195,18 @@ def sr_inputs(clip, scale, device, raft=None, jitter=True, native=False, phases=
                 .float()[None]
             )
             v = torch.from_numpy(clip["valid"][t]).to(device).float()[None, None]
+            quality = 1.0
+        elif raft is not None and t > 0:
+            # RAFT on the clean full-resolution frames, as for the training caches: on the jittered
+            # low-resolution inputs it would also report the jitter difference between frames as motion
+            m, v = M.raft_mv_and_valid(raft, hr[:, t], hr[:, t - 1])
+            quality = 0.5
+        if m is None:
+            mv_lr.append(torch.zeros(1, 2, h, w, device=device))
+            va_lr.append(torch.zeros(1, 1, h, w, device=device))
+            mv_hr.append(torch.zeros(1, 2, H, W, device=device))
+            va_hr.append(torch.zeros(1, 1, H, W, device=device))
+        else:  # sampled at the jittered low-resolution positions, as in training
             pts = S.pixel_grid(1, h, w, device, seq[t : t + 1])
             mv_lr.append(
                 F.grid_sample(
@@ -151,24 +221,6 @@ def sr_inputs(clip, scale, device, raft=None, jitter=True, native=False, phases=
             )
             mv_hr.append(m)
             va_hr.append(v)
-            quality = 1.0
-        elif raft is not None and t > 0:
-            m, v = M.raft_mv_and_valid(raft, lr_all[:, t], lr_all[:, t - 1])
-            mv_lr.append(m)
-            va_lr.append(v)
-            mv_hr.append(
-                F.interpolate(
-                    m, scale_factor=scale, mode="bilinear", align_corners=False
-                )
-                * scale
-            )
-            va_hr.append(F.interpolate(v, scale_factor=scale, mode="nearest"))
-            quality = 0.5
-        else:
-            mv_lr.append(torch.zeros(1, 2, h, w, device=device))
-            va_lr.append(torch.zeros(1, 1, h, w, device=device))
-            mv_hr.append(torch.zeros(1, 2, H, W, device=device))
-            va_hr.append(torch.zeros(1, 1, H, W, device=device))
         if "depth" in clip:
             d = torch.from_numpy(clip["depth"][t]).to(device).float()[None, None]
             d_lr.append(
@@ -264,11 +316,17 @@ def run_bilinear(net, b):
 
 @torch.no_grad()
 def run_bicubic(b, scale):
-    n, T, _, h, w = b["lr"].shape
-    x = F.interpolate(
-        b["lr"].flatten(0, 1), scale_factor=scale, mode="bicubic", align_corners=False
-    ).clamp(0, 1)
-    return x.view(n, T, 3, h * scale, w * scale)
+    """Bicubic upsample at the true (jittered) sample positions, like the bilinear baseline; a plain bicubic
+    upsample would shift each frame by its jitter offset."""
+    return torch.stack(
+        [
+            jitter_upsample(b["lr"][:, t], b["jitter"][:, t], scale, "bicubic").clamp(
+                0, 1
+            )
+            for t in range(b["lr"].shape[1])
+        ],
+        1,
+    )
 
 
 @torch.no_grad()
@@ -317,9 +375,8 @@ def sr_frame_metrics(
         p_hf = M.psnr(yo, yg, mask=hfm)
         p_rea = M.psnr(yo, yg, mask=rea.float()) if rea.sum() > 50 else None
         lp = lpips_fn(o, g) if (lpips_fn is not None and t % lpips_every == 0) else None
-        mv_px = (
-            b["mv_hr"][:, t].norm(dim=1).mean(dim=(1, 2))
-        )  # actual motion magnitude, output pixels per frame
+        # actual motion magnitude, output pixels per frame
+        mv_px = b["mv_hr"][:, t].norm(dim=1).mean(dim=(1, 2))
         we = tce = tof = None
         if t > 0:
             we = M.warping_error(
@@ -405,9 +462,8 @@ def run_fg(net, b, hudless=False):
     with torch.autocast("cuda", dtype=torch.float16):
         out, aux = net(f)
     out = out.float().clamp(0, 1)
-    if (
-        hudless and "ui_rgb" in b
-    ):  # engine path: generate the scene without UI, composite the latest UI on top
+    # engine path: generate the scene without UI, composite the latest UI on top
+    if hudless and "ui_rgb" in b:
         out = out * (1 - b["ui_alpha"]) + b["ui_rgb"]
     return out, aux
 
@@ -444,9 +500,7 @@ def fg_metrics(out, b, lpips_fn=None):
     ghost = (((out - tgt).abs().amax(1, keepdim=True) > 0.1).float() * ui).flatten(
         1
     ).sum(1) / ui.flatten(1).sum(1).clamp_min(1)
-    mv_px = (
-        b["mv1"].norm(dim=1).mean(dim=(1, 2))
-    )  # motion between the real frames, pixels
+    mv_px = b["mv1"].norm(dim=1).mean(dim=(1, 2))  # motion between the real frames, px
     rows = []
     for i in range(n):
         rows.append(

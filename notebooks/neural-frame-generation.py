@@ -12,7 +12,7 @@
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget.** Caches at most 30 min, teacher 100 min, main student 120 min, parallel `igpu` / `mid` students 75 min, three ablation pairs of 20 min, evaluation and export about 10 min: about 6.5 hours of a 9.5-hour ceiling (the run of 20 to 21 October 2026 took 4.93 hours with budgets of 70, 80, 50 and 20 minutes, and every validation curve was still rising when its cosine schedule ended). `QUICK_RUN = True` gives a 40-minute smoke test.
+# **Budget.** Caches at most 30 min, teacher 100 min, main student 120 min, parallel `igpu` / `mid` students 75 min, three ablation pairs of 20 min, evaluation and export about 10 min: about 6.5 hours of a 9.5-hour ceiling (the run of 24 October 2026 with these budgets took 6.47 hours; validation PSNR gained at most 0.06 dB over each run's last three rounds). `QUICK_RUN = True` gives a 40-minute smoke test.
 #
 # **Outputs** in `/kaggle/working/`: `code/`, `weights/` (checkpoints, fused models, ONNX), `plots/`, `metrics/`, `logs/`, `predictions/`, `outputs.zip` (training caches are deleted first).
 
@@ -1209,7 +1209,7 @@ RUN.show(fig, "special_cases")
 # %% [markdown]
 # ## 23. Temporal consistency of the displayed sequence
 #
-# Generated frames are shown between real ones, so motion must stay smooth across real -> generated -> real. tOF compares RAFT flow along the displayed sequence (I0 -> generated, generated -> I1) with the same flow along the true sequence (I0 -> true middle, true middle -> I1). Interpolation only (extrapolated frames are followed by the next real frame, which the test clips do not always contain). Expected output: tOF per suite and method.
+# Generated frames are shown between real ones, so motion must stay smooth across real -> generated -> real. tOF compares RAFT flow along the displayed sequence (I0 -> generated, generated -> I1) with the same flow along the true sequence (I0 -> true middle, true middle -> I1). Interpolation only (extrapolated frames are followed by the next real frame, which the test clips do not always contain). Expected output: tOF per suite and method; per-clip values go to `temporal_consistency_per_clip.csv`, because a suite mean can be set by a few clips with large motion.
 
 # %%
 tof_rows = []
@@ -1244,10 +1244,16 @@ if RAFT is not None:
                     .item()
                 )
                 tof_rows.append(
-                    {"suite": suite, "method": mname, "tof": 0.5 * (t1 + t2)}
+                    {
+                        "suite": suite,
+                        "clip": cid,
+                        "method": mname,
+                        "tof": 0.5 * (t1 + t2),
+                    }
                 )
 TOF = pd.DataFrame(tof_rows)
 if len(TOF):
+    RUN.save_csv(TOF.round(4), "temporal_consistency_per_clip.csv", index=False)
     TOFA = TOF.groupby(["suite", "method"])["tof"].mean().unstack()
     RUN.save_csv(TOFA.round(4), "temporal_consistency.csv")
     print(TOFA.round(3).to_string())

@@ -1,31 +1,33 @@
-20:31:48 | start: manifest
-20:31:49 | done: manifest in 0.0 min (run total 0.01 h)
-20:31:49 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
-20:31:50 | start: caches
-20:32:20 | still_val.npy: 256 crops (0 decode failures)
-20:38:35 | still_train.npy: 6500 crops (5 decode failures)
-20:39:13 | win_val: 192 windows (0 failures)
-20:49:48 | win_train: 3600 windows (0 failures)
-20:51:23 | done: caches in 19.6 min (run total 0.33 h)
-20:51:34 | start: batch_probe
-20:52:02 | done: batch_probe in 0.5 min (run total 0.34 h)
-20:52:02 | start: train_teacher
-22:32:16 | done: train_teacher in 100.2 min (run total 2.02 h)
-22:32:16 | start: train_student
-23:52:33 | done: train_student in 80.3 min (run total 3.35 h)
-23:52:33 | start: train_pair
-00:42:48 | done: train_pair in 50.2 min (run total 4.19 h)
-00:42:48 | start: ablations
-01:43:19 | done: ablations in 60.5 min (run total 5.20 h)
-01:43:23 | start: test_suites
-01:45:07 | done: test_suites in 1.7 min (run total 5.23 h)
-01:45:07 | start: evaluation
-01:45:26 | synthetic static done
-01:45:46 | synthetic slow done
-01:46:05 | synthetic medium done
-01:46:24 | synthetic fast done
-01:47:14 | tartanair done
-01:48:27 | sintel done
-01:49:03 | vid4 done
-01:50:44 | vimeo1080p done
-01:50:58 | done: evaluation in 5.8 min (run total 5.33 h)
+10:25:23 | start: manifest
+10:25:26 | done: manifest in 0.1 min (run total 0.01 h)
+10:25:26 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
+10:25:27 | start: caches
+10:26:01 | still_val.npy: 256 crops (0 decode failures)
+10:32:53 | still_train.npy: 6500 crops (4 decode failures)
+10:33:34 | win_val: 192 windows (0 failures)
+10:44:29 | win_train: 3600 windows (0 failures)
+10:46:09 | done: caches in 20.7 min (run total 0.35 h)
+10:46:19 | start: batch_probe
+10:46:47 | done: batch_probe in 0.5 min (run total 0.36 h)
+10:46:47 | start: train_teacher
+13:07:14 | done: train_teacher in 140.4 min (run total 2.70 h)
+13:07:14 | start: train_student
+15:07:27 | done: train_student in 120.2 min (run total 4.71 h)
+15:07:27 | start: train_pair
+16:22:40 | done: train_pair in 75.2 min (run total 5.96 h)
+16:22:40 | start: ablations
+17:23:22 | done: ablations in 60.7 min (run total 6.97 h)
+17:23:25 | start: test_suites
+17:25:15 | vimeo1080p vimeo1080p/SK_000/c5b4b1f0c0: skipped (blank)
+17:25:20 | vimeo1080p vimeo1080p/723 Palisades Beach Rd. - Santa Monica_000/b013664eae: skipped (blank)
+17:25:46 | done: test_suites in 2.4 min (run total 7.01 h)
+17:25:47 | start: evaluation
+17:26:06 | synthetic static done
+17:26:25 | synthetic slow done
+17:26:44 | synthetic medium done
+17:27:03 | synthetic fast done
+17:27:53 | tartanair done
+17:29:06 | sintel done
+17:29:50 | vid4 done
+17:31:59 | vimeo1080p done
+17:32:13 | done: evaluation in 6.4 min (run total 7.12 h)
