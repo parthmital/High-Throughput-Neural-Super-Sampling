@@ -570,6 +570,8 @@ def sr_batch(
     batch["exposure"] = torch.log2(scene.exposure)[:, None].expand(n, T)
     batch["has_depth"] = torch.ones(n, device=dev)
     batch["mv_quality"] = torch.ones(n, device=dev)
+    batch["label_quality"] = torch.ones(n, device=dev)
+    batch["kind"] = torch.ones(n, device=dev)
     batch["speed_class"] = scene.cam["speed_class"]
     return batch
 
@@ -621,19 +623,26 @@ def fg_batch(
     p_menu=0.02,
     p_flip=0.1,
     profile=MOTION_PROFILE,
+    p_tau=0.0,
 ):
-    """Frame-generation batch at P x P. Real frames I0 (t=0) and I1 (t=1); target at tau = 0.5 (interpolation)
-    or tau = 1.5 (extrapolation). Returns frames, the engine motion vector of I1 (I1 -> I0), depth of I1, the
-    camera-only flow from the target to I1 (known from the latest input, available to extrapolation), exact
-    target -> I0 / I1 flows, UI composites and masks, and flags for cuts and menus."""
+    """Frame-generation batch at P x P. Real frames I0 (t=0) and I1 (t=1); target at tau = 0.5 (interpolation;
+    a share p_tau of interpolation samples uses a uniform tau in [0.15, 0.85], the in-between times of 2x to 6x
+    multi-frame generation) or tau = 1.5 (extrapolation). Returns frames, the engine motion vector of I1
+    (I1 -> I0), depth of I1, the camera-only flow from the target to I1 (known from the latest input, available
+    to extrapolation), exact target -> I0 / I1 flows, UI composites and masks, and flags for cuts and menus.
+    """
     n, dev = stills.shape[0], stills.device
     scene = Scene(stills, P, 2.0, g, profile=profile)
     # rapid input change: camera reverses after t = 1
     flip = torch.rand(n, device=dev, generator=g) < p_flip
     scene.cam["flip"], scene.cam["t_flip"] = flip.float(), torch.ones(n, device=dev)
     extrap = torch.rand(n, device=dev, generator=g) < p_extrap
+    t_rand = 0.15 + 0.7 * torch.rand(n, device=dev, generator=g)
+    use_rand = torch.rand(n, device=dev, generator=g) < p_tau
     tau = torch.where(
-        extrap, torch.full((n,), 1.5, device=dev), torch.full((n,), 0.5, device=dev)
+        extrap,
+        torch.full((n,), 1.5, device=dev),
+        torch.where(use_rand, t_rand, torch.full((n,), 0.5, device=dev)),
     )
     i0, _, _, _ = scene.frame(0.0, P, P, ssaa=True)
     i1, _, d1, _ = scene.frame(1.0, P, P, ssaa=True)
@@ -812,16 +821,98 @@ def sr_batch_from_frames(
     batch = {k: torch.stack(v, 1) for k, v in out.items()}
     batch["exposure"] = torch.log2(gain)[:, None].expand(n, T)
     batch["has_depth"], batch["mv_quality"] = has_depth.float(), mv_quality.float()
+    batch["label_quality"] = mv_quality.float()
+    batch["kind"] = torch.ones(n, device=dev)
     batch["speed_class"] = torch.full((n,), -1, device=dev, dtype=torch.long)
     return batch
 
 
+def video_lr(hr, scale, g, blur=True, noise=True):
+    """Low-resolution video frames from (N, T, 3, H, W) targets, the way ordinary video is downscaled: an
+    anti-aliased bicubic, bilinear or area filter chosen per sample, an optional mild Gaussian pre-blur
+    (sigma up to 0.6 output pixels, camera and codec softness), optional Gaussian noise (sigma up to 2 / 255)
+    and 8-bit quantisation. blur / noise False gives the standard bicubic (BI) degradation of VSR benchmarks.
+    """
+    n, T, _, H, W = hr.shape
+    dev, h, w = hr.device, H // scale, W // scale
+    x = hr.flatten(0, 1)
+    if blur:
+        sigma = torch.rand(n, device=dev, generator=g) * 0.6
+        k = torch.arange(-2, 3, device=dev, dtype=torch.float32)
+        ker = torch.exp(-(k[None] ** 2) / (2 * sigma[:, None].clamp_min(1e-3) ** 2))
+        ker = (ker / ker.sum(1, keepdim=True)).repeat_interleave(T, 0)  # (N*T, 5)
+        kx = ker[:, None, None, :].repeat_interleave(
+            3, 0
+        )  # depthwise, one kernel per image
+        xp = F.pad(x.reshape(1, -1, H, W), (2, 2, 0, 0), mode="replicate")
+        xp = F.conv2d(xp, kx, groups=n * T * 3)  # horizontal, then vertical
+        xp = F.pad(xp, (0, 0, 2, 2), mode="replicate")
+        x = F.conv2d(xp, kx.transpose(2, 3), groups=n * T * 3).view_as(x)
+    outs = [
+        F.interpolate(
+            x, size=(h, w), mode="bicubic", antialias=True, align_corners=False
+        ),
+        F.interpolate(
+            x, size=(h, w), mode="bilinear", antialias=True, align_corners=False
+        ),
+        F.avg_pool2d(x, scale),
+    ]
+    pick = torch.randint(0, 3, (n,), device=dev, generator=g) if blur else None
+    lr = outs[0]
+    if pick is not None:
+        p = pick.repeat_interleave(T).view(-1, 1, 1, 1)
+        lr = torch.where(p == 1, outs[1], torch.where(p == 2, outs[2], outs[0]))
+    if noise:
+        sd = torch.rand(n, device=dev, generator=g).repeat_interleave(T) * (2 / 255)
+        z = torch.randn(lr.shape, device=dev, generator=g)
+        lr = lr + z * sd.view(-1, 1, 1, 1)
+    return (lr.clamp(0, 1) * 255).round().div(255).view(n, T, 3, h, w)
+
+
+def video_degrade(b, scale, g, p, p_mv=0.0):
+    """Turn a share p of a TSR batch into ordinary video: video_lr inputs, no jitter, no depth, no reactive
+    mask, and (except a share p_mv, which keeps estimated motion vectors) no motion vectors, so the network's
+    built-in motion estimator must run; kind = 0. Motion labels for the estimator are re-sampled at pixel
+    centres from the full-resolution motion."""
+    n, T = b["lr"].shape[:2]
+    dev = b["lr"].device
+    sel = torch.rand(n, device=dev, generator=g) < p
+    if not sel.any():
+        return b
+    b = dict(b)
+    s5 = sel.view(n, 1, 1, 1, 1)
+    hr = b["hr"]
+    b["lr"] = torch.where(s5, video_lr(hr, scale, g), b["lr"])
+    mv_c = F.avg_pool2d(b["mv_hr"].flatten(0, 1), scale) / scale
+    va_c = (F.avg_pool2d(b["valid_hr"].flatten(0, 1), scale) > 0.999).float()
+    b["mv_lr"] = torch.where(s5, mv_c.view_as(b["mv_lr"]), b["mv_lr"])
+    b["valid_lr"] = torch.where(s5, va_c.view_as(b["valid_lr"]), b["valid_lr"])
+    for k in ("depth_lr", "reactive_lr"):
+        b[k] = torch.where(s5, torch.zeros_like(b[k]), b[k])
+    b["jitter"] = torch.where(
+        sel.view(n, 1, 1), torch.zeros_like(b["jitter"]), b["jitter"]
+    )
+    keep_mv = torch.rand(n, device=dev, generator=g) < p_mv
+    b["mv_quality"] = torch.where(
+        sel & ~keep_mv, torch.zeros_like(b["mv_quality"]), b["mv_quality"]
+    )
+    b["mv_quality"] = torch.where(
+        sel & keep_mv, b["mv_quality"].clamp(max=0.5), b["mv_quality"]
+    )
+    b["has_depth"] = torch.where(sel, torch.zeros_like(b["has_depth"]), b["has_depth"])
+    b["kind"] = torch.where(sel, torch.zeros_like(b["kind"]), b["kind"])
+    return b
+
+
 def fg_batch_from_frames(
-    rgb, flows_half, flow_ok, g, tiles=None, p_extrap=0.5, p_ui=0.5
+    rgb, flows_half, flow_ok, g, tiles=None, p_extrap=0.5, p_ui=0.5, p_mfg=0.0
 ):
     """Frame-generation batch from cached real quads: rgb uint8 (N, 4, P, P, 3) = frames k..k+3; flows_half
     (N, 4, P/2, P/2, 2) in P-grid pixels = [2->0, 1->0, 1->2, 3->2] (teacher optical flow); flow_ok (N,).
     Interpolation: I0 = k, I1 = k+2, target k+1. Extrapolation: I0 = k, I1 = k+2, target k+3 (tau = 1.5).
+    Multi-frame generation (a share p_mfg of interpolation samples): I0 = k, I1 = k+3, target k+1 (tau = 1/3)
+    or k+2 (tau = 2/3), as in 3x generation; the cache has no flows for these pairs, so motion vectors and flow
+    labels are marked unavailable.
     """
     n, P, dev = rgb.shape[0], rgb.shape[2], rgb.device
     fr = rgb.permute(0, 1, 4, 2, 3).float() / 255.0
@@ -833,13 +924,19 @@ def fg_batch_from_frames(
         x, scale_factor=2, mode="bilinear", align_corners=False
     )
     extrap = torch.rand(n, device=dev, generator=g) < p_extrap
-    e4 = extrap.view(n, 1, 1, 1)
-    ok = flow_ok.float().view(n, 1, 1, 1).expand(n, 1, P, P)
+    mfg = ~extrap & (torch.rand(n, device=dev, generator=g) < p_mfg)
+    second = torch.rand(n, device=dev, generator=g) < 0.5
+    e4, m4, s4 = (x.view(n, 1, 1, 1) for x in (extrap, mfg, second))
+    ok = flow_ok.float().view(n, 1, 1, 1).expand(n, 1, P, P) * (~m4).float()
     batch = {
         "i0": fr[:, 0],
-        "i1": fr[:, 2],
-        "target": torch.where(e4, fr[:, 3], fr[:, 1]),
-        "tau": torch.where(extrap, 1.5, 0.5).float(),
+        "i1": torch.where(m4, fr[:, 3], fr[:, 2]),
+        "target": torch.where(e4, fr[:, 3], torch.where(m4 & s4, fr[:, 2], fr[:, 1])),
+        "tau": torch.where(
+            extrap,
+            1.5,
+            torch.where(mfg, torch.where(second, 2.0 / 3.0, 1.0 / 3.0), 0.5),
+        ).float(),
         "extrap": extrap.float(),
         "mv1": up(fl[:, 0]),
         "mv1_valid": ok,

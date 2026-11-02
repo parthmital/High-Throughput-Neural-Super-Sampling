@@ -2,10 +2,10 @@
 
 NeuralSS is a research project for open, hardware-agnostic neural reconstruction in games. It has two networks:
 
-- **Temporal super-resolution (TSR):** a small recurrent network that turns jittered low-resolution game frames (3x and 2x, for example 640x360 to 1920x1080) into full-resolution frames, using motion vectors, depth and its own history.
-- **Frame generation (FG):** a small network that creates an in-between frame (interpolation) or a future frame (extrapolation) from two real frames, copies HUD and subtitles from the newest real frame instead of blending them, and skips generation on scene cuts.
+- **Temporal super-resolution (TSR):** a small recurrent network that turns low-resolution frames (3x and 2x, for example 640x360 to 1920x1080) into full-resolution frames, using its own history. It takes jittered game renders with motion vectors and depth, or ordinary video with no side information, in which case a built-in motion estimator supplies the motion.
+- **Frame generation (FG):** a network that creates in-between frames at any time (interpolation, so 2x to 6x frame generation) or a future frame (extrapolation) from two real frames. It estimates motion from the colour frames alone (an IFNet with the design and pre-trained weights of RIFE 4.26) and uses engine motion vectors, depth and camera input when they exist. It copies HUD and subtitles from the newest real frame instead of blending them, and skips generation on scene cuts.
 
-Both networks fold into plain 3x3 convolution chains and export to ONNX. Everything is trained and evaluated in three Kaggle notebooks (GPU T4 x2) built from one shared Python library. All three notebooks have run on Kaggle, and their downloaded outputs (metrics, plots, logs, weights) are in this repository.
+Both networks use only convolutions, transposed convolutions, resizing and grid sampling, and export to ONNX. Everything is trained and evaluated in three Kaggle notebooks (GPU T4 x2) built from one shared Python library. All three notebooks have run on Kaggle, and their downloaded outputs (metrics, plots, logs, weights) are in this repository. The two training notebooks were then redesigned on 3 November 2026 so that both pipelines work on ordinary video; that version has not run on Kaggle yet (see [Project status](#project-status)).
 
 The full research plan, design rationale, competitive analysis and dataset licences are in [RESEARCH.md](RESEARCH.md). This README covers how the repository works, how to run it, and what each notebook produced.
 
@@ -24,6 +24,7 @@ The full research plan, design rationale, competitive analysis and dataset licen
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
 - [Licence](#licence)
+- [Documentation](#documentation)
 
 ## Quick start
 
@@ -32,17 +33,18 @@ The notebooks run on Kaggle, not locally. Training and evaluation need two GPUs 
 1. **Create the data-pipeline notebook on Kaggle.** Upload [neural-data-pipeline/neural-data-pipeline.ipynb](neural-data-pipeline/neural-data-pipeline.ipynb). In the notebook settings choose **Accelerator: GPU T4 x2** and turn **Internet on**. Attach these Kaggle datasets (**Add Input**): `soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`. An optional Kaggle secret `HF_TOKEN` raises Hugging Face download limits.
 2. **Run it** with **Save Version > Save & Run All**. Expected result: about 0.6 hours; the output contains `nss_data/nss_manifest.parquet` and `outputs.zip`.
 3. **Create the two training notebooks** from [neural-supersampling/neural-supersampling.ipynb](neural-supersampling/neural-supersampling.ipynb) and [neural-frame-generation/neural-frame-generation.ipynb](neural-frame-generation/neural-frame-generation.ipynb) with the same accelerator, Internet and datasets, and also attach the pipeline notebook's output (**Add Input > Notebook output**).
-4. **Run each one** with **Save & Run All**. Expected result: about 7.1 hours (super-resolution) and 6.5 hours (frame generation) with the current training budgets (7.13 and 6.47 hours in the runs of 24 October 2026), within the notebooks' 9.5-hour ceiling and Kaggle's 12-hour session limit; `outputs.zip` and every file appear in the notebook's **Output** tab. Together the two runs use about 14 hours of Kaggle's weekly GPU quota.
+4. **Run each one** with **Save & Run All**. Expected result (estimates for the redesign, from the measured runs of 24 October 2026 with the same training budgets, 7.13 and 6.47 hours): about 7.4 hours (super-resolution) and 7 hours (frame generation), within the notebooks' 9.5-hour ceiling and Kaggle's 12-hour session limit; `outputs.zip` and every file appear in the notebook's **Output** tab. Together the two runs use about 14.5 hours of Kaggle's weekly GPU quota. Both notebooks download the RIFE 4.26 weights (23 MB) from `huggingface.co/hzwer/RIFE`, so Internet must be on.
 5. **Optional smoke test:** set `QUICK_RUN = True` in the configuration cell for a short run of every cell (about 40 minutes).
 
 Common errors:
 
-| Problem                                                            | Fix                                                                                                                                                       |
-| :----------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AssertionError: Select the GPU T4 x2 accelerator`                 | Set **Accelerator** to **GPU T4 x2**; the notebooks run one training process per GPU                                                                      |
-| The version shows no logs and ends with `ERRORED_MOUNTING_DATASET` | One attached dataset failed to mount, so no code ran. Remove or re-add that dataset and save again; the notebooks leave out sources that are not attached |
-| `No texture sources found`                                         | Neither the pipeline output nor the Kaggle datasets are attached                                                                                          |
-| A pip install fails                                                | Internet is off. `lpips`, `flip-evaluator` and `onnxruntime` are optional; their absence is logged and the matching metric or check is skipped            |
+| Problem                                                            | Fix                                                                                                                                                                                                  |
+| :----------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AssertionError: Select the GPU T4 x2 accelerator`                 | Set **Accelerator** to **GPU T4 x2**; the notebooks run one training process per GPU                                                                                                                 |
+| The version shows no logs and ends with `ERRORED_MOUNTING_DATASET` | One attached dataset failed to mount, so no code ran. Remove or re-add that dataset and save again; the notebooks leave out sources that are not attached                                            |
+| `No texture sources found`                                         | Neither the pipeline output nor the Kaggle datasets are attached                                                                                                                                     |
+| A pip install fails                                                | Internet is off. `lpips`, `flip-evaluator` and `onnxruntime` are optional; their absence is logged and the matching metric or check is skipped                                                       |
+| `RIFE 4.26 weights unavailable` in the log                         | No Internet, Hugging Face unreachable, or the file changed (hash mismatch). The run continues with randomly initialised motion networks, far below the intended quality; fix the cause and run again |
 
 ## Project status
 
@@ -61,10 +63,13 @@ Both training runs started at about 10:25 on 24 October 2026 (Kaggle clock; the 
 3. **Test-clip filter** (`nss_eval.test_clips`). The TSR run skipped 2 blank Vimeo-1080p clips; the FG run skipped 4 (blank, frozen or with a cut). No suite mean is now set by a clip at the 100 dB cap.
 4. **Longer budgets** (TSR 140 / 120 / 75 / 20 minutes, FG 100 / 120 / 75 / 20). Validation curves are now flat at the end (at most 0.06 dB over each run's last three rounds), which suggests that more time alone would add little.
 
-**Changes made after these runs, not yet measured on Kaggle.** Neither affects training or the numbers below:
+**Redesign of 3 November 2026, not yet run on Kaggle.** The runs above showed that neither network works on ordinary video, which is the main goal: without motion vectors from RAFT or the engine, FG interpolation on Vimeo-90K scored 26.0 dB, the same as averaging the two frames (RIFE reaches about 35.6 dB from the frames alone), and TSR was only ever evaluated with RAFT motion computed on the ground-truth frames. The current notebooks therefore differ substantially from the ones that ran:
 
-1. The FG notebook saves tOF per clip to `metrics/temporal_consistency_per_clip.csv`. On Vimeo-1080p, frame averaging has the lowest tOF (6.37 px against 9.11 to 11.76 px), the opposite of every image metric; the suite mean cannot be traced to clips from this run's outputs.
-2. `nss_models.export_onnx` silences the tracer and constant-folding warnings that static-shape export printed in both notebooks; the export call itself is unchanged.
+1. **FG** is rebuilt around an IFNet motion estimator with the design of RIFE 4.26 (MIT). The `high` tier loads the pre-trained RIFE weights from the author's Hugging Face repository (SHA-256 checked, loaded with `weights_only=True`), smaller tiers inherit weight slices, and engine data enter as zero-initialised extra channels. Training withholds motion vectors from half the real video, adds random in-between times and 3x multi-frame samples, and uses 256-pixel crops.
+2. **TSR** gets a built-in motion estimator for inputs without motion vectors, trains on plain-video degradations (bicubic, bilinear or area downscaling, blur, noise, no jitter or side information) next to game-like renders, unrolls 16 frames every fourth step against the static-scene decline, and adds a small output-resolution refinement against the pixel-shuffle pattern. Students no longer use distillation (no measured gain in two runs).
+3. **Evaluation** runs every suite with engine data and as plain video, adds pre-trained RIFE 4.26 as an unchanged FG reference and a 3x multi-frame suite, and the ablations measure the new parts.
+
+Design, evidence and alternatives: [RESEARCH.md section 21](RESEARCH.md#21-redesign-for-plain-video-and-dlss-4-class-quality-3-november-2026). The redesign was checked on CPU only (exact parity with RIFE's own code, forward and backward passes, short CPU training and evaluation runs, ONNX Runtime parity); its quality is `Not measured in the current repository.` until the next Kaggle run. The weights and numbers below are from the old design. Two smaller changes made before the redesign are also unmeasured: per-clip FG tOF in `metrics/temporal_consistency_per_clip.csv`, and silenced tracer warnings in `nss_models.export_onnx`.
 
 The executed notebooks of these runs, with every output, are kept at [neural-supersampling/outputs/neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb) and [neural-frame-generation/outputs/neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb); the notebooks next to them are the current versions without outputs. The exact library code each run used is in its `outputs/code/` folder.
 
@@ -82,7 +87,7 @@ flowchart LR
 
 1. **Data pipeline.** Discovers images and videos on Kaggle and Hugging Face, filters unusable items, detects copies across all sources with hashes, DINOv2 embeddings and SIFT verification, and writes a leakage-safe train / validation / test manifest.
 2. **Training data.** Both training notebooks decode the manifest into memory-mapped caches. Each training batch mixes _synthetic_ game-like scenes, rendered on the GPU from still images with exact motion vectors, disocclusions, thin geometry, particles and HUD overlays, with _real_ sequences (TartanAir and Sintel with exact flow; video with RAFT-estimated motion).
-3. **Training.** DDP on both GPUs with FP16, EMA weights and a wall-clock cosine schedule: a teacher first, then students that learn from the teacher and the ground truth, then smaller tiers and ablations, two runs in parallel (one per GPU).
+3. **Training.** DDP on both GPUs with FP16, EMA weights and a wall-clock cosine schedule: the largest model first (for FG, RIFE 4.26 fine-tuned; for TSR, the teacher tier), then the main student (for FG distilled from the largest model), then smaller tiers and ablations, two runs in parallel (one per GPU). Engine data are withheld at random, so every model also learns to work on plain video.
 4. **Evaluation.** Test-split suites only, against analytic baselines, with spatial, temporal, region, UI and latency metrics, then fusion to plain convolutions and ONNX export.
 
 **Library and build.** The library lives once in [src/neuralss/](src/neuralss/). [tools/build_notebooks.py](tools/build_notebooks.py) turns the percent-format sources in [notebooks/](notebooks/) into `.ipynb` files and embeds every library module as a `%%writefile` cell, so each notebook is self-contained on Kaggle.
@@ -98,56 +103,67 @@ flowchart LR
 
 ## Tech stack
 
-| Component                              | Version (where known)                                                   | Purpose and where used                                                                                          |
-| :------------------------------------- | :---------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
-| Python                                 | 3.10.12 (data pipeline), 3.13.15 (TSR and FG runs)                      | Notebook and library language                                                                                   |
-| PyTorch with CUDA                      | 2.0.0 / CUDA 11.8 (data pipeline), 2.11.0 / CUDA 12.8 (TSR and FG runs) | Models, GPU renderer, DDP training (`torch.distributed.run`), FP16 autocast; the library supports 2.0 and later |
-| torchvision                            | Kaggle image                                                            | RAFT-small optical flow (motion for video, tOF metric), AlexNet weights for the LPIPS fallback                  |
-| Hugging Face Transformers              | Kaggle image                                                            | DINOv2-small embeddings for copy detection (`nss_dedup.py`)                                                     |
-| OpenCV, Pillow, NumPy, pandas, PyArrow | Kaggle image                                                            | Decoding, SIFT features, HUD text tiles, caches, manifest (`nss_manifest.parquet`)                              |
-| matplotlib, tqdm                       | Kaggle image                                                            | Plots and progress bars                                                                                         |
-| `lpips`                                | installed by the notebooks                                              | Perceptual loss and metric (optional)                                                                           |
-| `flip-evaluator`                       | installed by the notebooks                                              | NVIDIA FLIP metric for static convergence (optional)                                                            |
-| `onnxruntime`                          | installed by the notebooks                                              | ONNX export parity check (optional)                                                                             |
-| nbformat                               | 5.11.1 (local `.venv`)                                                  | Local notebook build and check (`tools/build_notebooks.py`)                                                     |
-| black, pyflakes                        | 26.10.1, 4.0.3 (local `.venv`)                                          | Local formatting and lint checks                                                                                |
+| Component                              | Version (where known)                                                   | Purpose and where used                                                                                                           |
+| :------------------------------------- | :---------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| Python                                 | 3.10.12 (data pipeline), 3.13.15 (TSR and FG runs)                      | Notebook and library language                                                                                                    |
+| PyTorch with CUDA                      | 2.0.0 / CUDA 11.8 (data pipeline), 2.11.0 / CUDA 12.8 (TSR and FG runs) | Models, GPU renderer, DDP training (`torch.distributed.run`), FP16 autocast; the library supports 2.0 and later                  |
+| torchvision                            | Kaggle image                                                            | RAFT-small optical flow (motion labels for video, tOF metric), AlexNet weights for the LPIPS fallback                            |
+| RIFE 4.26 weights                      | `RIFEv4.26_0921.zip` from `huggingface.co/hzwer/RIFE` (MIT)             | Initial weights of the FG motion network and the TSR motion estimators; unchanged FG reference (`nss_models.fetch_rife_weights`) |
+| Hugging Face Transformers              | Kaggle image                                                            | DINOv2-small embeddings for copy detection (`nss_dedup.py`)                                                                      |
+| OpenCV, Pillow, NumPy, pandas, PyArrow | Kaggle image                                                            | Decoding, SIFT features, HUD text tiles, caches, manifest (`nss_manifest.parquet`)                                               |
+| matplotlib, tqdm                       | Kaggle image                                                            | Plots and progress bars                                                                                                          |
+| `lpips`                                | installed by the notebooks                                              | Perceptual loss and metric (optional)                                                                                            |
+| `flip-evaluator`                       | installed by the notebooks                                              | NVIDIA FLIP metric for static convergence (optional)                                                                             |
+| `onnxruntime`                          | installed by the notebooks                                              | ONNX export parity check (optional)                                                                                              |
+| nbformat                               | 5.11.1 (local `.venv`)                                                  | Local notebook build and check (`tools/build_notebooks.py`)                                                                      |
+| black, pyflakes                        | 26.10.1, 4.1.0 (local `.venv`)                                          | Local formatting and lint checks                                                                                                 |
+| PyTorch CPU, onnx, onnxruntime         | 2.15.0, 1.23.2, 1.31.1 (local `.venv`, optional)                        | Importing and checking the library on CPU; not needed to build the notebooks                                                     |
 
 ## Repository structure
 
 ```text
 .
-|-- README.md                       this file
-|-- RESEARCH.md                     research plan, design, datasets, measured results, limitations, licences
-|-- src/neuralss/                   single source of the shared library (embedded into every notebook)
-|   |-- nss_common.py               run folders, logger, stage timer, hardware report, pip helper, training launcher with watchdog
-|   |-- nss_data.py                 source registry, discovery, Hugging Face range access, decoding, manifest I/O
-|   |-- nss_dedup.py                pHash / dHash, DINOv2 embeddings, GPU neighbour search, SIFT + RANSAC, leakage-safe split
-|   |-- nss_pipeline.py             data-pipeline steps and the inline fallback used by the training notebooks
-|   |-- nss_cache.py                memory-mapped training caches and RAFT teacher motion
-|   |-- nss_synth.py                GPU renderer of synthetic game-like scenes and batch builders
-|   |-- nss_models.py               RepConv, jitter-aware upsampling, TSR and FG networks, tiers, fusion, ONNX wrappers
-|   |-- nss_metrics.py              losses, PSNR / SSIM / LPIPS / FLIP, RAFT, temporal metrics, baselines, latency model
-|   |-- nss_train.py                DDP training loop, batch streaming, EMA, checkpoints, retry launcher
-|   |-- nss_eval.py                 test clips with a defect filter, input construction, method runners, metric rows
-|   |-- train_tsr.py                TSR training entry point (one process per GPU)
-|   `-- train_fg.py                 FG training entry point
-|-- notebooks/                      percent-format notebook sources (markdown and code cells)
-|-- tools/build_notebooks.py        builds the .ipynb files from notebooks/ and src/neuralss
+|-- README.md
+|-- RESEARCH.md
+|-- src/
+|   `-- neuralss/
+|       |-- nss_common.py
+|       |-- nss_data.py
+|       |-- nss_dedup.py
+|       |-- nss_pipeline.py
+|       |-- nss_cache.py
+|       |-- nss_synth.py
+|       |-- nss_models.py
+|       |-- nss_metrics.py
+|       |-- nss_train.py
+|       |-- nss_eval.py
+|       |-- train_tsr.py
+|       `-- train_fg.py
+|-- notebooks/
+|-- tools/
+|   `-- build_notebooks.py
 |-- neural-data-pipeline/
-|   |-- neural-data-pipeline.ipynb  executed notebook with saved outputs (run of 18 October 2026)
-|   `-- outputs/                    code/, logs/, metrics/, plots/, nss_data/nss_manifest.parquet
+|   |-- neural-data-pipeline.ipynb
+|   `-- outputs/
 |-- neural-supersampling/
-|   |-- neural-supersampling.ipynb  current notebook, no outputs
-|   `-- outputs/                    run of 24 October 2026: code/, logs/, metrics/, plots/, predictions/, weights/,
-|                                   neural-supersampling.executed.ipynb (the run's notebook with all outputs)
+|   |-- neural-supersampling.ipynb
+|   `-- outputs/
 |-- neural-frame-generation/
-|   |-- neural-frame-generation.ipynb  current notebook, no outputs
-|   `-- outputs/                    run of 24 October 2026: code/, logs/, metrics/, plots/, predictions/, weights/,
-|                                   neural-frame-generation.executed.ipynb
-|-- .gitignore                      ignores .venv/, caches, *.zip archives and Kaggle __notebook__.ipynb copies
-|-- .gitattributes                  line-ending normalisation
-`-- .prettierrc.json                Markdown / JSON formatting settings
+|   |-- neural-frame-generation.ipynb
+|   `-- outputs/
+|-- .gitignore
+|-- .gitattributes
+`-- .prettierrc.json
 ```
+
+| Path                                                | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| :-------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/neuralss/`                                     | The single source of the shared library, embedded into every notebook: run folders and launcher (`nss_common`), data sources and decoding (`nss_data`), copy detection and split (`nss_dedup`, `nss_pipeline`), training caches (`nss_cache`), the synthetic renderer and batch builders including the plain-video degradation (`nss_synth`), the IFNet motion estimator with RIFE weight loading and the TSR and FG networks (`nss_models`), losses, metrics and baselines (`nss_metrics`), the DDP loop (`nss_train`), evaluation helpers (`nss_eval`) and the two training entry points |
+| `notebooks/`                                        | Percent-format notebook sources                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `tools/build_notebooks.py`                          | Builds the `.ipynb` files from `notebooks/` and `src/neuralss`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `neural-data-pipeline/`                             | The executed data-pipeline notebook (run of 18 October 2026) and its outputs, including `nss_data/nss_manifest.parquet`                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `neural-supersampling/`, `neural-frame-generation/` | The current notebook (the redesign, no outputs) and the outputs of the run of 24 October 2026 (old design), including `<name>.executed.ipynb` with every output                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `.gitignore`, `.gitattributes`, `.prettierrc.json`  | Ignored local folders and archives, line-ending rules, Markdown / JSON formatting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Inside every `outputs/` folder: `code/` holds the library and per-run JSON configs exactly as written on Kaggle, `logs/` the notebook log and one log per training run, `metrics/` every CSV and JSON result, `plots/` every figure.
 
@@ -273,7 +289,7 @@ _Minutes per pipeline stage._
 
 ## Notebook 2: temporal super-resolution
 
-Run of 24 October 2026 (PyTorch 2.11.0, CUDA 12.8, Python 3.13.15, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 7.13 hours; no failed runs). Outputs: [neural-supersampling/outputs/](neural-supersampling/outputs/); executed notebook: [neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb). The current notebook differs from the one that ran only by the ONNX warning filter listed under [Project status](#project-status); the numbers below are from the run.
+Run of 24 October 2026 (PyTorch 2.11.0, CUDA 12.8, Python 3.13.15, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 7.13 hours; no failed runs). Outputs: [neural-supersampling/outputs/](neural-supersampling/outputs/); executed notebook: [neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb). **This section describes that run and the old design.** The current notebook is the redesign listed under [Project status](#project-status): it adds the motion estimator, plain-video training and evaluation, long unrolls and new ablations, so its sections and tables differ from the ones below.
 
 **Sections 1 to 4: library, setup, hardware, configuration.** Writes the ten library modules and `train_tsr.py`; `lpips`, `flip-evaluator` and `onnxruntime` all installed. Main settings (`metrics/config.json`): 3x primary and 2x secondary scale, 192-px output patches, 6-frame sequences, 40 percent real windows per batch, learning rate 2e-3 (teacher 1e-3), loss weights gradient 0.1, Fourier 0.05, temporal 0.5, LPIPS 0.05, distillation 0.5. Budgets: teacher 140 min, student 120, pair 75, ablations 20 per pair; caches 30 min.
 
@@ -546,7 +562,7 @@ _Minutes per stage of the TSR run._
 
 ## Notebook 3: frame generation
 
-Run of 24 October 2026 (PyTorch 2.11.0, CUDA 12.8, Python 3.13.15, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 6.47 hours; no failed runs). Outputs: [neural-frame-generation/outputs/](neural-frame-generation/outputs/); executed notebook: [neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb). The numbers below are from the run; the current notebook adds only the per-clip tOF file and the ONNX warning filter listed under [Project status](#project-status).
+Run of 24 October 2026 (PyTorch 2.11.0, CUDA 12.8, Python 3.13.15, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 6.47 hours; no failed runs). Outputs: [neural-frame-generation/outputs/](neural-frame-generation/outputs/); executed notebook: [neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb). **This section describes that run and the old design** (a small network that needed RAFT or engine motion vectors, and a privileged teacher). The current notebook is the redesign listed under [Project status](#project-status): an IFNet initialised from RIFE 4.26, evaluation with and without engine data against RIFE 4.26 unchanged, a 3x multi-frame suite and new ablations, so its sections and tables differ from the ones below.
 
 **Sections 1 to 4: library, setup, hardware, configuration.** All three optional packages installed. Settings: 192-px patches, 40 percent real quads, 50 percent extrapolation, HUD in 50 percent of synthetic samples, menus 3, cuts 3 and camera reversals 10 percent; loss weights census 0.5, LPIPS 0.1, flow 0.01, UI 0.2, distillation 0.5. Budgets: teacher 100, student 120, pair 75, ablations 20 min; caches 30 min.
 
@@ -788,6 +804,8 @@ _Minutes per stage of the FG run._
 
 ## Weights and exported models
 
+These are the weights of the old design (runs of 24 October 2026). The redesigned networks have different layers and inputs, so these files do not load into the current `nss_models` networks; they load into the library versions in each notebook's `outputs/code/`.
+
 Each training run saved three PyTorch checkpoints in its notebook's `outputs/weights/`: `<run>_best.pt` (EMA weights of the best validation round), `<run>_last.pt` (model and EMA weights of the last round) and `<run>_fused.pt` (RepConv folded into plain convolutions, FP16). They are research weights trained on research-use data (see [RESEARCH.md](RESEARCH.md) section 16). All are from the runs of 24 October 2026.
 
 | File                                                             | Size (best / last / fused)      | Purpose                                                    |
@@ -807,24 +825,23 @@ Each training run saved three PyTorch checkpoints in its notebook's `outputs/wei
 | `neural-frame-generation/outputs/weights/fg_student_fused.onnx`  | 317 KB                          | ONNX, FG student, 96x64 input                              |
 | `neural-frame-generation/outputs/weights/fg_igpu_fused.onnx`     | 253 KB                          | ONNX, FG `igpu`                                            |
 
-The ONNX files use static shapes (the small export size); re-export at the target resolution with `nss_models.export_onnx` for deployment. The changes made after the runs do not touch the model definitions, so these weights load into the current models.
+The ONNX files use static shapes (the small export size); re-export at the target resolution with `nss_models.export_onnx` for deployment.
 
 ## Known limitations
 
-A full list with reasons is in [RESEARCH.md](RESEARCH.md) section 15. The most important ones, from the runs:
+A full list with reasons is in [RESEARCH.md](RESEARCH.md) section 15. The most important ones:
 
-- **The TSR students lose quality on long static sequences.** With a static camera they peak around frames 6 to 10 and lose 1.3 to 1.4 dB by frame 15, while the teacher keeps improving; training unrolls only 6 frames (section 23 of the TSR notebook). Training on longer unrolls, or carrying the recurrent state across training batches, is the likely fix and needs a new Kaggle run to verify.
-- **The 3x student shows a faint noise or dot pattern at the pixel-shuffle period** on flat areas (section 24 of the TSR notebook); the teacher shows much less of it.
-- **TSR temporal stability trails the analytic TAA upscaler on real suites**: the 3x student's temporal-change error is 2 to 7 percent higher on TartanAir, Sintel, Vid4 and Vimeo-1080p (it is lower on synthetic scenes).
-- **The FG camera prior is unused.** `FGNet.priors` replaces the linear-motion flow with the camera flow only when no motion vector is available; with motion vectors, the network learned to ignore the camera channel, so late latching does not improve camera reversals (frame repeat is better there).
-- **With exact engine motion vectors, FG extrapolation does not beat plain motion-vector reprojection** on TartanAir, Sintel or Vid4, and is about 1 dB behind it on fast synthetic motion.
-- **Distillation gives no measurable gain** in 20-minute ablations, for TSR (in both runs) and FG (in this run).
-- **FG Vimeo-1080p tOF ranks frame averaging first**, against every image metric; the cause is not established (per-clip values are saved from the next run).
-- **T4 latencies are PyTorch eager timings**, 2.5x to 20x the arithmetic estimates for FG; in-engine latency on target GPUs is `Not measured in the current repository.`
+- **The redesign of 3 November 2026 is unmeasured.** Every quality expectation for it is a hypothesis until the next Kaggle run; the measured results in this README are from the old design.
+- **The old models do not work on ordinary video.** Without RAFT or engine motion vectors, FG interpolation equalled frame averaging (26.0 dB on Vimeo-90K), and TSR was never evaluated on plain video. This is what the redesign addresses.
+- **The old TSR students lost quality on long static sequences** (peak at frames 6 to 10, then -1.3 to -1.4 dB by frame 15) and showed a faint pixel-shuffle pattern on flat areas; the redesign trains 16-frame unrolls and adds an output-resolution refinement for these.
+- **The TSR motion estimator starts without trained motion.** Its RIFE-derived initial weights are a starting point only, so it learns motion from the training labels within the TSR budget.
+- **The redesigned FG tiers cost more**: 9.4 to 76.7 GMAC per generated 1080p frame against 1.55 to 77 before (old `low` 3.7, new `low` 12.7), because they estimate motion from colour.
+- **With exact engine motion vectors, the old FG extrapolation did not beat plain motion-vector reprojection**, and the old camera prior was unused.
+- **Distillation gave no measurable gain** in 20-minute ablations of the old design; the redesigned TSR students train without it.
+- **T4 latencies are PyTorch eager timings**; in-engine latency on target GPUs is `Not measured in the current repository.`
 - **Each configuration ran once**, so run-to-run variance is `Not measured in the current repository.`; differences of a few tenths of a dB between runs or ablations may be noise.
-- **Validation is not comparable across ablations**, and TSR validation has no exact-motion source (TartanAir and Sintel have no validation items).
 - **Real training data is mostly Vimeo-90K** (about 91 percent of real training windows and quads), and only about 2 percent of TSR windows have exact motion.
-- **No comparison with FSR, DLSS or XeSS** yet; it needs engine captures.
+- **No comparison with FSR, DLSS or XeSS** yet; it needs engine captures, and DLSS needs RTX hardware.
 
 ## Troubleshooting
 
@@ -841,3 +858,9 @@ A full list with reasons is in [RESEARCH.md](RESEARCH.md) section 15. The most i
 ## Licence
 
 The repository has no licence file, so no licence is granted for the code. Dataset and dependency licences, and the policy that released weights must be retrained on permissively licensed data, are in [RESEARCH.md](RESEARCH.md) section 16.
+
+## Documentation
+
+| File                       | Read when                                                                                                                                                   |
+| :------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [RESEARCH.md](RESEARCH.md) | Design rationale, competitive analysis, datasets and licences, measured results of every run, limitations, and the redesign of 3 November 2026 (section 21) |

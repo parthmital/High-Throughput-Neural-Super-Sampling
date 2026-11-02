@@ -1,18 +1,18 @@
 # %% [markdown]
 # # NeuralSS low-latency frame generation (Kaggle GPU T4 x2)
 #
-# **Goal.** Train and evaluate the NeuralSS frame generator: one small network that produces an in-between frame (**interpolation**, tau = 0.5) or a future frame (**extrapolation**, tau = 1.5) from two real frames, uses engine motion vectors, depth and the latest camera input when available, never hallucinates or interpolates UI (HUD, subtitles, menus, pause screens), falls back safely on scene cuts, and is cheap enough for integrated GPUs. Generated-frame latency (when a generated image reaches the screen) is reported separately from game input latency (when a real frame reflecting an input reaches the screen).
+# **Goal.** Train and evaluate the NeuralSS frame generator: one network that produces in-between frames at any time (**interpolation**, 0 < tau < 1, so 2x to 6x multi-frame generation) or a future frame (**extrapolation**, tau = 1.5) from two real frames, **works on ordinary video with no side information** and uses engine motion vectors, depth and the latest camera input when they exist, never hallucinates or interpolates UI (HUD, subtitles, menus, pause screens), falls back safely on scene cuts, and has tiers down to integrated GPUs. Generated-frame latency (when a generated image reaches the screen) is reported separately from game input latency (when a real frame reflecting an input reaches the screen).
 #
 # **Approach.**
 #
-# 1. **Data.** The leakage-safe manifest from `neural-data-pipeline` (or an inline build). Synthetic layered scenes rendered on the GPU (exact intermediate flows, disocclusions, thin geometry, particles; HUD tiles and subtitles that change between frames, full-screen menus, scene cuts, rapid camera reversals) and real quads of consecutive video frames (Vimeo-90K, REDS, Vimeo-1080p, TartanAir, Sintel) with RAFT teacher flows.
-# 2. **Model.** Coarse-to-fine intermediate-flow estimator at 1/4 and 1/2 resolution initialised from motion priors: linear-motion flows from the engine motion vector of the newest frame and, for extrapolation, the camera-only flow of the latest input (late latching, as in asynchronous reprojection). Output = UI-mask * newest real frame + (1 - UI-mask) * (blend of the two warped frames + residual). A privileged teacher that also sees the true target frame provides flow and output distillation. Tiers: `igpu`, `low`, `mid`, `high`, `teacher`.
-# 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock schedule. Loss: Charbonnier + census + LPIPS + flow supervision + UI-mask cross-entropy + distillation. Engine inputs are randomly dropped so one model serves engine integrations and post-process integrations.
-# 4. **Evaluation.** PSNR, SSIM, LPIPS, interpolation error, quality in occluded regions, UI-region PSNR and UI ghosting rate (with and without the engine's separate UI layer), scene-cut detection, menus, rapid camera reversals (with and without the camera prior), temporal consistency of the displayed sequence (tOF), motion classes; against frame repeat, frame averaging and motion-vector reprojection. Ablations: no UI training, no motion priors, interpolation-only, extrapolation-only, no distillation. Latency of fused tiers at 1080p and 1440p, an input-to-photon pacing model for native, interpolation, extrapolation and late-latched extrapolation, ONNX export.
+# 1. **Data.** The leakage-safe manifest from `neural-data-pipeline` (or an inline build). Synthetic layered scenes rendered on the GPU (exact intermediate flows at random in-between times, disocclusions, thin geometry, particles; HUD tiles and subtitles that change between frames, full-screen menus, scene cuts, rapid camera reversals) and real quads of consecutive video frames (Vimeo-90K, REDS, Vimeo-1080p, TartanAir, Sintel) with RAFT teacher flows, including 3x multi-frame samples (frames k and k+3, targets at 1/3 and 2/3).
+# 2. **Model.** An IFNet coarse-to-fine intermediate-flow estimator with the design of RIFE 4.26 (Practical-RIFE, MIT), which estimates motion from the two colour frames alone. The `high` tier is RIFE 4.26's network and starts from its pre-trained weights (downloaded from the author's Hugging Face repository and hash-checked); smaller tiers inherit leading channel slices. Engine data enter as extra input channels with zero initial weight (linear-motion priors from the motion vector of the newest frame, the camera-only flow of the latest input for late-latched extrapolation, depth, availability flags), so the fresh model reproduces RIFE exactly and fine-tuning learns how much to trust each signal. A half-resolution head adds a residual and the UI mask: output = UI-mask * newest real frame + (1 - UI-mask) * (blend of the two warped frames + residual). Tiers: `igpu`, `low`, `mid`, `high` (= `teacher`, which distils into the others).
+# 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock schedule; fine-tuning of the RIFE-initialised `high` tier first, then the smaller tiers with distillation from it. Loss: Charbonnier + census + LPIPS + flow supervision + UI-mask cross-entropy + distillation. Engine inputs are randomly withheld, on synthetic and on real video, so one model serves engine integrations and plain video.
+# 4. **Evaluation.** Every suite with engine data (**engine**) and without (**plain**: ordinary video). PSNR, SSIM, LPIPS, interpolation error, quality in occluded regions, UI-region PSNR and UI ghosting rate (with and without the engine's separate UI layer), scene-cut detection, menus, rapid camera reversals (with and without the camera prior), 3x multi-frame generation on real clips, temporal consistency of the displayed sequence (tOF), motion classes; against frame repeat, frame averaging, motion-vector reprojection and **pre-trained RIFE 4.26 unchanged** (the open state of the art this model starts from). Ablations: no UI training, no motion priors, extrapolation-only, no distillation, no weight inheritance. Latency of fused tiers at 1080p and 1440p, an input-to-photon pacing model for native, interpolation, extrapolation and late-latched extrapolation, ONNX export.
 #
-# **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
+# **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RIFE 4.26 / RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget.** Caches at most 30 min, teacher 100 min, main student 120 min, parallel `igpu` / `mid` students 75 min, three ablation pairs of 20 min, evaluation and export about 10 min: about 6.5 hours of a 9.5-hour ceiling (the run of 24 October 2026 with these budgets took 6.47 hours; validation PSNR gained at most 0.06 dB over each run's last three rounds). `QUICK_RUN = True` gives a 40-minute smoke test.
+# **Budget.** Caches at most 30 min, `high` tier (teacher) 100 min, main student 120 min, parallel `igpu` / `mid` students 75 min, three ablation pairs of 20 min, evaluation in both input modes plus the RIFE reference and multi-frame suites and export about 30 min: about 7 hours of a 9.5-hour ceiling (the run of 24 October 2026 with the same training budgets took 6.47 hours, 1.1 minutes of it evaluation). `QUICK_RUN = True` gives a 40-minute smoke test.
 #
 # **Outputs** in `/kaggle/working/`: `code/`, `weights/` (checkpoints, fused models, ONNX), `plots/`, `metrics/`, `logs/`, `predictions/`, `outputs.zip` (training caches are deleted first).
 
@@ -159,9 +159,11 @@ DEVICES = [torch.device("cuda", i) for i in range(HW["gpus"])]
 # %% [markdown]
 # ## 4. Configuration
 #
-# * `patch` 192: training crops; textures are 512x512 so synthetic cameras can move up to about 35 px per frame.
-# * `p_extrap` share of extrapolation samples (the low-latency mode); `p_ui`, `p_menu`, `p_cut`, `p_flip` control UI overlays, menus, scene cuts and rapid camera reversals in synthetic batches.
-# * Loss weights: census 0.5, LPIPS 0.1, flow 0.01 (per pixel of flow error), UI 0.2, distillation 0.5.
+# * `patch` 256: training crops (RIFE's own crop size; its coarsest level works at 1/16 of the crop); textures are 512x512 so synthetic cameras can move up to about 35 px per frame.
+# * `p_extrap` share of extrapolation samples (the low-latency mode); `p_tau` share of synthetic interpolation samples at a random time in [0.15, 0.85] and `p_mfg` share of real interpolation samples taken as 3x multi-frame generation (both for 2x to 6x generation); `p_ui`, `p_menu`, `p_cut`, `p_flip` control UI overlays, menus, scene cuts and rapid camera reversals in synthetic batches.
+# * `p_drop_mv` / `p_drop_mv_real`: shares of synthetic and real samples whose motion vectors are withheld, so the model learns to estimate motion itself on video (the run of 24 October 2026 lost 5.8 to 7.8 dB without motion priors because it never had to).
+# * Learning rates are fine-tuning rates: 1e-4 for the RIFE-initialised `high` tier, 4e-4 for the inherited smaller tiers.
+# * Loss weights: census 0.5, LPIPS 0.1, flow 0.01 (per pixel of flow error; RAFT labels on video at a quarter of that), UI 0.2, distillation 0.5.
 # * `minutes`: wall-clock budgets per stage, scaled to the remaining run budget.
 # * `cache.build_min`: the total decoding budget of all training caches.
 
@@ -170,7 +172,7 @@ QUICK_RUN = False
 RUN_BUDGET_H = 9.5
 CFG = {
     "seed": 21,
-    "patch": 192,
+    "patch": 256,
     "still_size": 512,
     "student_tier": "low",
     "small_tier": "igpu",
@@ -183,13 +185,17 @@ CFG = {
         "build_min": 6 if QUICK_RUN else 30,
     },
     "p_real": 0.4,
-    "p_extrap": 0.5,
+    "p_extrap": 0.4,
+    "p_tau": 0.5,
+    "p_mfg": 0.25,
+    "p_drop_mv": 0.3,
+    "p_drop_mv_real": 0.5,
     "p_ui": 0.5,
     "p_menu": 0.03,
     "p_cut": 0.03,
-    "p_flip": 0.1,
-    "lr": 2e-3,
-    "lr_teacher": 1e-3,
+    "p_flip": 0.2,
+    "lr": 4e-4,
+    "lr_teacher": 1e-4,
     "min_lr": 1e-6,
     "warmup_frac": 0.03,
     "weight_decay": 1e-4,
@@ -233,9 +239,9 @@ ABLATIONS = {
     "reference": {},
     "no_ui_training": {"ui_training": False, "w_ui": 0.0},
     "no_motion_prior": {"ablate_prior": True},
-    "interp_only": {"mode": "interp"},
     "extrap_only": {"mode": "extrap"},
     "no_distillation": {"teacher_ckpt": None},
+    "no_inheritance": {"rife_weights": None},
 }
 RUN.save_json(
     {
@@ -293,7 +299,7 @@ assert ITEMS[
 # %% [markdown]
 # ## 7. Training caches
 #
-# Memory-mapped 512x512 still crops (synthetic textures) and quads of four 192x192 frames in `/tmp/nss_cache` (local disk outside `/kaggle/working`, so about 10 GB of caches never count toward the 20 GB saved output), decoded with all CPU cores; RAFT teacher flows for each quad on both GPUs: 2 -> 0 (the engine-style motion vector of the newest real frame), 1 -> 0 and 1 -> 2 (interpolation targets) and 3 -> 2 (extrapolation target). Decoding shares one time budget, `build_min`: a quarter for stills, three quarters for quads; the small validation caches are built first and the training caches get the rest of each share, so a slow dataset mount shrinks the caches instead of the training time. Expected output: progress bars, counts per source, cache size.
+# Memory-mapped 512x512 still crops (synthetic textures) and quads of four 256x256 frames in `/tmp/nss_cache` (local disk outside `/kaggle/working`, so about 12 GB of caches never count toward the 20 GB saved output), decoded with all CPU cores; RAFT teacher flows for each quad on both GPUs: 2 -> 0 (the engine-style motion vector of the newest real frame), 1 -> 0 and 1 -> 2 (interpolation targets) and 3 -> 2 (extrapolation target). Decoding shares one time budget, `build_min`: a quarter for stills, three quarters for quads; the small validation caches are built first and the training caches get the rest of each share, so a slow dataset mount shrinks the caches instead of the training time. Expected output: progress bars, counts per source, cache size.
 
 # %%
 CACHE = Path("/tmp/nss_cache")
@@ -422,59 +428,42 @@ RUN.show(fig, "synthetic_preview")
 # %% [markdown]
 # ## 9. Model tiers, cost and fusion parity
 #
-# Parameters, multiply-accumulates per generated 1080p frame (the networks run at 1/4 and 1/2 resolution; warping and blending at full resolution are not counted) and fused-versus-unfused parity. Expected output: a tier table.
+# Downloads the pre-trained RIFE 4.26 weights (MIT) from the author's Hugging Face repository, checks both SHA-256 hashes and loads the checkpoint with `weights_only=True`. `RIFE_REF` is a `high`-tier generator holding only these weights: with no engine data its blend is RIFE 4.26's own output (checked to 3e-6 against RIFE's code on CPU before this run), the unchanged reference for every test suite. If the download fails, every tier starts from random weights and the reference is left out (logged). Then, per tier: parameters, multiply-accumulates per generated 1080p frame (every convolution, including the per-frame feature encoder, which a running pipeline computes once per real frame and reuses; warps and blends are not counted) and fused-versus-unfused parity (the frame generator has no RepConv blocks, so fusion is a copy). Expected output: the inheritance counts and a tier table.
 
 
 # %%
-def fg_inputs(n, h, w, dev="cpu"):
-    return {
-        "i0": torch.rand(n, 3, h, w, device=dev),
-        "i1": torch.rand(n, 3, h, w, device=dev),
-        "mv1": torch.randn(n, 2, h, w, device=dev),
-        "depth1": torch.rand(n, 1, h, w, device=dev),
-        "cam_prior": torch.randn(n, 2, h, w, device=dev),
-        "tau": torch.full((n,), 1.5, device=dev),
-        "extrap": torch.ones(n, device=dev),
-        "mv_avail": torch.ones(n, device=dev),
-        "cam_avail": torch.ones(n, device=dev),
-        "depth_avail": torch.ones(n, device=dev),
-        "target": torch.rand(n, 3, h, w, device=dev),
-    }
-
-
+RIFE_STATE = NM.fetch_rife_weights("/tmp/nss_rife", log=log)
+RIFE_PT, RIFE_REF = None, None
+if RIFE_STATE is not None:
+    RIFE_PT = "/tmp/nss_rife/rife426.pt"  # plain state dict for the training processes
+    torch.save(RIFE_STATE, RIFE_PT)
+    RIFE_REF = NM.build_fg("high")
+    log(
+        f"RIFE 4.26 into the high tier: {NM.load_ifnet_weights(RIFE_REF.ifnet, RIFE_STATE)}"
+    )
+    RIFE_REF = RIFE_REF.to(DEVICES[0]).eval()
 tier_rows = []
 for tier in NM.FG_TIERS:
     net = NM.build_fg(tier).eval()
     with torch.no_grad():
-        for mod in net.nets:
-            mod["head"].weight.normal_(0, 0.01)
+        net.refine.up.weight.normal_(0, 0.01)  # non-trivial output for the parity check
         fused = NM.fuse_model(net)
-        f = fg_inputs(1, 64, 64)
+        f = NM.fg_inputs(1, 128, 128)
         parity = float((net(f)[0] - fused(f)[0]).abs().max())
-    macs = [0]
-    hooks = [
-        m.register_forward_hook(
-            lambda mod, i, o: macs.__setitem__(
-                0,
-                macs[0]
-                + o.numel() * mod.in_channels * mod.kernel_size[0] * mod.kernel_size[1],
-            )
-        )
-        for m in fused.modules()
-        if isinstance(m, torch.nn.Conv2d)
-    ]
-    with torch.no_grad():  # counted at 272x480 and scaled: convolution cost is linear in pixel count
-        fused(fg_inputs(1, 272, 480))
-    for hk in hooks:
-        hk.remove()
+    # counted at 272x480 and scaled: convolution cost is linear in pixel count
+    f = NM.fg_inputs(1, 272, 480)
+    px = (1080 * 1920) / (272 * 480)
+    macs = NM.count_macs(fused, lambda m: m(f))
+    # the encoder runs on frames scaled by flow_scale (convolution cost scales with the pixel count)
+    enc = 2 * NM.count_macs(fused.ifnet.encode, lambda m: m(f["i0"]))
+    enc *= NM.FG_TIERS[tier]["flow_scale"] ** 2
     tier_rows.append(
         {
             "tier": tier,
-            "train_params": NM.count_params(net),
-            "fused_params": NM.count_params(fused),
-            "gmac_per_1080p_frame": round(
-                macs[0] * (1080 * 1920) / (272 * 480) / 1e9, 2
-            ),
+            "params": NM.count_params(net),
+            "flow_scale": NM.FG_TIERS[tier]["flow_scale"],
+            "gmac_per_1080p_frame": round(macs * px / 1e9, 2),
+            "gmac_per_frame_encoder": round(enc * px / 1e9, 2),
             "parity_max_abs": parity,
         }
     )
@@ -486,7 +475,7 @@ assert TIERS["parity_max_abs"].max() < 1e-3, "fusion parity failed"
 # %% [markdown]
 # ## 10. Batch-size probe
 #
-# Full training steps (synthetic batch with UI, forward, pixel and census losses, backward) on GPU 0 for the teacher and for a student with the teacher alongside; keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the LPIPS, flow, UI and distillation losses, real-quad batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. Expected output: probe tables and chosen batch sizes.
+# Full training steps (synthetic batch with UI at 256x256, forward, pixel and census losses, backward) on GPU 0 for the `high` tier (teacher, RIFE 4.26's width) and for a student with the teacher alongside; keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the LPIPS, flow, UI and distillation losses, real-quad batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. Expected output: probe tables and chosen batch sizes.
 
 
 # %%
@@ -550,7 +539,7 @@ def probe(tier, with_teacher, sizes):
 
 with RUN.stage("batch_probe"):
     TR.free_gpu_memory()
-    sizes = [8, 16] if QUICK_RUN else [8, 16, 24, 32, 48, 64, 96]
+    sizes = [4, 8] if QUICK_RUN else [4, 8, 12, 16, 24, 32, 48, 64]
     PROBE_T, BS_TEACHER = probe("teacher", False, sizes)
     PROBE_S, BS_STUDENT = probe(CFG["student_tier"], True, sizes)
 print(
@@ -596,6 +585,11 @@ def run_cfg(name, tier, minutes, batch, teacher_ckpt=None, **over):
         "batch_per_gpu": batch,
         "p_real": CFG["p_real"],
         "p_extrap": CFG["p_extrap"],
+        "p_tau": CFG["p_tau"],
+        "p_mfg": CFG["p_mfg"],
+        "p_drop_mv": CFG["p_drop_mv"],
+        "p_drop_mv_real": CFG["p_drop_mv_real"],
+        "rife_weights": RIFE_PT,
         "p_ui": CFG["p_ui"],
         "p_menu": CFG["p_menu"],
         "p_cut": CFG["p_cut"],
@@ -641,7 +635,13 @@ def live_plot(title):
         fig, axes = plt.subplots(1, 2, figsize=(12, 3.2))
         axes[0].plot(h["elapsed_min"], h["train_loss"])
         axes[0].set_title("train loss")
-        for col in ("val_psnr", "val_psnr_interp", "val_psnr_extrap", "val_psnr_ui"):
+        for col in (
+            "val_psnr_engine",
+            "val_psnr_plain",
+            "val_psnr_interp",
+            "val_psnr_extrap",
+            "val_psnr_ui",
+        ):
             if col in h:
                 axes[1].plot(h["elapsed_min"], h[col], label=col[4:])
         axes[1].legend(fontsize=7)
@@ -688,9 +688,9 @@ def launch_pair(cfg_a, cfg_b):
 
 
 # %% [markdown]
-# ## 12. Stage A: privileged teacher (both GPUs)
+# ## 12. Stage A: high tier fine-tuned from RIFE 4.26 (both GPUs)
 #
-# The `teacher` tier sees the true target frame as an extra input (privileged information, as in RIFE's distillation), so its flows and outputs are better than any deployable model's; it is never deployed. Expected output: live chart and final scores.
+# The `high` tier (`teacher`), RIFE 4.26's network with the engine-hint channels and the residual / UI head, starts from the pre-trained RIFE weights and is fine-tuned on game-like scenes, UI, cuts, extrapolation and engine data. It is deployable on high-end GPUs (about 77 GMAC per generated 1080p frame) and teaches the smaller tiers. Unlike the privileged teacher of earlier runs it does not see the target frame, so its scores are achievable at run time. Expected output: live chart and final scores (with engine data, without, and their mean).
 
 # %%
 with RUN.stage("train_teacher"):
@@ -704,7 +704,7 @@ if TEACHER_CKPT is None:
 # %% [markdown]
 # ## 13. Stage B: main student with distillation (both GPUs)
 #
-# The `low` tier with the full loss and distillation of flows and output toward the privileged teacher. Expected output: live chart and final scores.
+# The `low` tier (inherited RIFE slices, flow network at half resolution) with the full loss and distillation of flows and output toward the fine-tuned `high` tier. Expected output: live chart and final scores.
 
 # %%
 with RUN.stage("train_student"):
@@ -724,7 +724,7 @@ with RUN.stage("train_student"):
 # %% [markdown]
 # ## 14. Stage C: integrated-GPU and mid tiers in parallel
 #
-# GPU 0 trains the `igpu` tier, GPU 1 the `mid` tier (two-level), both distilled. Expected output: both runs' final scores.
+# GPU 0 trains the `igpu` tier, GPU 1 the `mid` tier (flow network at full resolution), both distilled. Expected output: both runs' final scores.
 
 # %%
 with RUN.stage("train_pair"):
@@ -750,7 +750,7 @@ with RUN.stage("train_pair"):
 # %% [markdown]
 # ## 15. Ablations (three parallel pairs)
 #
-# Short `low`-tier runs against a `reference` with the same budget: no UI training (no HUD / subtitle / menu overlays, no UI loss), no motion priors (no engine motion vectors or camera prior), interpolation only, extrapolation only, and no distillation. The budgets are equal in wall-clock time, so the `no_distillation` run, which skips the teacher's forward pass, takes more steps (1,170 against 1,040 in the run of 20 to 21 October 2026). Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Each run validates on batches built with its own recipe (for example no UI for `no_ui_training`, interpolation only for `interp_only`), so validation scores are not comparable across ablations; section 25 compares them on the test suites. Expected output: final scores of the six runs.
+# Short `low`-tier runs against a `reference` with the same budget: no UI training (no HUD / subtitle / menu overlays, no UI loss), no motion priors (never any engine motion vectors or camera prior), extrapolation only, no distillation, and no weight inheritance (random initialisation instead of RIFE slices). The budgets are equal in wall-clock time, so the `no_distillation` run, which skips the teacher's forward pass, takes more steps. Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Each run validates on batches built with its own recipe (for example no UI for `no_ui_training`), so validation scores are not comparable across ablations; section 25 compares them on the test suites. Expected output: final scores of the six runs.
 
 # %%
 with RUN.stage("ablations"):
@@ -777,7 +777,7 @@ with RUN.stage("ablations"):
 # %% [markdown]
 # ## 16. Training curves
 #
-# Validation PSNR over time for every run and train loss for the main stages; table of best rounds. Expected output: two charts, a table and the list of failed runs (`metrics/failed_runs.json`, normally empty).
+# Validation PSNR over time for every run (the mean of the same validation samples with their engine data and without any, the checkpoint selection metric) and train loss for the main stages; table of best rounds. Expected output: two charts, a table and the list of failed runs (`metrics/failed_runs.json`, normally empty).
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(15, 4))
@@ -806,6 +806,8 @@ for name, rounds in HISTORY.items():
                 for k in (
                     "round",
                     "val_psnr",
+                    "val_psnr_engine",
+                    "val_psnr_plain",
                     "val_psnr_interp",
                     "val_psnr_extrap",
                     "val_psnr_ui",
@@ -829,11 +831,11 @@ print("failed runs:", sorted(FAILED) or "none")
 # %% [markdown]
 # ## 17. Load and fuse models
 #
-# Best EMA weights of each run, folded into plain convolutions, kept as FP16 replicas on GPU 0. Expected output: a table of models with fused parameters.
+# Best EMA weights of each run, kept as FP16 replicas on GPU 0 (`high` is the fine-tuned teacher run, a deployable tier). Expected output: a table of models with parameter counts.
 
 # %%
 RUNS = {
-    "teacher": ("fg_teacher", "teacher"),
+    "high": ("fg_teacher", "teacher"),
     "student": (f"fg_{CFG['student_tier']}", CFG["student_tier"]),
     "igpu": (f"fg_{CFG['small_tier']}", CFG["small_tier"]),
     "mid": (f"fg_{CFG['mid_tier']}", CFG["mid_tier"]),
@@ -852,7 +854,7 @@ for key, (name, tier) in RUNS.items():
         RUN.dirs["weights"] / f"{name}_fused.pt",
     )
     MODELS[key] = fused
-    rows.append({"model": key, "tier": tier, "fused_params": NM.count_params(fused)})
+    rows.append({"model": key, "tier": tier, "params": NM.count_params(fused)})
 print(pd.DataFrame(rows).to_string(index=False))
 LPIPS = M.load_lpips(DEVICES[0], log=log)
 RAFT = RAFTS[0] if RAFTS else M.load_raft(DEVICES[0], log=log)
@@ -893,7 +895,7 @@ RUN.show(fig, "cut_detector")
 # %% [markdown]
 # ## 19. Test suites
 #
-# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (192x192 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p and Vid4 (both modes, RAFT motion vectors). Clips that cannot be decoded are logged and skipped, and so are real clips that cannot test generation (`E.test_clips`): blank frames, frozen (duplicated) frames, where every method reaches the 100 dB PSNR cap, and scene cuts or flashes between the frames, which the synthetic cut suite covers. In the run of 20 to 21 October 2026, two blank Vimeo-1080p clips and one with a cut decided that suite's ranking. Expected output: suite sizes.
+# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (256x256 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p and Vid4 (both modes, RAFT motion vectors). Clips that cannot be decoded are logged and skipped, and so are real clips that cannot test generation (`E.test_clips`): blank frames, frozen (duplicated) frames, where every method reaches the 100 dB PSNR cap, and scene cuts or flashes between the frames, which the synthetic cut suite covers. In the run of 20 to 21 October 2026, two blank Vimeo-1080p clips and one with a cut decided that suite's ranking. Expected output: suite sizes.
 
 # %%
 ev = CFG["eval"]
@@ -946,7 +948,7 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# For each suite and mode: every network (the privileged teacher is listed as an upper bound only, since it sees the target), the analytic baselines (frame repeat, average, motion-vector reprojection) and, on UI suites, the engine path (generate on HUD-less frames, composite the newest UI layer). The cut detector gates every network: frames it flags are replaced by the newest real frame. On real suites the motion-vector input of I1 is the exact flow on TartanAir and Sintel (frame 2 -> 1 composed with frame 1 -> 0, as an engine would provide) and RAFT on the video suites; the target's occlusion mask always comes from RAFT and is used by the metrics only. Models whose training failed are left out, and a model that fails on one suite is logged and skipped there. Expected output: number of metric rows.
+# For each suite and mode (interpolation, extrapolation, 3x multi-frame generation), with two input modes: **engine** (motion vectors, depth and camera where the suite has them) and **plain** (no engine data at all: ordinary video). Methods: every network, **RIFE 4.26 unchanged** (pre-trained, colour only, the open state of the art this model starts from), the analytic baselines (frame repeat, average and, with engine data, motion-vector reprojection) and, on UI suites, the engine path (generate on HUD-less frames, composite the newest UI layer). The cut detector gates every network: frames it flags are replaced by the newest real frame. On real suites the motion-vector input of I1 is the exact flow on TartanAir and Sintel (frame 2 -> 1 composed with frame 1 -> 0, as an engine would provide) and RAFT on the video suites; the target's occlusion mask always comes from RAFT and is used by the metrics only. The 3x multi-frame suite generates frames k+1 and k+2 (tau = 1/3 and 2/3) from real frames k and k+3 of the 4-frame real clips, without engine data. Models whose training failed are left out, and a model that fails on one suite is logged and skipped there. Expected output: number of metric rows.
 
 # %%
 ROWS = []
@@ -994,21 +996,56 @@ def quad_batch(clip, extrap, dev):
     }
 
 
-def evaluate(suite, b, extra=None, models=None, ui_engine=False):
+def mfg_batch(clip, second, dev):
+    """3x multi-frame generation from real frames 0 and 3: target frame 1 (tau 1/3) or 2 (tau 2/3), no
+    engine data."""
+    fr = torch.from_numpy(clip["rgb"]).to(dev).permute(0, 3, 1, 2).float()[None] / 255.0
+    b = quad_batch(clip, False, dev)
+    tgt = fr[:, 2] if second else fr[:, 1]
+    b.update(
+        i1=fr[:, 3],
+        target=tgt,
+        tau=torch.full_like(b["tau"], 2 / 3 if second else 1 / 3),
+    )
+    b.update(mv1=torch.zeros_like(b["mv1"]), mv_avail=torch.zeros_like(b["mv_avail"]))
+    if RAFT is not None:  # occlusion mask of the target, used by the metrics only
+        b["flow_t1"], b["valid_t1"] = M.raft_mv_and_valid(RAFT, tgt, fr[:, 3])
+    return b
+
+
+def evaluate(
+    suite, b, extra=None, models=None, ui_engine=False, inputs=("engine", "plain")
+):
+    for mode in inputs:
+        bm = b if mode == "engine" else E.without_engine(b)
+        evaluate_inputs(
+            suite,
+            bm,
+            {"inputs": mode, **(extra or {})},
+            models,
+            ui_engine and mode == "engine",
+        )
+
+
+def evaluate_inputs(suite, b, extra, models, ui_engine):
     gate = (
         E.cut_score(b["i0"], b["i1"], b["mv1"] * b["mv_avail"].view(-1, 1, 1, 1))
         > CUT_THR
     ).view(-1, 1, 1, 1)
     outs = dict(E.fg_baselines(b))
+    if b["mv_avail"].max() <= 0:  # reprojection needs motion vectors
+        outs.pop("mv_reprojection")
+    if RIFE_REF is not None:
+        try:
+            outs["rife_4.26"] = torch.where(gate, b["i1"], E.run_rife(RIFE_REF, b))
+        except Exception as exc:
+            log(f"evaluation {suite} / rife_4.26 skipped: {exc}")
+            torch.cuda.empty_cache()
     for key in models or MODELS:
         if key not in MODELS:
             continue
         net = MODELS[key]
-        f = dict(b)
-        if key == "abl_no_motion_prior":
-            f["mv_avail"], f["cam_avail"] = torch.zeros_like(
-                f["mv_avail"]
-            ), torch.zeros_like(f["cam_avail"])
+        f = E.without_engine(b) if key == "abl_no_motion_prior" else dict(b)
         try:  # one failing model (for example out of memory on a large clip) must not end the evaluation
             out, _ = E.run_fg(net, f)
             outs[key] = torch.where(gate, b["i1"], out)
@@ -1020,7 +1057,7 @@ def evaluate(suite, b, extra=None, models=None, ui_engine=False):
             torch.cuda.empty_cache()
     for mname, out in outs.items():
         for r in E.fg_metrics(out, b, LPIPS):
-            ROWS.append({"suite": suite, "method": mname, **(extra or {}), **r})
+            ROWS.append({"suite": suite, "method": mname, **extra, **r})
     return outs
 
 
@@ -1083,6 +1120,7 @@ with RUN.stage("evaluation"):
             "synthetic-reversal",
             rev,
             {"mode": "extrap", "motion": "reversal", "camera_prior": True},
+            inputs=("engine",),
         )
         rev_nc = dict(rev)
         rev_nc["cam_avail"] = torch.zeros(n, device=DEVICES[0])
@@ -1090,6 +1128,7 @@ with RUN.stage("evaluation"):
             "synthetic-reversal",
             rev_nc,
             {"mode": "extrap", "motion": "reversal", "camera_prior": False},
+            inputs=("engine",),
         )
     for suite, quads in REAL.items():
         for extrap in ((False,) if suite == "vimeo_triplet" else (False, True)):
@@ -1105,6 +1144,15 @@ with RUN.stage("evaluation"):
                         "motion": "real",
                     },
                 )
+        if suite != "vimeo_triplet":
+            for cid, clip in quads:
+                for second in (False, True):
+                    evaluate(
+                        suite,
+                        mfg_batch(clip, second, DEVICES[0]),
+                        {"mode": "mfg3x", "clip": cid, "motion": "real"},
+                        inputs=("plain",),
+                    )
         log(f"{suite} done")
 RES = pd.DataFrame(ROWS)
 for col in [
@@ -1126,27 +1174,30 @@ print(len(RES), "metric rows")
 # %% [markdown]
 # ## 21. Results by suite, mode and method
 #
-# Mean metrics (PSNR, SSIM, LPIPS, interpolation error, PSNR in occluded regions) per suite, mode and method. Expected output: the results table and a chart of PSNR by method for interpolation and extrapolation on real suites.
+# Mean metrics (PSNR, SSIM, LPIPS, interpolation error, PSNR in occluded regions) per suite, mode, input mode and method. Expected output: the results table and a chart of PSNR by method on real suites for interpolation, extrapolation and 3x multi-frame generation, with and without engine data.
 
 # %%
 AGG = (
-    RES.groupby(["suite", "mode", "method"])
+    RES.groupby(["suite", "mode", "inputs", "method"])
     .mean(numeric_only=True)
     .drop(columns=["speed_class"], errors="ignore")
 )
 RUN.save_csv(AGG.round(4), "test_results.csv")
 print(AGG[["psnr", "ssim", "lpips", "ie", "psnr_occluded"]].round(3).to_string())
-real = RES[RES["suite"].isin(list(REAL))]
+real = RES[RES["suite"].isin(list(REAL)) & ~RES["method"].str.startswith("abl_")]
 if len(real):
-    fig, axes = plt.subplots(1, 2, figsize=(16, 4.2))
-    for ax, mode in zip(axes, ("interp", "extrap")):
-        sub = real[real["mode"] == mode]
+    panels = [
+        (m, i) for m in ("interp", "extrap", "mfg3x") for i in ("plain", "engine")
+    ]
+    fig, axes = plt.subplots(2, 3, figsize=(24, 8.4))
+    for ax, (mode, inp) in zip(axes.T.flat, panels):
+        sub = real[(real["mode"] == mode) & (real["inputs"] == inp)]
         if len(sub):
             sub.groupby(["suite", "method"])["psnr"].mean().unstack().plot.bar(
                 ax=ax, rot=0
             )
-            ax.set_title(f"real suites, {mode}: PSNR (dB)")
             ax.legend(fontsize=6)
+        ax.set_title(f"real suites, {mode}, {inp}: PSNR (dB)")
     RUN.show(fig, "real_results")
 
 # %% [markdown]
@@ -1160,7 +1211,7 @@ if len(real):
 # Expected output: four charts and the UI table.
 
 # %%
-syn = RES[RES["suite"] == "synthetic"]
+syn = RES[(RES["suite"] == "synthetic") & (RES["inputs"] == "engine")]
 if len(syn):
     print(
         "measured motion between real frames per class (px):",
@@ -1179,20 +1230,24 @@ if len(syn):
         for col in [
             c
             for c in t.columns
-            if c in ("student", "igpu", "mv_reprojection", "repeat")
+            if c in ("student", "high", "rife_4.26", "mv_reprojection", "repeat")
         ]:
             axes[0].plot(t.index, t[col], ls, marker="o", label=f"{col} ({mode})")
     axes[0].set_title("PSNR by motion class")
     axes[0].legend(fontsize=6)
 ui = RES[RES["suite"] == "synthetic-ui"]
 if len(ui):
-    UI = ui.groupby(["mode", "method"])[["psnr", "psnr_ui", "ui_ghost_rate"]].mean()
+    UI = ui.groupby(["mode", "inputs", "method"])[
+        ["psnr", "psnr_ui", "ui_ghost_rate"]
+    ].mean()
     RUN.save_csv(UI.round(4), "ui_results.csv")
     print(UI.round(3).to_string())
-    UI["ui_ghost_rate"].unstack(0).plot.bar(ax=axes[1], rot=45)
+    UI.xs("engine", level="inputs")["ui_ghost_rate"].unstack(0).plot.bar(
+        ax=axes[1], rot=45
+    )
     axes[1].set_title("UI ghosting rate (lower is better)")
 for suite in ("synthetic-menu", "synthetic-cut"):
-    d = RES[RES["suite"] == suite]
+    d = RES[(RES["suite"] == suite) & (RES["inputs"] == "engine")]
     if len(d):
         d.groupby("method")["psnr"].mean().plot(ax=axes[2], marker="o", label=suite)
 axes[2].legend(fontsize=7)
@@ -1209,7 +1264,7 @@ RUN.show(fig, "special_cases")
 # %% [markdown]
 # ## 23. Temporal consistency of the displayed sequence
 #
-# Generated frames are shown between real ones, so motion must stay smooth across real -> generated -> real. tOF compares RAFT flow along the displayed sequence (I0 -> generated, generated -> I1) with the same flow along the true sequence (I0 -> true middle, true middle -> I1). Interpolation only (extrapolated frames are followed by the next real frame, which the test clips do not always contain). Expected output: tOF per suite and method; per-clip values go to `temporal_consistency_per_clip.csv`, because a suite mean can be set by a few clips with large motion.
+# Generated frames are shown between real ones, so motion must stay smooth across real -> generated -> real. tOF compares RAFT flow along the displayed sequence (I0 -> generated, generated -> I1) with the same flow along the true sequence (I0 -> true middle, true middle -> I1). Interpolation only (extrapolated frames are followed by the next real frame, which the test clips do not always contain). The networks run without engine data (the ordinary-video case); motion-vector reprojection uses the RAFT motion of I1. Expected output: tOF per suite and method; per-clip values go to `temporal_consistency_per_clip.csv`, because a suite mean can be set by a few clips with large motion.
 
 # %%
 tof_rows = []
@@ -1217,13 +1272,16 @@ if RAFT is not None:
     for suite in ("vimeo_triplet", "tartanair", "vimeo1080p"):
         for cid, clip in REAL.get(suite, [])[: ev["real_clips"]]:
             b = quad_batch(clip, False, DEVICES[0])
+            base = E.fg_baselines(b)
             outs = {
-                "mv_reprojection": E.fg_baselines(b)["mv_reprojection"],
-                "average": E.fg_baselines(b)["average"],
+                "mv_reprojection": base["mv_reprojection"],
+                "average": base["average"],
             }
-            for key in ("student", "igpu", "mid"):
-                if key in MODELS:
-                    outs[key] = E.run_fg(MODELS[key], b)[0]
+            if RIFE_REF is not None:
+                outs["rife_4.26"] = E.run_rife(RIFE_REF, b)
+            for key in ("student", "igpu", "mid", "high"):
+                if key in MODELS:  # without engine data: the ordinary-video case
+                    outs[key] = E.run_fg(MODELS[key], E.without_engine(b))[0]
             for mname, out in outs.items():
                 t1 = (
                     (
@@ -1261,7 +1319,7 @@ if len(TOF):
 # %% [markdown]
 # ## 24. Visual comparisons
 #
-# For a UI sample and a fast-motion extrapolation sample: target, baselines and student output, the predicted UI mask, blend weight and flow. Every image panel is also saved as a full-size PNG in `predictions/`. Expected output: two figures.
+# For a UI sample and a fast-motion extrapolation sample: target, baselines, RIFE 4.26 unchanged, the student with and without engine data, the predicted UI mask, blend weight and flow. Every image panel is also saved as a full-size PNG in `predictions/`. Expected output: two figures.
 
 
 # %%
@@ -1270,8 +1328,13 @@ import PIL.Image as PImage
 
 def visual(b, title, fname):
     outs = dict(E.fg_baselines(b))
+    if RIFE_REF is not None:
+        outs["rife_4.26"] = E.run_rife(RIFE_REF, b)
     out, aux = E.run_fg(MODELS["student"], b)
     outs["student"] = out
+    outs["student, no engine data"] = E.run_fg(MODELS["student"], E.without_engine(b))[
+        0
+    ]
     if "hudless_i0" in b:
         outs["student+ui_layer"] = E.run_fg(MODELS["student"], b, hudless=True)[0]
     panels = [("target", b["target"])] + list(outs.items())
@@ -1281,7 +1344,8 @@ def visual(b, title, fname):
         ax.imshow(rgb)
         ax.set_title(k, fontsize=8)
         PImage.fromarray((rgb * 255).round().astype(np.uint8)).save(
-            RUN.dirs["predictions"] / f"{fname}_{k.replace('+', '_')}.png"
+            RUN.dirs["predictions"]
+            / f"{fname}_{k.replace('+', '_').replace(', ', '_').replace(' ', '_')}.png"
         )
     axes[len(panels)].imshow(
         aux["ui"][0, 0].float().cpu().numpy(), cmap="gray", vmin=0, vmax=1
@@ -1321,12 +1385,12 @@ if TEST_STILLS is not None and "student" in MODELS:
 # %%
 abl = RES[RES["method"].str.startswith("abl_")]
 if len(abl):
-    ABL = abl.groupby(["suite", "mode", "method"])[
+    ABL = abl.groupby(["suite", "mode", "inputs", "method"])[
         ["psnr", "lpips", "psnr_ui", "ui_ghost_rate", "psnr_occluded"]
     ].mean()
     RUN.save_csv(ABL.round(4), "ablations.csv")
     print(ABL.round(3).to_string())
-    piv = abl.groupby(["method", "mode"])["psnr"].mean().unstack()
+    piv = abl.groupby(["method", "mode", "inputs"])["psnr"].mean().unstack([1, 2])
     if "abl_reference" in piv.index:
         fig, ax = plt.subplots(figsize=(10, 3.8))
         (piv - piv.loc["abl_reference"]).drop(
@@ -1351,7 +1415,7 @@ def time_fg(net, hw, iters=100):
     dev = DEVICES[0]
     f = {
         k: (v.half() if v.dim() == 4 else v)
-        for k, v in fg_inputs(1, hw[0], hw[1], dev).items()
+        for k, v in NM.fg_inputs(1, hw[0], hw[1], dev).items()
     }
     with torch.autocast("cuda", dtype=torch.float16):
         for _ in range(10):
@@ -1371,7 +1435,7 @@ def time_fg(net, hw, iters=100):
 
 
 lat_rows = []
-for key in ("igpu", "student", "mid"):
+for key in ("igpu", "student", "mid", "high"):
     if key not in MODELS:
         continue
     for hw in ((1080, 1920), (1440, 2560)):
@@ -1437,7 +1501,7 @@ for key in ("student", "igpu"):
         continue
     net = copy.deepcopy(MODELS[key]).float().cpu().eval()
     wrap = NM.FGExport(net)
-    f = fg_inputs(1, 64, 96)
+    f = NM.fg_inputs(1, 128, 128)
     args = (
         f["i0"],
         f["i1"],
@@ -1445,10 +1509,9 @@ for key in ("student", "igpu"):
         f["depth1"],
         f["cam_prior"],
         f["tau"],
-        f["extrap"],
         torch.ones(1, 3),
     )
-    names = ["i0", "i1", "mv1", "depth1", "cam_prior", "tau", "extrap", "avail"]
+    names = ["i0", "i1", "mv1", "depth1", "cam_prior", "tau", "avail"]
     path = RUN.dirs["weights"] / f"fg_{key}_fused.onnx"
     row = {"model": key, "exported": False, "ort_max_abs": None}
     try:
@@ -1469,13 +1532,13 @@ RUN.save_json(onnx_rows, "onnx_export.json")
 # %% [markdown]
 # ## 28. Summary
 #
-# Headline numbers for the main student against motion-vector reprojection on real suites, UI handling, cut and menu correctness, latency, the pacing model at a 30 fps base and failed runs (normally none). Expected output: summary table and stage times.
+# Headline numbers for the students and the `high` tier against RIFE 4.26 unchanged (without engine data) and motion-vector reprojection (with engine data) on every suite and mode, UI handling, cut and menu correctness, latency, the pacing model at a 30 fps base and failed runs (normally none). Expected output: summary table and stage times.
 
 
 # %%
-def agg(suite, mode, method, col):
+def agg(suite, mode, method, col, inputs="plain"):
     try:
-        return round(float(AGG.loc[(suite, mode, method), col]), 4)
+        return round(float(AGG.loc[(suite, mode, inputs, method), col]), 4)
     except KeyError:
         return None
 
@@ -1494,13 +1557,19 @@ for suite in (
     "vimeo1080p",
     "synthetic",
 ):
-    # triplets have no fourth frame, so no extrapolation target
-    for mode in ("interp",) if suite == "vimeo_triplet" else ("interp", "extrap"):
-        for m in ("mv_reprojection", "student", "igpu"):
-            summary[f"{suite}/{mode}/{m}/psnr"] = agg(suite, mode, m, "psnr")
-for m in ("mv_reprojection", "student", "student+ui_layer"):
+    # triplets have no fourth frame, so no extrapolation or multi-frame target
+    modes = ("interp",) if suite == "vimeo_triplet" else ("interp", "extrap", "mfg3x")
+    for mode in modes if suite != "synthetic" else ("interp", "extrap"):
+        for inp in ("plain",) if mode == "mfg3x" else ("plain", "engine"):
+            for m in ("rife_4.26", "student", "igpu", "high") + (
+                ("mv_reprojection",) if inp == "engine" else ()
+            ):
+                summary[f"{suite}/{mode}/{inp}/{m}/psnr"] = agg(
+                    suite, mode, m, "psnr", inp
+                )
+for m in ("mv_reprojection", "rife_4.26", "student", "student+ui_layer"):
     summary[f"ui/interp/{m}/ghost_rate"] = agg(
-        "synthetic-ui", "interp", m, "ui_ghost_rate"
+        "synthetic-ui", "interp", m, "ui_ghost_rate", "engine"
     )
 for _, r in LAT.iterrows():
     summary[f"latency_ms/{r['model']}/{r['output']}"] = round(r["t4_mean_ms"], 2)

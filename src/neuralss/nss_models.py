@@ -1,13 +1,23 @@
 """Models: NeuralSS temporal super-resolution (TSR) and low-latency frame generation (FG).
 
-Both are built from RepConv blocks: during training each block is a sum of linear branches (3x3, 1x1, identity
-and fixed Sobel-x, Sobel-y, Laplacian filters with a learnable 1x1 projection, after ECBSR). The branches are
-folded into one 3x3 kernel on every forward pass ("online re-parameterisation"), so training costs one
-convolution per block and the deployed network is a plain chain of 3x3 convolutions, which maps to any GPU API
+Motion comes from an intermediate-flow network (IFNet) with the design of RIFE / Practical-RIFE 4.26 (MIT): a
+coarse-to-fine chain of flow blocks that estimates motion from the colour frames alone, so both tasks work on
+ordinary video and on games that expose no engine data. Engine motion vectors, depth and the camera are optional
+extra input channels whose weights start at zero, so a model initialised from the pre-trained RIFE weights starts
+as exactly RIFE and learns during fine-tuning how much to trust each engine signal.
+
+The TSR reconstruction trunk is built from RepConv blocks: during training each block is a sum of linear branches
+(3x3, 1x1, identity and fixed Sobel-x, Sobel-y, Laplacian filters with a learnable 1x1 projection, after ECBSR).
+The branches are folded into one 3x3 kernel on every forward pass ("online re-parameterisation"), so training
+costs one convolution per block and the deployed network is a plain chain of 3x3 convolutions. Every operator
+(convolution, transposed convolution, pixel (un)shuffle, bilinear resize, grid sampling) maps to any GPU API
 (DirectML, Vulkan / compute shaders, Metal, ONNX Runtime).
 """
 
 import copy
+import hashlib
+import io
+import zipfile
 
 import torch
 import torch.nn as nn
@@ -84,21 +94,20 @@ def count_params(model):
 
 
 def backward_warp(img, flow):
-    """Sample img at (x + flow) for every output pixel; flow (N, 2, H, W) in pixels of img."""
+    """Sample img at (x + flow) for every output pixel; flow (N, 2, H, W) in pixels of img. Written exactly
+    as RIFE's warp (align_corners=True grid), so pre-trained RIFE weights reproduce RIFE's output bit for bit.
+    """
     n, _, h, w = img.shape
-    ys = torch.arange(h, device=img.device, dtype=torch.float32)
-    xs = torch.arange(w, device=img.device, dtype=torch.float32)
-    gy, gx = torch.meshgrid(ys, xs, indexing="ij")
-    fx, fy = flow[:, 0].float(), flow[:, 1].float()
+    # arange with float scales stays float32 in traced ONNX graphs (linspace is exported in float64)
+    sx, sy = 2.0 / (w - 1.0), 2.0 / (h - 1.0)
+    f32 = dict(device=img.device, dtype=torch.float32)
+    gx = (torch.arange(w, **f32) * sx - 1.0).view(1, w)
+    gy = (torch.arange(h, **f32) * sy - 1.0).view(h, 1)
     grid = torch.stack(
-        [
-            (gx[None] + fx + 0.5) * (2.0 / w) - 1.0,
-            (gy[None] + fy + 0.5) * (2.0 / h) - 1.0,
-        ],
-        -1,
+        [gx[None] + flow[:, 0].float() * sx, gy[None] + flow[:, 1].float() * sy], -1
     )
     return F.grid_sample(
-        img.float(), grid, mode="bilinear", padding_mode="border", align_corners=False
+        img.float(), grid, mode="bilinear", padding_mode="border", align_corners=True
     ).to(img.dtype)
 
 
@@ -163,16 +172,280 @@ class Trunk(nn.Module):
         return self.b(x)
 
 
+def count_macs(model, run):
+    """Multiply-accumulates of every Conv2d and ConvTranspose2d executed by run(model), per batch sample,
+    counted with forward hooks."""
+    total = [0]
+
+    def hook(mod, inp, out):
+        k = mod.kernel_size[0] * mod.kernel_size[1] // mod.groups
+        if isinstance(
+            mod, nn.ConvTranspose2d
+        ):  # every input pixel scatters a k x k x cout kernel
+            total[0] += inp[0][0].numel() * mod.out_channels * k
+        else:
+            total[0] += out[0].numel() * mod.in_channels * k
+
+    hooks = [
+        m.register_forward_hook(hook)
+        for m in model.modules()
+        if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d))
+    ]
+    try:
+        with torch.no_grad():
+            run(model)
+    finally:
+        for hk in hooks:
+            hk.remove()
+    return total[0]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Motion: intermediate-flow network (IFNet), the design of RIFE / Practical-RIFE 4.26 (MIT, Megvii / hzwer)
+# ---------------------------------------------------------------------------------------------------------------
+# Pre-trained RIFE 4.26 weights from the author's Hugging Face repository; both hashes were checked on
+# 3 November 2026, and the checkpoint is a plain state dict, so it loads with torch.load(weights_only=True).
+RIFE_URL = "https://huggingface.co/hzwer/RIFE/resolve/main/RIFEv4.26_0921.zip"
+RIFE_ZIP_SHA256 = "1fa9b9cda3d9b8c3e301359e2595960902f97bf926c08598b0e9957a3f3f760e"
+RIFE_PKL_SHA256 = "45c7f74156704769dc9f85cfcaf8552e1e926f9399dcfa3a553dee88fac6f53f"
+RIFE_WIDTHS = (192, 128, 96, 64, 32)
+RIFE_SCALES = (16, 8, 4, 2, 1)
+
+
+def _conv_lrelu(cin, cout, stride=1):
+    return nn.Sequential(nn.Conv2d(cin, cout, 3, stride, 1), nn.LeakyReLU(0.2, True))
+
+
+class IFHead(nn.Module):
+    """Per-frame 4-channel feature encoder (RIFE's Head). It depends on one frame only, so in a running
+    pipeline it is computed once per real frame and reused by every generated frame (the per-frame half of
+    DLSS 4's split frame-generation network)."""
+
+    def __init__(self):
+        super().__init__()
+        self.cnn0 = nn.Conv2d(3, 16, 3, 2, 1)
+        self.cnn1 = nn.Conv2d(16, 16, 3, 1, 1)
+        self.cnn2 = nn.Conv2d(16, 16, 3, 1, 1)
+        self.cnn3 = nn.ConvTranspose2d(16, 4, 4, 2, 1)
+        self.relu = nn.LeakyReLU(0.2, True)
+
+    def forward(self, x):
+        x = self.relu(self.cnn0(x))
+        x = self.relu(self.cnn1(x))
+        x = self.relu(self.cnn2(x))
+        return self.cnn3(x)
+
+
+class ResConv(nn.Module):
+    def __init__(self, c):
+        super().__init__()
+        self.conv = nn.Conv2d(c, c, 3, 1, 1)
+        self.beta = nn.Parameter(torch.ones((1, c, 1, 1)))
+        self.relu = nn.LeakyReLU(0.2, True)
+
+    def forward(self, x):
+        return self.relu(self.conv(x) * self.beta + x)
+
+
+class IFBlock(nn.Module):
+    """One flow level: at 1/scale of the input, two stride-2 convolutions, n_res residual convolutions and a
+    transposed convolution + pixel shuffle back to 1/scale; outputs a flow update (target -> frame 0, target ->
+    frame 1), a blend logit and 8 feature channels. n_hint extra input channels (engine data) are appended after
+    the RIFE inputs, with zero weights at initialisation; the first n_hint_flow of them are flows in pixels and
+    are rescaled with the resolution like the flow itself."""
+
+    def __init__(self, cin, c, n_res, n_hint=0, n_hint_flow=0):
+        super().__init__()
+        self.cin, self.n_hint, self.n_hint_flow = cin, n_hint, n_hint_flow
+        self.conv0 = nn.Sequential(
+            _conv_lrelu(cin + n_hint, c // 2, 2), _conv_lrelu(c // 2, c, 2)
+        )
+        self.convblock = nn.Sequential(*[ResConv(c) for _ in range(n_res)])
+        self.lastconv = nn.Sequential(
+            nn.ConvTranspose2d(c, 4 * 13, 4, 2, 1), nn.PixelShuffle(2)
+        )
+        if n_hint:
+            with torch.no_grad():
+                self.conv0[0][0].weight[:, cin:].zero_()
+
+    def forward(self, x, flow=None, hint=None, scale=1.0):
+        down = lambda t: (  # noqa: E731
+            t
+            if scale == 1
+            else F.interpolate(
+                t, scale_factor=1.0 / scale, mode="bilinear", align_corners=False
+            )
+        )
+        x = down(x)
+        if flow is not None:
+            x = torch.cat((x, down(flow) / scale), 1)
+        if hint is not None:
+            h = down(hint)
+            if self.n_hint_flow:
+                h = torch.cat(
+                    (h[:, : self.n_hint_flow] / scale, h[:, self.n_hint_flow :]), 1
+                )
+            x = torch.cat((x, h.to(x.dtype)), 1)
+        tmp = self.lastconv(self.convblock(self.conv0(x)))
+        if scale != 1:
+            tmp = F.interpolate(
+                tmp, scale_factor=scale, mode="bilinear", align_corners=False
+            )
+        return tmp[:, :4] * scale, tmp[:, 4:5], tmp[:, 5:]
+
+
+class IFNet(nn.Module):
+    """Coarse-to-fine intermediate-flow estimator between frames img0 and img1 for a target time t (a
+    per-sample scalar; t = 0.5 interpolates, t = 1.5 extrapolates, t = 1 with img0 = previous frame gives the
+    motion vector of the current frame). Block k runs at 1/scales[k] of the input. With widths RIFE_WIDTHS and
+    n_res 8 the parameter names and shapes are those of RIFE 4.26's IFNet, so its weights load directly;
+    narrower variants inherit leading channel slices (load_ifnet_weights). Returns the flows after every block
+    (each (N, 4, H, W): target -> img0, target -> img1, in pixels), the final blend logit and features, and the
+    two warped frames."""
+
+    def __init__(self, widths=RIFE_WIDTHS, n_res=8, n_hint=0, n_hint_flow=0):
+        super().__init__()
+        self.encode = IFHead()
+        self.n_blocks = len(widths)
+        for k, c in enumerate(widths):
+            cin = 7 + 8 if k == 0 else 8 + 4 + 8 + 8
+            setattr(self, f"block{k}", IFBlock(cin, c, n_res, n_hint, n_hint_flow))
+
+    def blocks(self):
+        return [getattr(self, f"block{k}") for k in range(self.n_blocks)]
+
+    def forward(self, img0, img1, timestep, scales, hint=None, feats=None):
+        n, _, h, w = img0.shape
+        t = timestep.view(n, 1, 1, 1).to(img0.dtype).expand(n, 1, h, w)
+        f0, f1 = feats if feats is not None else (self.encode(img0), self.encode(img1))
+        flow = mask = feat = None
+        w0, w1, flows = img0, img1, []
+        for blk, scale in zip(self.blocks(), scales):
+            if flow is None:
+                flow, mask, feat = blk(
+                    torch.cat((img0, img1, f0, f1, t), 1), None, hint, scale
+                )
+            else:
+                wf0 = backward_warp(f0, flow[:, :2])
+                wf1 = backward_warp(f1, flow[:, 2:4])
+                fd, mask, feat = blk(
+                    torch.cat((w0, w1, wf0, wf1, t, mask, feat), 1), flow, hint, scale
+                )
+                flow = flow + fd
+            flows.append(flow)
+            w0 = backward_warp(img0, flow[:, :2])
+            w1 = backward_warp(img1, flow[:, 2:4])
+        return {"flows": flows, "mask": mask, "feat": feat, "w0": w0, "w1": w1}
+
+
+def load_ifnet_weights(ifnet, state):
+    """Copy pre-trained IFNet weights (a RIFE state dict, with or without the DDP 'module.' prefix) into
+    ifnet. Matching names are copied whole; where ifnet is narrower (fewer channels or residual blocks) the
+    leading slices are copied, a weight-inheritance initialisation; extra engine-hint input channels keep their
+    zero weights. Returns counts of exact, sliced and missing tensors."""
+    src = {
+        (k[7:] if k.startswith("module.") else k): v
+        for k, v in state.items()
+        if torch.is_tensor(v)
+    }
+    report = {"exact": 0, "sliced": 0, "missing": 0}
+    with torch.no_grad():
+        for k, p in ifnet.state_dict().items():  # shares storage with the parameters
+            s = src.get(k)
+            if s is None or s.dim() != p.dim():
+                report["missing"] += 1
+                continue
+            sl = tuple(slice(0, min(a, b)) for a, b in zip(p.shape, s.shape))
+            p[sl].copy_(s[sl].to(p.dtype))
+            report["exact" if p.shape == s.shape else "sliced"] += 1
+    return report
+
+
+def fetch_rife_weights(dest_dir, log=print):
+    """Download RIFE 4.26 (once) into dest_dir, check both SHA-256 hashes and return its state dict, loaded
+    with weights_only=True so the checkpoint cannot run code. Returns None (logged) when it is unreachable.
+    """
+    from pathlib import Path
+    from urllib.request import urlopen
+
+    path = Path(dest_dir) / "RIFEv4.26_0921.zip"
+    try:
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with urlopen(RIFE_URL, timeout=120) as r:
+                path.write_bytes(r.read())
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != RIFE_ZIP_SHA256:
+            raise ValueError("RIFE zip hash mismatch")
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            name = next(
+                m
+                for m in z.namelist()
+                if m.endswith("flownet.pkl") and "__MACOSX" not in m
+            )
+            pkl = z.read(name)
+        if hashlib.sha256(pkl).hexdigest() != RIFE_PKL_SHA256:
+            raise ValueError("RIFE flownet.pkl hash mismatch")
+        return torch.load(io.BytesIO(pkl), map_location="cpu", weights_only=True)
+    except Exception as exc:
+        log(
+            f"RIFE 4.26 weights unavailable ({exc!r}): models start from random weights"
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Temporal super-resolution
 # ---------------------------------------------------------------------------------------------------------------
+# motion: the built-in IFNet that estimates low-resolution motion when the input has no motion vectors
+# (ordinary video, colour-only captures); hr_refine: width of a two-layer convolution at output resolution
+# that removes the pixel-shuffle pattern of the low-resolution head (0 = off).
 TSR_TIERS = {
-    "igpu": {"width": 16, "blocks": 3, "unet_blocks": 0, "hidden": 8},
-    "low": {"width": 24, "blocks": 4, "unet_blocks": 2, "hidden": 8},
-    "mid": {"width": 32, "blocks": 4, "unet_blocks": 3, "hidden": 16},
-    "high": {"width": 48, "blocks": 6, "unet_blocks": 4, "hidden": 16},
-    "teacher": {"width": 64, "blocks": 8, "unet_blocks": 6, "hidden": 32},
+    "igpu": {
+        "width": 16,
+        "blocks": 3,
+        "unet_blocks": 0,
+        "hidden": 8,
+        "motion": ((32, 24, 16), 2),
+        "hr_refine": 0,
+    },
+    "low": {
+        "width": 24,
+        "blocks": 4,
+        "unet_blocks": 2,
+        "hidden": 8,
+        "motion": ((48, 32, 24), 3),
+        "hr_refine": 8,
+    },
+    "mid": {
+        "width": 32,
+        "blocks": 4,
+        "unet_blocks": 3,
+        "hidden": 16,
+        "motion": ((64, 48, 32), 4),
+        "hr_refine": 8,
+    },
+    "high": {
+        "width": 48,
+        "blocks": 6,
+        "unet_blocks": 4,
+        "hidden": 16,
+        "motion": ((96, 64, 48), 4),
+        "hr_refine": 12,
+    },
+    "teacher": {
+        "width": 64,
+        "blocks": 8,
+        "unet_blocks": 6,
+        "hidden": 32,
+        "motion": ((128, 96, 64), 6),
+        "hr_refine": 16,
+    },
 }
+TSR_MOTION_SCALES = (4, 2, 1)
+EST_MV_QUALITY = (
+    0.25  # mv_quality channel value when the built-in estimator supplies the motion
+)
 
 
 def normals_from_depth(d):
@@ -187,39 +460,87 @@ def normals_from_depth(d):
 class TSRNet(nn.Module):
     """Recurrent temporal super-resolution at low resolution.
 
-    Per frame inputs (low resolution h x w): jittered colour, depth (+ normals derived from it), motion vectors
-    (current -> previous, low-res pixels), a depth-based disocclusion cue, reactive mask, exposure, jitter offset
-    and availability flags; plus the previous output warped to the current frame at full resolution and folded to
-    low resolution (space-to-depth), and a warped recurrent hidden state.
+    Per frame inputs (low resolution h x w): colour (jittered render samples, or a downscaled video frame),
+    depth (+ normals derived from it), motion vectors (current -> previous, low-res pixels), a depth-based
+    disocclusion cue, reactive mask, exposure, jitter offset, availability flags and the input kind (1 =
+    jittered render, 0 = video); plus the previous output warped to the current frame at full resolution and
+    folded to low resolution (space-to-depth), and a warped recurrent hidden state.
+
+    Motion: samples with mv_quality > 0 use the given motion vectors (exact engine vectors, or estimated ones);
+    the others use the built-in IFNet estimate from the previous and current colour frames, so the network runs
+    on ordinary video with no side information.
 
     Output: full-resolution colour = a * warped_history + (1 - a) * jitter-aware upsample + residual, where the
-    per-pixel history weight a and the residual are predicted at low resolution and unfolded (pixel shuffle).
+    per-pixel history weight a and the residual are predicted at low resolution and unfolded (pixel shuffle),
+    followed by an optional small refinement at output resolution.
     """
 
-    def __init__(self, scale, width, blocks, unet_blocks, hidden):
+    def __init__(
+        self, scale, width, blocks, unet_blocks, hidden, motion=None, hr_refine=0
+    ):
         super().__init__()
         self.scale, self.hidden = scale, hidden
         s2 = scale * scale
-        cin = 3 + 1 + 3 + 2 + 1 + 1 + 1 + 2 + 2 + 3 * s2 + 3 + hidden
+        cin = 3 + 1 + 3 + 2 + 1 + 1 + 1 + 2 + 2 + 1 + 3 * s2 + 3 + hidden
         self.trunk = Trunk(cin, width, blocks, unet_blocks)
         self.out = nn.Conv2d(width, 4 * s2, 3, padding=1)
         self.to_hidden = nn.Conv2d(width, hidden, 3, padding=1)
         self.shuffle = nn.PixelShuffle(scale)
         nn.init.zeros_(self.out.weight)
         nn.init.zeros_(self.out.bias)
+        self.motion = None
+        if (
+            motion is not None
+        ):  # hints: jitter difference to the previous frame (2), input kind (1)
+            widths, n_res = motion
+            self.motion = IFNet(widths, n_res, n_hint=3)
+        self.refine = None
+        if hr_refine:
+            self.refine = nn.Sequential(
+                nn.Conv2d(6, hr_refine, 3, padding=1),
+                nn.PReLU(hr_refine),
+                nn.Conv2d(hr_refine, 3, 3, padding=1),
+            )
+            nn.init.zeros_(self.refine[2].weight)
+            nn.init.zeros_(self.refine[2].bias)
 
     def base_upsample(self, color, jitter):
         """Bilinear reconstruction at output pixel centres that undoes the sub-pixel jitter of the samples."""
         return jitter_upsample(color, jitter, self.scale)
 
+    def estimate_motion(self, prev_color, color, jitter_delta, kind):
+        """Motion vectors (current -> previous, low-resolution pixels) from two colour frames."""
+        n = color.shape[0]
+        x0, (h0, w0) = pad_to(prev_color, 4 * TSR_MOTION_SCALES[0])
+        x1 = pad_to(color, 4 * TSR_MOTION_SCALES[0])[0]
+        hp, wp = x0.shape[-2:]
+        hint = torch.cat(
+            [
+                jitter_delta.view(n, 2, 1, 1).expand(n, 2, hp, wp),
+                kind.view(n, 1, 1, 1).expand(n, 1, hp, wp),
+            ],
+            1,
+        ).to(x0.dtype)
+        r = self.motion(
+            x0, x1, torch.ones(n, device=color.device), TSR_MOTION_SCALES, hint=hint
+        )
+        return r["flows"][-1][:, :2, :h0, :w0].float()
+
     def forward(self, f, state=None, use_history=True):
         """f: dict with color (N,3,h,w), depth (N,1,h,w), mv (N,2,h,w), reactive (N,1,h,w), exposure (N,),
-        jitter (N,2), has_depth (N,), mv_quality (N,). Returns (output (N,3,H,W), new state).
+        jitter (N,2), has_depth (N,), mv_quality (N,), kind (N,; optional, default 1). Training only:
+        mv_label (N,2,h,w) and mv_force (N,) bool, which warps history of forced samples with the label motion
+        instead of the estimate while the estimator is still poor (teacher forcing). Returns (output (N,3,H,W),
+        new state); the state holds the estimated motion ("mv_est", None without an estimate).
         """
         color, depth, mv, jitter = f["color"], f["depth"], f["mv"], f["jitter"]
         n, _, h, w = color.shape
         s = self.scale
+        kind = f.get("kind")
+        kind = color.new_ones(n) if kind is None else kind
+        quality = f["mv_quality"].float()
         base = self.base_upsample(color, jitter)
+        mv_est = None
         if state is None or not use_history:
             hist, hidden, d_prev, first = (
                 base,
@@ -228,6 +549,23 @@ class TSRNet(nn.Module):
                 True,
             )
         else:
+            # training estimates motion for every sample (all feed the motion loss); inference only when a
+            # sample has no motion vectors
+            if self.motion is not None and (
+                self.training or bool((quality <= 0).any())
+            ):
+                mv_est = self.estimate_motion(
+                    state["color"], color, jitter - state["jitter"], kind
+                )
+                est = (quality <= 0).view(n, 1, 1, 1)
+                used = mv_est.to(mv.dtype)
+                if "mv_force" in f:
+                    force = f["mv_force"].view(n, 1, 1, 1)
+                    used = torch.where(force, f["mv_label"].to(mv.dtype), used)
+                mv = torch.where(est, used, mv)
+                quality = torch.where(
+                    quality <= 0, torch.full_like(quality, EST_MV_QUALITY), quality
+                )
             mv_hr = upsample_flow(mv, s)
             hist = backward_warp(state["out"], mv_hr)
             hidden = backward_warp(state["hidden"], mv)
@@ -245,7 +583,8 @@ class TSRNet(nn.Module):
             f["exposure"].view(n, 1, 1, 1).expand(n, 1, h, w).to(color.dtype),
             jitter.view(n, 2, 1, 1).expand(n, 2, h, w).to(color.dtype),
             has_d.expand(n, 1, h, w),
-            f["mv_quality"].view(n, 1, 1, 1).expand(n, 1, h, w).to(color.dtype),
+            quality.view(n, 1, 1, 1).expand(n, 1, h, w).to(color.dtype),
+            kind.view(n, 1, 1, 1).expand(n, 1, h, w).to(color.dtype),
             F.pixel_unshuffle(hist.to(color.dtype), s) * (0.0 if first else 1.0),
             (hist_lr.to(color.dtype) - color).abs() * (0.0 if first else 1.0),
             hidden.to(color.dtype),
@@ -259,182 +598,219 @@ class TSRNet(nn.Module):
         if first:
             a = torch.zeros_like(a)
         out = a * hist + (1 - a) * base + residual
+        if self.refine is not None:
+            out = out + self.refine(torch.cat([out, base], 1).to(color.dtype)).float()
         return out, {
             "out": out,
             "hidden": new_hidden,
             "depth": depth,
+            "color": color,
+            "jitter": jitter,
             "first": False,
             "alpha": a,
+            "mv_est": mv_est,
         }
 
 
-def build_tsr(tier, scale):
-    return TSRNet(scale, **TSR_TIERS[tier])
+def build_tsr(tier, scale, motion_net=True):
+    spec = dict(TSR_TIERS[tier])
+    if not motion_net:
+        spec["motion"] = None
+    return TSRNet(scale, **spec)
+
+
+def tsr_inputs(n, h, w, dev="cpu"):
+    """Random single-frame TSR inputs without motion vectors (so the built-in motion estimator runs)."""
+    return {
+        "color": torch.rand(n, 3, h, w, device=dev),
+        "depth": torch.rand(n, 1, h, w, device=dev),
+        "mv": torch.zeros(n, 2, h, w, device=dev),
+        "reactive": torch.zeros(n, 1, h, w, device=dev),
+        "exposure": torch.zeros(n, device=dev),
+        "jitter": torch.zeros(n, 2, device=dev),
+        "has_depth": torch.ones(n, device=dev),
+        "mv_quality": torch.zeros(n, device=dev),
+        "kind": torch.ones(n, device=dev),
+    }
 
 
 def tsr_macs_per_lr_pixel(model, sample_hw=(64, 64)):
-    """Multiply-accumulates per low-resolution pixel, counted with forward hooks on a fused copy."""
+    """Multiply-accumulates per low-resolution pixel of one steady-state frame (with history and, when the
+    model has one, the built-in motion estimator), counted with forward hooks on a fused copy.
+    """
     fused = fuse_model(model).float().cpu()
-    total = [0]
-
-    def hook(mod, inp, out):
-        if isinstance(mod, nn.Conv2d):
-            total[0] += (
-                out.numel()
-                // out.shape[0]
-                * mod.in_channels
-                // mod.groups
-                * mod.kernel_size[0]
-                * mod.kernel_size[1]
-            )
-
-    hooks = [
-        m.register_forward_hook(hook)
-        for m in fused.modules()
-        if isinstance(m, nn.Conv2d)
-    ]
     h, w = sample_hw
-    f = {
-        "color": torch.rand(1, 3, h, w),
-        "depth": torch.rand(1, 1, h, w),
-        "mv": torch.zeros(1, 2, h, w),
-        "reactive": torch.zeros(1, 1, h, w),
-        "exposure": torch.zeros(1),
-        "jitter": torch.zeros(1, 2),
-        "has_depth": torch.ones(1),
-        "mv_quality": torch.ones(1),
-    }
+    f = tsr_inputs(1, h, w)
     with torch.no_grad():
-        fused(f, None)
-    for hk in hooks:
-        hk.remove()
-    return total[0] / (h * w)
+        _, state = fused(f, None)
+    macs = count_macs(fused, lambda m: m(f, state))
+    return macs / (h * w)
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # Frame generation
 # ---------------------------------------------------------------------------------------------------------------
+# widths / n_res: the IFNet flow blocks (the high tier is RIFE 4.26's network); refine: width of the half-resolution
+# head that predicts the residual and the UI mask; flow_scale: resolution of the flow estimation relative to the
+# frame (RIFE's scale argument; 0.5 halves every level, about a quarter of the flow cost).
 FG_TIERS = {
-    "igpu": {"width": 16, "levels": 1, "blocks": 3},
-    "low": {"width": 24, "levels": 1, "blocks": 4},
-    "mid": {"width": 32, "levels": 2, "blocks": 4},
-    "high": {"width": 48, "levels": 2, "blocks": 5},
-    "teacher": {"width": 64, "levels": 2, "blocks": 6},
+    "igpu": {
+        "widths": (64, 48, 32, 24, 16),
+        "n_res": 3,
+        "refine": 12,
+        "flow_scale": 0.5,
+    },
+    "low": {
+        "widths": (96, 64, 48, 32, 16),
+        "n_res": 4,
+        "refine": 16,
+        "flow_scale": 0.5,
+    },
+    "mid": {
+        "widths": (128, 96, 64, 48, 24),
+        "n_res": 6,
+        "refine": 24,
+        "flow_scale": 1.0,
+    },
+    "high": {"widths": RIFE_WIDTHS, "n_res": 8, "refine": 32, "flow_scale": 1.0},
 }
+FG_TIERS["teacher"] = FG_TIERS[
+    "high"
+]  # the fine-tuned RIFE-width model teaches the smaller tiers
+FG_HINT_FLOW = 6  # tau * M1, (tau - 1) * M1, camera prior (target -> I1)
+FG_HINT = FG_HINT_FLOW + 4  # + mv_avail, depth, depth_avail, cam_avail
+
+
+class FGRefine(nn.Module):
+    """Half-resolution head on the warped frames, blend weight and IFNet features: a colour residual and the
+    UI / static-overlay logit. The last layer starts at zero (UI logit at -4), so a fresh model outputs RIFE's
+    blend."""
+
+    def __init__(self, c):
+        super().__init__()
+        self.down = _conv_lrelu(3 * 4 + 1 + 8, c, 2)
+        self.body = nn.Sequential(ResConv(c), ResConv(c))
+        self.up = nn.ConvTranspose2d(c, 4, 4, 2, 1)
+        nn.init.zeros_(self.up.weight)
+        with torch.no_grad():
+            self.up.bias.copy_(torch.tensor([0.0, 0.0, 0.0, -4.0]))
+
+    def forward(self, x):
+        return self.up(self.body(self.down(x)))
 
 
 class FGNet(nn.Module):
-    """Coarse-to-fine intermediate-flow frame generator for interpolation (tau = 0.5) and extrapolation
-    (tau = 1.5) from real frames I0 and I1.
+    """Frame generator for interpolation (0 < tau < 1, any tau, so 2x to 6x multi-frame generation) and
+    extrapolation (tau > 1, holds no real frame) from real frames I0 (t = 0) and I1 (t = 1).
 
-    Motion priors: the engine motion vector of I1 (I1 -> I0) gives linear-motion flows from the target time,
-    F(tau->0) = tau * M1 and F(tau->1) = (tau - 1) * M1; for extrapolation the camera-only flow of the latest input
-    (target -> I1) is also given. Each level (1/4, then 1/2 resolution) predicts flow corrections, a blend
-    weight, a residual and a UI/static-overlay probability. The output is
+    Motion is estimated by an IFNet from the colour frames alone, so the generator works on ordinary video.
+    Engine data are optional hint channels: the motion vector of I1 (I1 -> I0) as linear-motion priors
+    F(tau->0) = tau * M1 and F(tau->1) = (tau - 1) * M1, the camera-only flow target -> I1 from the latest input
+    (late latching, for extrapolation), depth of I1, and availability flags. The output is
         out = u * I1 + (1 - u) * (m * warp(I0) + (1 - m) * warp(I1) + residual)
-    so text, HUD and menus are taken from the newest real frame instead of being interpolated.
-    The privileged teacher additionally sees the true target frame (training only)."""
+    so HUD, subtitles and menus are taken from the newest real frame instead of being interpolated.
+    """
 
-    def __init__(self, width, levels, blocks, privileged=False):
+    def __init__(self, widths, n_res, refine, flow_scale=1.0):
         super().__init__()
-        self.levels = [4, 2][:levels] if levels > 1 else [4]
-        self.privileged = privileged
-        cin = 3 * 4 + 2 * 3 + 1 + 2 + 3 + (3 if privileged else 0)
-        self.nets = nn.ModuleList()
-        for _ in self.levels:
-            trunk = Trunk(cin + 2, width, blocks, 0)
-            head = nn.Conv2d(width, 2 + 2 + 1 + 1 + 3, 3, padding=1)
-            nn.init.zeros_(head.weight)
-            nn.init.zeros_(head.bias)
-            with torch.no_grad():
-                head.bias[5] = -4.0  # UI probability starts near zero
-            self.nets.append(nn.ModuleDict({"trunk": trunk, "head": head}))
+        self.flow_scale = flow_scale
+        self.scales = RIFE_SCALES[-len(widths) :]
+        self.ifnet = IFNet(widths, n_res, n_hint=FG_HINT, n_hint_flow=FG_HINT_FLOW)
+        self.refine = FGRefine(refine)
 
     @staticmethod
     def priors(f):
         n = f["i0"].shape[0]
         tau = f["tau"].view(n, 1, 1, 1)
         m1 = f["mv1"] * f["mv_avail"].view(n, 1, 1, 1)
-        f0, f1 = tau * m1, (tau - 1.0) * m1
-        cam = f["cam_prior"] * f["cam_avail"].view(n, 1, 1, 1)
-        use_cam = (f["cam_avail"] > 0) & (f["mv_avail"] <= 0)
-        f1 = torch.where(use_cam.view(n, 1, 1, 1), cam, f1)
-        return f0, f1
+        return tau * m1, (tau - 1.0) * m1
+
+    def hints(self, f):
+        n = f["i0"].shape[0]
+        av = lambda k: f[k].view(n, 1, 1, 1).to(f["i0"].dtype)  # noqa: E731
+        p0, p1 = self.priors(f)
+        h, w = f["i0"].shape[-2:]
+        return torch.cat(
+            [
+                p0,
+                p1,
+                f["cam_prior"] * av("cam_avail"),
+                av("mv_avail").expand(n, 1, h, w),
+                f["depth1"] * av("depth_avail"),
+                av("depth_avail").expand(n, 1, h, w),
+                av("cam_avail").expand(n, 1, h, w),
+            ],
+            1,
+        )
 
     def forward(self, f):
         i0, i1 = f["i0"], f["i1"]
-        n, _, H, W = i0.shape
-        i0p, (H0, W0) = pad_to(i0, 8)
-        i1p = pad_to(i1, 8)[0]
-        f0, f1 = (pad_to(x, 8)[0] for x in self.priors(f))
-        cam = pad_to(f["cam_prior"] * f["cam_avail"].view(n, 1, 1, 1), 8)[0]
-        depth = pad_to(f["depth1"] * f["depth_avail"].view(n, 1, 1, 1), 8)[0]
-        gt = pad_to(f["target"], 8)[0] if self.privileged else None
-        Hp, Wp = i0p.shape[-2:]
-        blend = torch.zeros(n, 1, Hp, Wp, device=i0.device)
-        ui = torch.full((n, 1, Hp, Wp), -4.0, device=i0.device)
-        residual = torch.zeros(n, 3, Hp, Wp, device=i0.device)
-        consts = torch.stack(
-            [
-                f["tau"] - 1.0,
-                f["extrap"],
-                f["mv_avail"],
-                f["cam_avail"],
-                f["depth_avail"],
-            ],
-            1,
-        ).view(n, 5, 1, 1)
-        for d, net in zip(self.levels, self.nets):
-            down = lambda x: F.avg_pool2d(x.float(), d)  # noqa: E731
-            w0, w1 = backward_warp(i0p, f0), backward_warp(i1p, f1)
-            x = [
-                down(i0p),
-                down(i1p),
-                down(w0),
-                down(w1),
-                down(f0) / (d * 8),
-                down(f1) / (d * 8),
-                down(cam) / (d * 8),
-                down(depth),
-                consts[:, :2].expand(n, 2, Hp // d, Wp // d),
-                consts[:, 2:].expand(n, 3, Hp // d, Wp // d),
-            ]
-            if gt is not None:
-                x.append(down(gt))
-            x += [F.avg_pool2d(blend, d), F.avg_pool2d(ui, d)]
-            y = net["head"](net["trunk"](torch.cat(x, 1))).float()
-            up = lambda t: F.interpolate(  # noqa: E731
-                t, scale_factor=d, mode="bilinear", align_corners=False
+        s = self.flow_scale
+        mult = int(4 * self.scales[0] / s)
+        i0p, (H0, W0) = pad_to(i0, mult)
+        i1p = pad_to(i1, mult)[0]
+        hint = pad_to(self.hints(f), mult)[0]
+        if s == 1:
+            r = self.ifnet(i0p, i1p, f["tau"], self.scales, hint=hint)
+            flow, mask, feat = r["flows"][-1], r["mask"], r["feat"]
+            w0, w1 = r["w0"], r["w1"]
+        else:  # the whole flow network runs on frames downscaled by s; flows are upsampled for the warp
+            down = lambda t: F.interpolate(  # noqa: E731
+                t, scale_factor=s, mode="bilinear", align_corners=False
             )
-            f0 = f0 + up(y[:, 0:2]) * d
-            f1 = f1 + up(y[:, 2:4]) * d
-            blend = blend + up(y[:, 4:5])
-            ui = ui + up(y[:, 5:6])
-            residual = residual + up(y[:, 6:9])
-        w0, w1 = backward_warp(i0p, f0), backward_warp(i1p, f1)
-        m, u = torch.sigmoid(blend), torch.sigmoid(ui)
-        gen = m * w0 + (1 - m) * w1 + residual
+            up = lambda t: F.interpolate(  # noqa: E731
+                t, scale_factor=1.0 / s, mode="bilinear", align_corners=False
+            )
+            hs = down(hint)
+            hs = torch.cat([hs[:, :FG_HINT_FLOW] * s, hs[:, FG_HINT_FLOW:]], 1)
+            r = self.ifnet(down(i0p), down(i1p), f["tau"], self.scales, hint=hs)
+            flow = upsample_flow(r["flows"][-1], 1.0 / s).to(i0p.dtype)
+            mask, feat = up(r["mask"]), up(r["feat"])
+            w0, w1 = backward_warp(i0p, flow[:, :2]), backward_warp(i1p, flow[:, 2:4])
+        m = torch.sigmoid(mask.float())
+        y = self.refine(torch.cat([i0p, i1p, w0, w1, m.to(i0p.dtype), feat], 1)).float()
+        w0, w1 = w0.float(), w1.float()
+        gen = m * w0 + (1 - m) * w1 + y[:, :3]
+        u = torch.sigmoid(y[:, 3:4])
         out = u * i1p.float() + (1 - u) * gen
         crop = (..., slice(0, H0), slice(0, W0))
         return out[crop], {
-            "flow0": f0[crop],
-            "flow1": f1[crop],
+            "flow0": flow[:, :2].float()[crop],
+            "flow1": flow[:, 2:4].float()[crop],
             "blend": m[crop],
             "ui": u[crop],
-            "ui_logit": ui[crop],
+            "ui_logit": y[:, 3:4][crop],
             "gen": gen[crop],
+            "merged": (m * w0 + (1 - m) * w1)[crop],
         }
 
 
 def build_fg(tier):
-    spec = dict(FG_TIERS[tier])
-    return FGNet(
-        spec["width"], spec["levels"], spec["blocks"], privileged=(tier == "teacher")
-    )
+    return FGNet(**FG_TIERS[tier])
+
+
+def fg_inputs(n, h, w, dev="cpu", tau=1.5):
+    """Random frame-generation inputs with every engine signal available."""
+    return {
+        "i0": torch.rand(n, 3, h, w, device=dev),
+        "i1": torch.rand(n, 3, h, w, device=dev),
+        "mv1": torch.randn(n, 2, h, w, device=dev),
+        "depth1": torch.rand(n, 1, h, w, device=dev),
+        "cam_prior": torch.randn(n, 2, h, w, device=dev),
+        "tau": torch.full((n,), tau, device=dev),
+        "extrap": torch.full((n,), float(tau > 1), device=dev),
+        "mv_avail": torch.ones(n, device=dev),
+        "cam_avail": torch.ones(n, device=dev),
+        "depth_avail": torch.ones(n, device=dev),
+        "target": torch.rand(n, 3, h, w, device=dev),
+    }
 
 
 class TSRExport(nn.Module):
-    """ONNX wrapper of one fused TSR step with explicit recurrent state tensors."""
+    """ONNX wrapper of one fused TSR step with explicit recurrent state tensors. flags: has_depth, mv_quality
+    (0 = no motion vectors: the built-in estimator runs), kind (1 = jittered render, 0 = video). Returns the
+    output and the new hidden state; the caller keeps this frame's colour, depth and jitter as the next
+    frame's prev_* inputs (pass-through outputs would rename the graph inputs)."""
 
     def __init__(self, net):
         super().__init__()
@@ -452,6 +828,8 @@ class TSRExport(nn.Module):
         prev_out,
         prev_hidden,
         prev_depth,
+        prev_color,
+        prev_jitter,
     ):
         f = {
             "color": color,
@@ -462,6 +840,7 @@ class TSRExport(nn.Module):
             "jitter": jitter,
             "has_depth": flags[:, 0],
             "mv_quality": flags[:, 1],
+            "kind": flags[:, 2],
         }
         out, st = self.net(
             f,
@@ -469,10 +848,12 @@ class TSRExport(nn.Module):
                 "out": prev_out,
                 "hidden": prev_hidden,
                 "depth": prev_depth,
+                "color": prev_color,
+                "jitter": prev_jitter,
                 "first": False,
             },
         )
-        return out, st["hidden"], depth
+        return out, st["hidden"]
 
 
 class FGExport(nn.Module):
@@ -482,7 +863,7 @@ class FGExport(nn.Module):
         super().__init__()
         self.net = net
 
-    def forward(self, i0, i1, mv1, depth1, cam_prior, tau, extrap, avail):
+    def forward(self, i0, i1, mv1, depth1, cam_prior, tau, avail):
         f = {
             "i0": i0,
             "i1": i1,
@@ -490,7 +871,6 @@ class FGExport(nn.Module):
             "depth1": depth1,
             "cam_prior": cam_prior,
             "tau": tau,
-            "extrap": extrap,
             "mv_avail": avail[:, 0],
             "cam_avail": avail[:, 1],
             "depth_avail": avail[:, 2],

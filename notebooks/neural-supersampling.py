@@ -1,20 +1,21 @@
 # %% [markdown]
 # # NeuralSS temporal super-resolution for games (Kaggle GPU T4 x2)
 #
-# **Goal.** Train and evaluate the NeuralSS temporal upscaler: a recurrent, motion-compensated network that reconstructs native-quality frames from jittered low-resolution game renders (primary 3x, for example 640x360 to 1920x1080; also 2x), stable under heavy motion and converging to near-native detail in static scenes, small enough for integrated GPUs.
+# **Goal.** Train and evaluate the NeuralSS temporal upscaler: a recurrent, motion-compensated network that reconstructs native-quality frames (primary 3x, for example 640x360 to 1920x1080; also 2x) from either jittered low-resolution game renders with engine data **or ordinary video with no side information at all**, stable under heavy motion and converging to near-native detail in static scenes, small enough for integrated GPUs.
 #
 # **Approach.**
 #
 # 1. **Data.** Uses the leakage-safe manifest from the `neural-data-pipeline` notebook when attached (otherwise builds a smaller one inline with the same code). Two training streams:
 #    * *Synthetic game-like sequences* rendered on the GPU from cached high-resolution stills (game frames, DIV2K, Flickr2K, GameIR, video frames): layered 2.5D scenes with independent camera and object motion, thin wires and fences, particles that write no motion vectors, world-space text, exposure changes. Low-resolution inputs are rendered like a game renders at reduced resolution (one jittered sample per pixel, Halton 2,3, no mip filtering, so thin geometry aliases); targets are 4-sample anti-aliased. Motion vectors, disocclusions and depth are exact.
 #    * *Real sequences*: TartanAir and Sintel with exact optical flow (played backwards so forward flow becomes the engine-style motion vector) and depth; REDS, Vimeo-90K, Vimeo-1080p and GameIR video with RAFT teacher motion (marked as estimated).
-# 2. **Model.** Per frame, at low resolution: jittered colour, depth and derived normals, motion vectors, a depth disocclusion cue, reactive mask, exposure, jitter offset, availability flags, the previous output warped by the upsampled motion vectors and folded to low resolution (space-to-depth), and a warped recurrent hidden state. A RepConv trunk (with an optional half-resolution U-Net level) predicts a per-pixel history weight and a residual, unfolded by pixel shuffle: `out = a * warped_history + (1 - a) * jitter-aware upsample + residual`. RepConv branches fold into plain 3x3 convolutions for deployment. Tiers: `igpu`, `low`, `mid`, `high`, and a `teacher` used for distillation.
-# 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock cosine schedule. Loss per frame: Charbonnier + gradient + Fourier magnitude + LPIPS (perceptual) + temporal-change loss along exact motion; students also match the teacher's outputs (knowledge distillation).
-# 4. **Evaluation.** Spatial quality (PSNR / SSIM on Y, LPIPS, FLIP), temporal stability (warping error and temporal-change error along exact motion, tOF with RAFT), region metrics (disocclusions, fine detail, particles), static-scene convergence, motion-speed classes, a native-render generalisation test (GameIR 720p to 1440p), against jitter-aware bilinear and bicubic upsampling and an analytic TAA upscaler. Ablations: no history, no G-buffers, bicubic degradation, no temporal loss, no distillation. Latency of fused tiers at 1080p and 4K outputs, ONNX export.
+#    * *Two input kinds in every batch*: render-like samples with engine data (motion vectors and depth each withheld at random) and **plain video** samples (anti-aliased bicubic, bilinear or area downscaling, mild blur and noise, 8-bit quantisation, no jitter, no motion vectors, no depth), so one model serves engine integrations and ordinary video.
+# 2. **Model.** Per frame, at low resolution: colour, depth and derived normals, motion vectors, a depth disocclusion cue, reactive mask, exposure, jitter offset, availability flags and the input kind, the previous output warped by the upsampled motion vectors and folded to low resolution (space-to-depth), and a warped recurrent hidden state. **When no motion vectors are given, a built-in IFNet motion estimator (the design of RIFE 4.26, MIT) computes them from the previous and current colour frames.** A RepConv trunk (with an optional half-resolution U-Net level) predicts a per-pixel history weight and a residual, unfolded by pixel shuffle: `out = a * warped_history + (1 - a) * jitter-aware upsample + residual`, followed by a small refinement at output resolution that removes the pixel-shuffle pattern. RepConv branches fold into plain 3x3 convolutions for deployment. Tiers: `igpu`, `low`, `mid`, `high`, and a `teacher` (the quality ceiling).
+# 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock cosine schedule. Loss per frame: Charbonnier + gradient + Fourier magnitude + LPIPS (perceptual) + temporal-change loss along known motion + motion-estimation error. Every fourth step unrolls a 16-frame synthetic sequence, so the recurrence keeps converging on static content past the 6-frame horizon (the students declined after frames 6 to 10 in the run of 24 October 2026). During the first quarter of each run, samples without motion vectors warp history with the label motion at a falling rate while the estimator learns (teacher forcing).
+# 4. **Evaluation.** Every suite in two modes: **engine** (jittered render input with exact motion vectors and depth; on video suites RAFT motion from the full-resolution frames, the protocol of earlier runs) and **plain** (the standard bicubic video degradation, no side information: the case of ordinary video). Spatial quality (PSNR / SSIM on Y, LPIPS, FLIP), temporal stability (warping error and temporal-change error along known motion, tOF with RAFT), region metrics (disocclusions, fine detail, particles), static-scene convergence, motion-speed classes, a native-render generalisation test (GameIR 720p to 1440p), against bilinear and bicubic upsampling and an analytic TAA upscaler. Ablations: no history, no G-buffers (colour-only render input), no motion estimator, no video training, no long unrolls. Latency of fused tiers at 1080p and 4K outputs, ONNX export.
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, Hugging Face data in the fallback path, RAFT / AlexNet / DINOv2 weights). Attach the output of the `neural-data-pipeline` notebook (**Add Input > Notebook output**) and the same Kaggle datasets it lists (`soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`). Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 140 min, main student 120 min, parallel `igpu` 3x and `low` 2x students 75 min, three parallel ablation pairs 20 min each, evaluation and export about 15 min: about 7.2 hours of a 9.5-hour ceiling (the run of 24 October 2026 with these budgets took 7.13 hours; validation PSNR-Y gained at most 0.05 dB over each run's last three rounds). `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
+# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 140 min, main student 120 min, parallel `igpu` 3x and `low` 2x students 75 min, three parallel ablation pairs 20 min each, evaluation in both modes and export about 25 min: about 7.4 hours of a 9.5-hour ceiling (the run of 24 October 2026 with the same training budgets took 7.13 hours, 6.4 minutes of it evaluation in one mode). `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
 #
 # **Outputs** in `/kaggle/working/`:
 #
@@ -177,7 +178,9 @@ DEVICES = [torch.device("cuda", i) for i in range(HW["gpus"])]
 # * `scale` 3 is the primary ratio (360p to 1080p, the extreme case); `scale_alt` 2 is the less aggressive ratio (540p to 1080p) trained for the `low` tier.
 # * `patch` 192 output pixels (64 low-resolution pixels at 3x) and `seq_len` 6 frames per training sequence (truncated back-propagation through the recurrence); `still_size` 512 texture crops leave room for fast camera paths.
 # * `p_real` is the share of each batch drawn from real sequences; the rest is synthetic.
-# * Loss weights follow the research plan: temporal 0.5, LPIPS 0.05, distillation 0.5.
+# * `p_video_synth` / `p_video_real`: shares of synthetic and real samples turned into plain video (no jitter, depth or motion vectors); `p_video_mv` of those keep estimated motion vectors (as a decoder could supply). `p_drop_mv` / `p_drop_depth`: render samples whose motion vectors or depth are withheld (colour-only game captures).
+# * `long_every`, `long_T`, `long_patch`: every fourth step is a 16-frame synthetic sequence at 96x96, to train the recurrence beyond 6 frames. `mv_warmup_frac`: the share of each run with teacher-forced motion for the estimator (see `train_tsr.py`).
+# * Loss weights: temporal 0.5, LPIPS 0.05, motion estimation 0.1 (per low-resolution pixel of error). Distillation weight 0: in the runs of 20 to 21 and 24 October 2026 distillation gave no measurable gain while the teacher's forward pass cost about 20 percent of the steps, so the students now train without it and the teacher is the quality ceiling.
 # * `minutes` are wall-clock training budgets per stage; they are scaled down automatically if the run budget is short.
 # * `cache.build_min` is the total decoding budget of all training caches.
 
@@ -202,6 +205,15 @@ CFG = {
         "build_min": 6 if QUICK_RUN else 30,
     },
     "p_real": 0.4,
+    "p_video_synth": 0.3,
+    "p_video_real": 0.6,
+    "p_video_mv": 0.15,
+    "p_drop_mv": 0.25,
+    "p_drop_depth": 0.3,
+    "long_every": 4,
+    "long_T": 16,
+    "long_patch": 96,
+    "mv_warmup_frac": 0.25,
     "lr": 2e-3,
     "lr_teacher": 1e-3,
     "min_lr": 1e-6,
@@ -212,8 +224,9 @@ CFG = {
     "w_grad": 0.1,
     "w_fft": 0.05,
     "w_temporal": 0.5,
+    "w_flow": 0.1,
     "w_lpips": 0.05,
-    "w_distill": 0.5,
+    "w_distill": 0.0,
     "val_bs": 8,
     "val_batches": 2 if QUICK_RUN else 4,
     "val_interval_min": 8,
@@ -250,9 +263,9 @@ ABLATIONS = {
     "reference": {},
     "no_history": {"use_history": False, "find_unused": True},
     "no_gbuffers": {"ablate_gbuffers": True},
-    "bicubic_degradation": {"degradation": "bicubic"},
-    "no_temporal_loss": {"w_temporal": 0.0},
-    "no_distillation": {"teacher_ckpt": None},
+    "no_motion_net": {"motion_net": False, "ablate_gbuffers": True},
+    "no_video_training": {"p_video_synth": 0.0, "p_video_real": 0.0},
+    "no_long_unroll": {"long_every": 0},
 }
 RUN.save_json(
     {
@@ -457,7 +470,7 @@ if CACHES["seq_train"]["count"]:
 # %% [markdown]
 # ## 9. Synthetic renderer preview
 #
-# One synthetic training sequence: jittered low-resolution input (nearest-neighbour enlarged, showing aliasing), the anti-aliased target, exact motion vectors, disocclusion mask, depth and particle (reactive) mask. Expected output: a 6-column grid for three frames.
+# One synthetic training sequence: jittered low-resolution render input (nearest-neighbour enlarged, showing aliasing), the same frame as plain video input (anti-aliased downscale, blur and noise, as in the video share of training), the anti-aliased target, exact motion vectors, disocclusion mask, depth and particle (reactive) mask. Expected output: a 7-column grid for three frames.
 
 # %%
 g = torch.Generator(device=DEVICES[0])
@@ -467,14 +480,21 @@ TEXT_BANK = torch.from_numpy(
 ).to(DEVICES[0])
 stills_t = torch.from_numpy(np.array(st[:4])).to(DEVICES[0])
 demo = S.sr_batch(stills_t, CFG["scale"], T, P, g, text_bank=TEXT_BANK)
-fig, axes = plt.subplots(3, 6, figsize=(18, 9))
+demo_video = S.video_lr(demo["hr"], CFG["scale"], g)
+fig, axes = plt.subplots(3, 7, figsize=(21, 9))
 for r, t in enumerate([1, 3, 5]):
     panels = [
         (
             F.interpolate(
                 demo["lr"][0, t : t + 1], scale_factor=CFG["scale"], mode="nearest"
             )[0],
-            "LR input (jittered)",
+            "LR input (jittered render)",
+        ),
+        (
+            F.interpolate(
+                demo_video[0, t : t + 1], scale_factor=CFG["scale"], mode="nearest"
+            )[0],
+            "LR input (plain video)",
         ),
         (demo["hr"][0, t], "target (4x SSAA)"),
         (
@@ -496,26 +516,29 @@ RUN.show(fig, "synthetic_preview")
 # %% [markdown]
 # ## 10. Model tiers, cost and fusion parity
 #
-# For each tier: trainable parameters, deployed (fused) parameters, multiply-accumulates per frame at 640x360 to 1920x1080 (3x) and 960x540 to 1920x1080 (2x), and the maximum difference between the multi-branch and fused networks on random input (should be about 1e-5 or less). Expected output: a tier table and a bar chart.
+# Downloads the pre-trained RIFE 4.26 weights (MIT) from the author's Hugging Face repository, checks both SHA-256 hashes and loads the checkpoint with `weights_only=True`; every TSR tier's motion estimator inherits from them (its feature encoder exactly, the narrower flow blocks as leading channel slices, a starting point rather than a trained estimator: RIFE's flows toward the previous frame are untrained at the current frame's time, so the estimator learns from the motion labels). If the download fails, the estimators start from random weights (logged). Then, for each tier: trainable parameters, deployed (fused) parameters, multiply-accumulates per steady-state frame (with the motion estimator running, the plain-video case) at 640x360 to 1920x1080 (3x) and 960x540 to 1920x1080 (2x), and the maximum difference between the multi-branch and fused networks on random input (should be about 1e-5 or less). Expected output: the RIFE inheritance counts, a tier table and a bar chart.
 
 # %%
+RIFE_STATE = NM.fetch_rife_weights("/tmp/nss_rife", log=log)
+RIFE_PT = None
+if RIFE_STATE is not None:
+    RIFE_PT = "/tmp/nss_rife/rife426.pt"  # plain state dict for the training processes
+    torch.save(RIFE_STATE, RIFE_PT)
+    log(
+        "RIFE 4.26 into the low tier's motion estimator: "
+        f"{NM.load_ifnet_weights(NM.build_tsr('low', 3).motion, RIFE_STATE)}"
+    )
 tier_rows = []
 for tier in NM.TSR_TIERS:
     for s in (CFG["scale"], CFG["scale_alt"]):
         net = NM.build_tsr(tier, s).eval()
-        f = {
-            "color": torch.rand(1, 3, 32, 32),
-            "depth": torch.rand(1, 1, 32, 32),
-            "mv": torch.randn(1, 2, 32, 32),
-            "reactive": torch.zeros(1, 1, 32, 32),
-            "exposure": torch.zeros(1),
-            "jitter": torch.rand(1, 2) - 0.5,
-            "has_depth": torch.ones(1),
-            "mv_quality": torch.ones(1),
-        }
+        f = NM.tsr_inputs(1, 32, 32)
+        f["mv"], f["jitter"] = torch.randn(1, 2, 32, 32), torch.rand(1, 2) - 0.5
         with torch.no_grad():
-            # non-zero head so parity is tested on a non-trivial output
-            for p in net.out.parameters():
+            # non-zero heads so parity is tested on a non-trivial output
+            for p in list(net.out.parameters()) + list(
+                net.refine.parameters() if net.refine else []
+            ):
                 p.normal_(0, 0.01)
             fused = NM.fuse_model(net)
             o1, st1 = net(f, None)
@@ -550,7 +573,7 @@ RUN.show(fig, "model_tiers")
 # %% [markdown]
 # ## 11. Batch-size probe
 #
-# Runs full training steps (synthetic batch generation, recurrent unroll, a pixel loss, backward) on GPU 0 for increasing batch sizes, for the teacher alone and for the student with the frozen teacher alongside (distillation), and keeps the largest batch below 75 percent of VRAM. The margin covers what the probe leaves out: the gradient, Fourier, temporal and LPIPS losses, real-sequence batches and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. `finite_loss` flags an FP16 overflow at initialisation (it made the first teacher run NaN for its whole budget; RepConv's zero-initialised side branches now prevent it, and training stops a run whose loss stays non-finite for 200 steps). Expected output: a table of batch size, finite loss, peak VRAM share and sequences per second.
+# Runs full training steps (synthetic batch generation, recurrent unroll with the motion estimator, a pixel loss, backward) on GPU 0 for increasing batch sizes, for the teacher and for the student (which trains without distillation), and keeps the largest batch below 75 percent of VRAM. The 16-frame long-unroll steps use fewer pixels per sequence (16 x 96^2 against 6 x 192^2), so the probe's 6-frame steps bound them. The margin covers what the probe leaves out: the gradient, Fourier, temporal, motion and LPIPS losses, real-sequence batches, plain-video degradation and the notebook's own CUDA context. RAFT's cached GPU memory is released first, so both GPUs start equal. `finite_loss` flags an FP16 overflow at initialisation (it made the first teacher run NaN for its whole budget; RepConv's zero-initialised side branches now prevent it, and training stops a run whose loss stays non-finite for 200 steps). Expected output: a table of batch size, finite loss, peak VRAM share and sequences per second.
 
 
 # %%
@@ -624,16 +647,14 @@ with RUN.stage("batch_probe"):
     TR.free_gpu_memory()
     sizes = [4, 8] if QUICK_RUN else [4, 8, 12, 16, 24, 32, 48]
     PROBE_T, BS_TEACHER = probe(CFG["teacher_tier"], None, CFG["scale"], sizes)
-    PROBE_S, BS_STUDENT = probe(
-        CFG["student_tier"], CFG["teacher_tier"], CFG["scale"], sizes
-    )
+    PROBE_S, BS_STUDENT = probe(CFG["student_tier"], None, CFG["scale"], sizes)
     for label, df in (("teacher", PROBE_T), ("student", PROBE_S)):
         if "finite_loss" in df and not df["finite_loss"].fillna(True).all():
             log(f"{label} probe: non-finite loss at initialisation (FP16 overflow)")
 print(
     "teacher\n",
     PROBE_T.to_string(index=False),
-    "\nstudent + teacher\n",
+    "\nstudent\n",
     PROBE_S.to_string(index=False),
 )
 print(f"batch per GPU: teacher {BS_TEACHER}, student {BS_STUDENT}")
@@ -648,7 +669,7 @@ RUN.save_csv(
 #
 # Builds one JSON config per run and launches `code/train_tsr.py`: DDP on both GPUs for the main stages, or two single-GPU runs in parallel threads for the paired stages and ablations. Each run streams `PROGRESS` lines into a progress bar (percent of its time budget, loss, sequences per second, learning rate, per-GPU memory) and `ROUND` lines (validation PSNR-Y, temporal-change error) into a live chart. Stage budgets are scaled down if the run budget is short.
 #
-# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). A run still alive 25 percent plus 15 minutes past its budget (a hung data-loader worker or collective) is killed with all its processes by a watchdog. Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: students train without distillation if the teacher failed, and evaluation skips missing models. Expected output: the planned minutes per stage.
+# A failed run never stops the notebook. A run that runs out of GPU memory is retried once with half the batch for the rest of its stage budget (the failed attempt's log is kept as `logs/<run>.oom.log`). A run still alive 25 percent plus 15 minutes past its budget (a hung data-loader worker or collective) is killed with all its processes by a watchdog. Any other failure is logged and recorded in `FAILED`, and later stages use whatever checkpoints exist: evaluation skips missing models. Expected output: the planned minutes per stage.
 
 # %%
 remaining_h = RUN_BUDGET_H - RUN.hours() - CFG["eval"]["eval_reserve_h"]
@@ -678,6 +699,22 @@ def run_cfg(name, tier, scale, minutes, batch, teacher_ckpt=None, **over):
         "seed": CFG["seed"],
         "batch_per_gpu": batch,
         "p_real": CFG["p_real"],
+        **{
+            k: CFG[k]
+            for k in (
+                "p_video_synth",
+                "p_video_real",
+                "p_video_mv",
+                "p_drop_mv",
+                "p_drop_depth",
+                "long_every",
+                "long_T",
+                "long_patch",
+                "mv_warmup_frac",
+                "w_flow",
+            )
+        },
+        "rife_weights": RIFE_PT,
         "lr": CFG["lr_teacher"] if tier == "teacher" else CFG["lr"],
         "min_lr": CFG["min_lr"],
         "warmup_frac": CFG["warmup_frac"],
@@ -719,7 +756,10 @@ def live_plot(title):
         fig, axes = plt.subplots(1, 3, figsize=(15, 3.2))
         axes[0].plot(h["elapsed_min"], h["train_loss"])
         axes[0].set_title("train loss")
-        axes[1].plot(h["elapsed_min"], h["val_psnr_y"])
+        for col in ("val_psnr_y", "val_psnr_y_render", "val_psnr_y_video"):
+            if col in h:
+                axes[1].plot(h["elapsed_min"], h[col], label=col[4:])
+        axes[1].legend(fontsize=7)
         axes[1].set_title("val PSNR-Y (dB)")
         axes[2].plot(h["elapsed_min"], h["val_tce"])
         axes[2].set_title("val temporal-change error")
@@ -752,12 +792,6 @@ def launch(cfg, gpus, live=True):
     return done
 
 
-def checkpoint(name):
-    """Path of a run's best checkpoint, or None if the run produced none."""
-    path = RUN.dirs["weights"] / f"{name}_best.pt"
-    return str(path) if path.exists() else None
-
-
 def launch_pair(cfg_a, cfg_b):
     with ThreadPoolExecutor(2) as pool:
         fa = pool.submit(launch, cfg_a, [0], False)
@@ -768,7 +802,7 @@ def launch_pair(cfg_a, cfg_b):
 # %% [markdown]
 # ## 13. Stage A: teacher (both GPUs)
 #
-# The `teacher` tier (64 channels, 8 blocks, 6 U-Net blocks) at 3x on both GPUs. It is too large for deployment; it only provides distillation targets for the students. Expected output: a live training chart and the final validation scores.
+# The `teacher` tier (64 channels, 8 blocks, 6 U-Net blocks, a 3-level 128/96/64 motion estimator) at 3x on both GPUs: the quality ceiling of this architecture, about 156 GMAC per 1080p frame, too heavy for most deployment targets. Expected output: a live training chart and the final validation scores (render, plain video and their mean).
 
 # %%
 with RUN.stage("train_teacher"):
@@ -779,15 +813,12 @@ with RUN.stage("train_teacher"):
         ),
         [0, 1],
     )
-TEACHER_CKPT = checkpoint("tsr_teacher_s3")
-if TEACHER_CKPT is None:
-    log("no teacher checkpoint: students train without distillation")
 print(done_teacher)
 
 # %% [markdown]
-# ## 14. Stage B: main student with distillation (both GPUs)
+# ## 14. Stage B: main student (both GPUs)
 #
-# The `low` tier at 3x, trained with the full loss plus distillation toward the frozen teacher. Expected output: live chart and final scores.
+# The `low` tier at 3x with the full loss. Expected output: live chart and final scores.
 
 # %%
 with RUN.stage("train_student"):
@@ -798,7 +829,6 @@ with RUN.stage("train_student"):
             S3,
             MINUTES["student"],
             BS_STUDENT,
-            teacher_ckpt=TEACHER_CKPT,
         ),
         [0, 1],
     )
@@ -807,7 +837,7 @@ print(done_student)
 # %% [markdown]
 # ## 15. Stage C: integrated-GPU student (3x) and 2x student, in parallel
 #
-# GPU 0 trains the smallest `igpu` tier at 3x with distillation; GPU 1 trains the `low` tier at 2x (the teacher is 3x only, so no distillation). Expected output: both runs' final scores.
+# GPU 0 trains the smallest `igpu` tier at 3x; GPU 1 trains the `low` tier at 2x. Expected output: both runs' final scores.
 
 # %%
 with RUN.stage("train_pair"):
@@ -819,7 +849,6 @@ with RUN.stage("train_pair"):
             S3,
             MINUTES["pair"],
             BS_STUDENT,
-            teacher_ckpt=TEACHER_CKPT,
         ),
         run_cfg(
             f"tsr_{CFG['student_tier']}_s2",
@@ -834,35 +863,32 @@ print(done_pair)
 # %% [markdown]
 # ## 16. Ablations (three parallel pairs)
 #
-# Short runs of the `low` 3x student with one change each, against a `reference` run with the full recipe and the same short budget: no history (single-frame upscaling), no G-buffers (colour only: no depth or motion vectors), bicubic degradation (classic image super-resolution inputs instead of render-like jittered sampling), no temporal loss, and no distillation. The budgets are equal in wall-clock time, so the `no_distillation` run, which skips the teacher's forward pass, takes more steps (1,380 against 1,090 in the run of 20 to 21 October 2026). Without a teacher checkpoint the `no_distillation` run is the same recipe as `reference` (logged). Each run validates on batches built with its own recipe, so validation scores are not comparable across ablations; section 25 compares them on the test suites. Expected output: final scores of the six runs.
+# Short runs of the `low` 3x student with one change each, against a `reference` run with the full recipe and the same short budget: no history (single-frame upscaling), no G-buffers (colour-only input, motion from the built-in estimator), no motion estimator (colour-only input with zero motion, the `no_gbuffers` recipe of earlier runs), no video training (render-like samples only, the recipe of earlier runs) and no long unrolls (6-frame sequences only). The budgets are equal in wall-clock time, so runs with cheaper steps (no history, no estimator, no long unrolls) take more steps. Each run validates on batches built with its own recipe, so validation scores are not comparable across ablations; section 25 compares them on the test suites in both modes. Expected output: final scores of the six runs.
 
 # %%
 with RUN.stage("ablations"):
-    if TEACHER_CKPT is None:
-        log("no teacher checkpoint: abl_no_distillation repeats abl_reference")
     names = list(ABLATIONS)
     for a, b in zip(names[0::2], names[1::2]):
-        cfgs = []
-        for name in (a, b):
-            over = dict(ABLATIONS[name])
-            ckpt = over.pop("teacher_ckpt", TEACHER_CKPT)
-            cfgs.append(
-                run_cfg(
-                    f"abl_{name}",
-                    CFG["student_tier"],
-                    S3,
-                    MINUTES["ablation"],
-                    BS_STUDENT,
-                    teacher_ckpt=ckpt,
-                    **over,
-                )
+        print(
+            launch_pair(
+                *[
+                    run_cfg(
+                        f"abl_{name}",
+                        CFG["student_tier"],
+                        S3,
+                        MINUTES["ablation"],
+                        BS_STUDENT,
+                        **ABLATIONS[name],
+                    )
+                    for name in (a, b)
+                ]
             )
-        print(launch_pair(*cfgs))
+        )
 
 # %% [markdown]
 # ## 17. Training curves
 #
-# Validation PSNR-Y and temporal-change error against time for every run, and the train loss of the main stages. Expected output: three charts, a table of the best validation round per run and the list of failed runs (`metrics/failed_runs.json`, normally empty).
+# Validation PSNR-Y (the mean of the render and plain-video copies of the validation batches, the checkpoint selection metric) and temporal-change error against time for every run, and the train loss of the main stages. Expected output: three charts, a table of the best validation round per run and the list of failed runs (`metrics/failed_runs.json`, normally empty).
 
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(17, 4))
@@ -885,6 +911,8 @@ for name, rounds in HISTORY.items():
             "run": name,
             "best_round": int(b["round"]),
             "val_psnr_y": b["val_psnr_y"],
+            "val_psnr_y_render": b.get("val_psnr_y_render"),
+            "val_psnr_y_video": b.get("val_psnr_y_video"),
             "val_psnr_y_last": b["val_psnr_y_last"],
             "val_tce": b["val_tce"],
             "samples_per_s": h["samples_per_s"].mean(),
@@ -913,7 +941,9 @@ def load_tsr(name, tier, scale):
     path = RUN.dirs["weights"] / f"{name}_best.pt"
     if not path.exists():
         return None
-    net = NM.build_tsr(tier, scale)
+    net = NM.build_tsr(
+        tier, scale, motion_net=ABLATIONS.get(name[4:], {}).get("motion_net", True)
+    )
     sd = torch.load(path, map_location="cpu")["ema"]
     net.load_state_dict(
         {k[4:] if k.startswith("net.") else k: v for k, v in sd.items()}
@@ -974,6 +1004,8 @@ RAFT = RAFTS[0] if RAFTS else M.load_raft(DEVICES[0], log=log)
 # * **video**: Vid4 and held-out Vimeo-1080p clips with RAFT motion;
 # * **gameir-native**: held-out town 05, native 720p renders to 1440p ground truth (2x, a real renderer's low-resolution image instead of a simulated one).
 #
+# Section 20 evaluates each suite in the engine mode and in the plain-video mode.
+#
 # Clips that cannot be decoded, and blank clips (a frame with almost no luma variation, which every upscaler reconstructs exactly), are logged and skipped (`E.test_clips`); without this filter, one blank Vimeo-1080p clip scored the 100 dB PSNR cap for every baseline in the run of 20 to 21 October 2026, and the run of 24 October 2026 skipped two blank clips. Expected output: the number of sequences per suite.
 
 # %%
@@ -1023,14 +1055,27 @@ print(
 # %% [markdown]
 # ## 20. Evaluation
 #
-# Runs every method on every suite at 3x (and the 2x student on 2x inputs) and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame (RAFT runs at most 1024 px on the longer side and its flow is scaled back, since full-size 1440p GameIR frames ran out of memory in the first run), warping error (exact motion only) and temporal-change error. On the video suites and GameIR the motion vectors come from RAFT on the clean full-resolution frames, the same teacher motion as the training caches, sampled at the jittered low-resolution positions like exact motion (the first run estimated them on the jittered low-resolution inputs, where RAFT also reports the jitter difference between frames as motion). Methods: jitter-aware bicubic and bilinear upsampling (both sample at the true jittered positions), analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
+# Runs every method on every suite at 3x (and the 2x student on 2x inputs) in two modes and records per-frame metrics, skipping the first frame (no history yet): PSNR-Y, SSIM-Y, PSNR inside disoccluded regions, fine-detail regions and particles, LPIPS and tOF every fourth frame (RAFT runs at most 1024 px on the longer side and its flow is scaled back), warping error (exact motion only) and temporal-change error.
+#
+# * **engine**: jittered render-like input with motion vectors and depth. On the video suites and GameIR the motion vectors come from RAFT on the clean full-resolution frames (the protocol of earlier runs; RAFT sees the ground truth, so this is an oracle on video).
+# * **plain**: the standard bicubic video degradation with no jitter, depth or motion vectors (`E.as_plain_video`): what an upscaler sees on ordinary video. Networks use their built-in motion estimator; exact or RAFT motion is only used by the metrics. The analytic TAA upscaler needs motion vectors, so it is left out of this mode.
+#
+# Methods: bicubic and bilinear upsampling (at the true jittered sample positions in engine mode), analytic TAA upscaler, the teacher, the students and the ablations; models whose training failed are left out, and a method that fails on one suite is logged and skipped there. Expected output: progress logs and the number of metric rows.
 
 # %%
 ROWS = []
+MODES = ("engine", "plain")
 
 
-def evaluate(suite, b, scale, methods, extra=None):
+def evaluate(suite, b, scale, methods, extra=None, modes=MODES):
     ref = BASE[scale]  # only its parameter-free upsampler is used
+    for mode in modes:
+        bm = E.as_plain_video(b, scale) if mode == "plain" else b
+        ms = [m for m in methods if not (mode == "plain" and m == "analytic_taau")]
+        evaluate_mode(suite, bm, scale, ms, ref, {"mode": mode, **(extra or {})})
+
+
+def evaluate_mode(suite, b, scale, methods, ref, extra):
     for mname in methods:
         if mname not in ("bicubic", "bilinear", "analytic_taau") and (
             mname not in MODELS or MODELS[mname][1] != scale
@@ -1055,9 +1100,7 @@ def evaluate(suite, b, scale, methods, extra=None):
             torch.cuda.empty_cache()
             continue
         for r in rows:
-            ROWS.append(
-                {"suite": suite, "method": mname, "scale": scale, **(extra or {}), **r}
-            )
+            ROWS.append({"suite": suite, "method": mname, "scale": scale, **extra, **r})
 
 
 METHODS_S3 = ["bicubic", "bilinear", "analytic_taau"] + [
@@ -1114,7 +1157,9 @@ with RUN.stage("evaluation"):
                     {"clip": cid, "motion": "real"},
                 )
         log(f"{suite} done")
-    for cid, clip in REAL["gameir_native"]:
+    for cid, clip in REAL[
+        "gameir_native"
+    ]:  # the native render is the input: engine mode only
         b2 = E.sr_inputs(clip, S2, DEVICES[0], raft=RAFT, native=True)
         evaluate(
             "gameir-native",
@@ -1122,6 +1167,7 @@ with RUN.stage("evaluation"):
             S2,
             ["bicubic", "bilinear", "analytic_taau", "student_s2"],
             {"clip": cid, "motion": "real"},
+            modes=("engine",),
         )
 RES = pd.DataFrame(ROWS)
 METRIC_COLS = [
@@ -1145,40 +1191,48 @@ print(len(RES), "metric rows")
 # %% [markdown]
 # ## 21. Results by suite and method
 #
-# Mean of every metric per suite, scale and method (lower is better for LPIPS, warping, temporal-change error and tOF). Expected output: the results table and a chart of PSNR-Y against temporal-change error (top-left is better: sharp and stable).
+# Mean of every metric per suite, mode, scale and method (lower is better for LPIPS, warping, temporal-change error and tOF). Expected output: the results table, a chart of PSNR-Y against temporal-change error per mode at 3x (top-left is better: sharp and stable) and the plain-video PSNR-Y per suite.
 
 # %%
 AGG = (
-    RES.groupby(["suite", "scale", "method"])
+    RES.groupby(["suite", "mode", "scale", "method"])
     .mean(numeric_only=True)
     .drop(columns=["sample", "frame", "speed_class"], errors="ignore")
 )
 RUN.save_csv(AGG.round(4), "test_results.csv")
 print(AGG.round(3).to_string())
-fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-for ax, scale in zip(axes, (S3, S2)):
-    sub = (
-        AGG.xs(scale, level="scale")
-        if scale in AGG.index.get_level_values("scale")
-        else None
-    )
-    if sub is None:
+fig, axes = plt.subplots(1, 3, figsize=(21, 5))
+for ax, mode in zip(axes, MODES):
+    try:
+        sub = AGG.xs((mode, S3), level=("mode", "scale"))
+    except KeyError:
         continue
     for (suite, method), r in sub.iterrows():
         ax.scatter(r["temporal_err"], r["psnr_y"], s=30)
         ax.annotate(f"{method}\n{suite}", (r["temporal_err"], r["psnr_y"]), fontsize=6)
     ax.set_xlabel("temporal-change error (lower is more stable)")
     ax.set_ylabel("PSNR-Y (dB)")
-    ax.set_title(f"{scale}x")
+    ax.set_title(f"{S3}x, {mode} mode")
+plain3 = RES[(RES["mode"] == "plain") & (RES["scale"] == S3)]
+if len(plain3):
+    plain3.groupby(["suite", "method"])["psnr_y"].mean().unstack().plot.bar(
+        ax=axes[2], rot=0
+    )
+    axes[2].set_title(f"plain video (no side information), {S3}x: PSNR-Y (dB)")
+    axes[2].legend(fontsize=6)
 RUN.show(fig, "quality_vs_stability")
 
 # %% [markdown]
-# ## 22. Motion classes, regions and perceptual metrics (synthetic-game, 3x)
+# ## 22. Motion classes, regions and perceptual metrics (synthetic-game, 3x, engine mode)
 #
 # How quality changes from static to fast motion, and quality inside the hardest regions: disocclusions (no valid history), fine detail (top 15 percent gradients: thin geometry, foliage, text) and particles (transparent effects without motion vectors). Expected output: three grouped bar charts.
 
 # %%
-syn = RES[(RES["suite"] == "synthetic-game") & (RES["scale"] == S3)]
+syn = RES[
+    (RES["suite"] == "synthetic-game")
+    & (RES["scale"] == S3)
+    & (RES["mode"] == "engine")
+]
 if len(syn):
     print(
         "measured motion per class (output px / frame):",
@@ -1202,7 +1256,7 @@ if len(syn):
 # %% [markdown]
 # ## 23. Static-scene convergence
 #
-# A static camera with only sub-pixel jitter: a temporal upscaler should accumulate detail frame after frame and approach the native image, while single-frame methods stay flat. Expected output: PSNR-Y against frame index per method, and FLIP for the last frame.
+# A static camera with only sub-pixel jitter: a temporal upscaler should accumulate detail frame after frame and approach the native image, while single-frame methods stay flat. In the run of 24 October 2026 both students peaked around frames 6 to 10 and then lost 1.3 to 1.4 dB by frame 15; the 16-frame training unrolls target that decline. Expected output: PSNR-Y against frame index per method, and FLIP for the last frame.
 
 # %%
 if TEST_STILLS is not None:
@@ -1217,6 +1271,8 @@ if TEST_STILLS is not None:
         "student_s3",
         "igpu_s3",
         "teacher_s3",
+        "abl_reference",
+        "abl_no_long_unroll",
         "abl_no_history",
     ]:
         if mname in ("bilinear", "analytic_taau"):
@@ -1256,22 +1312,23 @@ if TEST_STILLS is not None:
 # %% [markdown]
 # ## 24. Visual comparisons, history weights and temporal profiles
 #
-# For one fast-motion synthetic sequence and one TartanAir clip: crops of the last frame for each method, the student's learned history weight `a` (white = history kept, black = history rejected, which should light up at disocclusions and particles), and an x-t slice (one image row over time) where flicker and ghosting appear as streaks. Expected output: two figures; full frames are saved to `predictions/`.
+# For one fast-motion synthetic sequence, one TartanAir clip (engine mode) and one Vid4 clip as plain video (no side information): crops of the last frame for each method, the student's learned history weight `a` (white = history kept, black = history rejected, which should light up at disocclusions and particles), and an x-t slice (one image row over time) where flicker and ghosting appear as streaks. Expected output: three figures; full frames are saved to `predictions/`.
 
 
 # %%
 import PIL.Image as PImage
 
 
-def visual(b, title, fname, crop=160):
+def visual(b, title, fname, crop=160, plain=False):
     nets = [k for k in ("igpu_s3", "student_s3", "teacher_s3") if k in MODELS]
     if not nets:
         log(f"{fname}: no trained 3x model, figure skipped")
         return
-    outs = {
-        "bilinear": E.run_bilinear(BASE[S3], b),
-        "analytic_taau": E.run_taau(BASE[S3], b, S3),
-    }
+    outs = {"bilinear": E.run_bilinear(BASE[S3], b)}
+    if plain:
+        outs["bicubic"] = E.run_bicubic(b, S3)
+    else:
+        outs["analytic_taau"] = E.run_taau(BASE[S3], b, S3)
     for k in nets:
         outs[k] = E.run_tsr(MODELS[k][0], b)
     alpha_net = "student_s3" if "student_s3" in MODELS else nets[0]
@@ -1332,58 +1389,63 @@ if REAL["tartanair"]:
         "TartanAir held-out environment",
         "visual_tartanair",
     )
+if REAL["vid4"]:
+    visual(
+        E.sr_inputs(REAL["vid4"][0][1], S3, DEVICES[0], raft=RAFT, plain=True),
+        "Vid4 as plain video (bicubic downscale, no motion vectors)",
+        "visual_vid4_plain",
+        plain=True,
+    )
 
 # %% [markdown]
 # ## 25. Ablations
 #
-# Same short budget, one change each, on the synthetic-game and TartanAir suites. The difference to `abl_reference` isolates the value of history, G-buffers, render-like training degradation, the temporal loss and distillation. Expected output: a table of deltas and a chart.
+# Same short budget, one change each, on the synthetic-game, TartanAir and Vid4 suites in both modes. The difference to `abl_reference` isolates the value of history, G-buffers, the motion estimator, video training and long unrolls. Expected output: a table of deltas and a chart per mode.
 
 # %%
 abl = RES[
     RES["method"].str.startswith("abl_")
-    & RES["suite"].isin(["synthetic-game", "tartanair"])
+    & RES["suite"].isin(["synthetic-game", "tartanair", "vid4"])
     & (RES["scale"] == S3)
 ]
 if len(abl) and "abl_reference" not in set(abl["method"]):
     print("abl_reference did not train: deltas cannot be computed")
 elif len(abl):
-    ABL = abl.groupby(["suite", "method"])[
+    ABL = abl.groupby(["suite", "mode", "method"])[
         ["psnr_y", "ssim_y", "lpips", "temporal_err", "psnr_disocc"]
     ].mean()
     ref = ABL.xs("abl_reference", level="method")
-    delta = ABL.sub(ref, level="suite")
+    # each row minus the reference row of the same suite and mode
+    delta = ABL - ref.reindex(ABL.index.droplevel("method")).to_numpy()
     RUN.save_csv(ABL.round(4), "ablations.csv")
     print(
         ABL.round(3).to_string(), "\n\ndelta to reference\n", delta.round(3).to_string()
     )
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
-    delta["psnr_y"].unstack(0).plot.bar(ax=axes[0], rot=30)
-    axes[0].set_title("PSNR-Y change vs reference (dB)")
-    delta["temporal_err"].unstack(0).plot.bar(ax=axes[1], rot=30)
-    axes[1].set_title("temporal-change error change (negative is better)")
+    fig, axes = plt.subplots(1, 2, figsize=(16, 4))
+    for ax, mode in zip(axes, MODES):
+        d = delta.xs(mode, level="mode")["psnr_y"]
+        if len(d):
+            d.unstack(0).plot.bar(ax=ax, rot=30)
+        ax.set_title(f"PSNR-Y change vs reference (dB), {mode} mode")
     RUN.show(fig, "ablations")
 
 # %% [markdown]
 # ## 26. Latency of fused models
 #
-# Times one fused FP16 step (including warps, jitter-aware upsampling and the final blend) on one T4 with CUDA events after warm-up, batch 1, for 640x360 to 1920x1080 (3x), 960x540 to 1920x1080 (2x) and 1280x720 to 3840x2160 (3x). PyTorch eager on a T4 ranks variants; in-engine latency on target GPUs needs the ONNX / DirectML path. The arithmetic estimate column converts multiply-accumulates to milliseconds for an assumed sustained FP16 throughput (a parameter, not a measurement). Expected output: latency table and chart.
+# Times one fused FP16 step (including warps, jitter-aware upsampling and the final blend) on one T4 with CUDA events after warm-up, batch 1, for 640x360 to 1920x1080 (3x), 960x540 to 1920x1080 (2x) and 1280x720 to 3840x2160 (3x), with the built-in motion estimator running (plain video, `t4_mean_ms`) and with engine motion vectors, where it is skipped (`t4_mean_ms_engine_mv`). The GMAC column counts the estimator. PyTorch eager on a T4 ranks variants; in-engine latency on target GPUs needs the ONNX / DirectML path. The arithmetic estimate column converts multiply-accumulates to milliseconds for an assumed sustained FP16 throughput (a parameter, not a measurement). Expected output: latency table and chart.
 
 
 # %%
 @torch.no_grad()
-def time_step(net, scale, out_hw, iters=100):
+def time_step(net, scale, out_hw, iters=100, engine_mv=False):
+    """Mean step time; engine_mv False times the plain-video path (built-in motion estimator running)."""
     dev = DEVICES[0]
     h, w = out_hw[0] // scale, out_hw[1] // scale
     f = {
-        "color": torch.rand(1, 3, h, w, device=dev).half(),
-        "depth": torch.rand(1, 1, h, w, device=dev).half(),
-        "mv": torch.zeros(1, 2, h, w, device=dev).half(),
-        "reactive": torch.zeros(1, 1, h, w, device=dev).half(),
-        "exposure": torch.zeros(1, device=dev),
-        "jitter": torch.zeros(1, 2, device=dev),
-        "has_depth": torch.ones(1, device=dev),
-        "mv_quality": torch.ones(1, device=dev),
+        k: (v.half() if v.dim() == 4 else v)
+        for k, v in NM.tsr_inputs(1, h, w, dev).items()
     }
+    f["mv_quality"] = torch.full((1,), float(engine_mv), device=dev)
     _, state = net(f, None)
     for _ in range(10):
         _, state = net(f, state)
@@ -1414,6 +1476,7 @@ for key in ("igpu_s3", "student_s3", "student_s2", "teacher_s3"):
         if scale == S2 and out_hw[0] > 1080:
             continue
         t_ms = time_step(net, scale, out_hw, iters=30 if QUICK_RUN else 100)
+        t_eng = time_step(net, scale, out_hw, 30 if QUICK_RUN else 100, engine_mv=True)
         tier = RUNS[key][1]
         gmac = (
             TIERS[(TIERS["tier"] == tier) & (TIERS["scale"] == scale)][
@@ -1429,6 +1492,7 @@ for key in ("igpu_s3", "student_s3", "student_s2", "teacher_s3"):
                 "output": f"{out_hw[1]}x{out_hw[0]}",
                 "t4_mean_ms": t_ms.mean(),
                 "t4_p95_ms": np.percentile(t_ms, 95),
+                "t4_mean_ms_engine_mv": t_eng.mean(),
                 "gmac": gmac,
                 **{
                     f"est_ms {k}": M.estimate_ms(gmac, v)
@@ -1450,7 +1514,7 @@ if len(LAT):  # empty when no model trained
 # %% [markdown]
 # ## 27. ONNX export
 #
-# Exports one fused recurrent step of the main 3x student and the integrated-GPU student (explicit state tensors: previous output, hidden state, previous depth), opset 17 with the TorchScript exporter on any PyTorch 2.x (`NM.export_onnx`), with static shapes (a deployment builds one optimised graph per render resolution; re-export with the target size), and compares ONNX Runtime (CPU) with PyTorch FP32. Expected output: export status and maximum difference.
+# Exports one fused recurrent step of the main 3x student and the integrated-GPU student (explicit state tensors: previous output, hidden state, previous depth, previous colour and jitter for the motion estimator; `flags` = has depth, motion-vector quality with 0 meaning none, input kind), opset 17 with the TorchScript exporter on any PyTorch 2.x (`NM.export_onnx`), with static shapes (a deployment builds one optimised graph per render resolution; re-export with the target size), and compares ONNX Runtime (CPU) with PyTorch FP32. Expected output: export status and maximum difference.
 
 # %%
 onnx_rows = []
@@ -1468,10 +1532,12 @@ for key in ("student_s3", "igpu_s3"):
         torch.zeros(1, 1, h, w),
         torch.zeros(1),
         torch.zeros(1, 2),
-        torch.ones(1, 2),
+        torch.tensor([[1.0, 0.0, 1.0]]),  # depth, no motion vectors (estimator), render
         torch.rand(1, 3, h * s, w * s),
         torch.zeros(1, net.hidden, h, w),
         torch.rand(1, 1, h, w),
+        torch.rand(1, 3, h, w),
+        torch.zeros(1, 2),
     )
     names = [
         "color",
@@ -1484,11 +1550,13 @@ for key in ("student_s3", "igpu_s3"):
         "prev_out",
         "prev_hidden",
         "prev_depth",
+        "prev_color",
+        "prev_jitter",
     ]
     path = RUN.dirs["weights"] / f"tsr_{key}_fused.onnx"
     row = {"model": key, "exported": False, "ort_max_abs": None}
     try:  # static shapes: engines build one optimised graph per render resolution anyway
-        NM.export_onnx(wrap, args, path, names, ["out", "hidden", "depth_out"])
+        NM.export_onnx(wrap, args, path, names, ["out", "hidden"])
         row["exported"] = True
         row["onnx_mb"] = round(path.stat().st_size / 1e6, 3)
         import onnxruntime as ort
@@ -1507,23 +1575,23 @@ RUN.save_json(onnx_rows, "onnx_export.json")
 # %% [markdown]
 # ## 28. Summary
 #
-# Headline results of the main 3x student against the analytic TAA upscaler on the game-like suites, the integrated-GPU tier, the 2x student on native GameIR renders, latency, failed runs (normally none) and stage times against the budget. Expected output: the summary table and a stage-time chart.
+# Headline results of the main 3x student and the teacher against the best baselines in both modes (engine: analytic TAA upscaler; plain video: bicubic), the integrated-GPU tier, the 2x student on native GameIR renders, latency, failed runs (normally none) and stage times against the budget. Expected output: the summary table and a stage-time chart.
 
 
 # %%
-def pick(suite, method, col, scale=S3):
+def pick(suite, method, col, scale=S3, mode="engine"):
     try:
-        return round(float(AGG.loc[(suite, scale, method), col]), 4)
+        return round(float(AGG.loc[(suite, mode, scale, method), col]), 4)
     except KeyError:
         return None
 
 
 summary = {"run_hours": round(RUN.hours(), 2), "failed_runs": sorted(FAILED)}
 for suite in ("synthetic-game", "tartanair", "sintel", "vid4", "vimeo1080p"):
-    for m in ("analytic_taau", "student_s3", "igpu_s3"):
-        summary[f"{suite}/{m}/psnr_y"] = pick(suite, m, "psnr_y")
-        summary[f"{suite}/{m}/temporal_err"] = pick(suite, m, "temporal_err")
-        summary[f"{suite}/{m}/lpips"] = pick(suite, m, "lpips")
+    for mode, base in (("engine", "analytic_taau"), ("plain", "bicubic")):
+        for m in (base, "student_s3", "igpu_s3", "teacher_s3"):
+            for col in ("psnr_y", "temporal_err", "lpips"):
+                summary[f"{suite}/{mode}/{m}/{col}"] = pick(suite, m, col, mode=mode)
 for m in ("analytic_taau", "student_s2"):
     summary[f"gameir-native/{m}/psnr_y"] = pick("gameir-native", m, "psnr_y", S2)
 if len(LAT):
