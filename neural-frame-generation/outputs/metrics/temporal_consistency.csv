@@ -1,4 +1,4 @@
-suite,average,igpu,mid,mv_reprojection,student
-tartanair,8.2823,0.7786,0.7389,0.7497,0.7578
-vimeo1080p,6.3679,11.7582,9.1139,11.6639,10.0389
-vimeo_triplet,1.774,0.3126,0.2913,0.3057,0.3124
+suite,average,high,igpu,mid,mv_reprojection,rife_4.26,student
+tartanair,8.2823,0.7434,8.0958,2.0763,0.7497,0.6722,6.5892
+vimeo1080p,6.3692,9.9273,10.417,9.6197,11.4767,8.7385,10.2453
+vimeo_triplet,1.774,0.3394,1.6644,0.3858,0.3057,0.2838,1.3348

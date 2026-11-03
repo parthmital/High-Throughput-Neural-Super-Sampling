@@ -3,7 +3,7 @@
 	"budget_h": 9.5,
 	"cfg": {
 		"seed": 21,
-		"patch": 192,
+		"patch": 256,
 		"still_size": 512,
 		"student_tier": "low",
 		"small_tier": "igpu",
@@ -16,13 +16,17 @@
 			"build_min": 30
 		},
 		"p_real": 0.4,
-		"p_extrap": 0.5,
+		"p_extrap": 0.4,
+		"p_tau": 0.5,
+		"p_mfg": 0.25,
+		"p_drop_mv": 0.3,
+		"p_drop_mv_real": 0.5,
 		"p_ui": 0.5,
 		"p_menu": 0.03,
 		"p_cut": 0.03,
-		"p_flip": 0.1,
-		"lr": 0.002,
-		"lr_teacher": 0.001,
+		"p_flip": 0.2,
+		"lr": 0.0004,
+		"lr_teacher": 0.0001,
 		"min_lr": 1e-6,
 		"warmup_frac": 0.03,
 		"weight_decay": 0.0001,
@@ -71,14 +75,14 @@
 		"no_motion_prior": {
 			"ablate_prior": true
 		},
-		"interp_only": {
-			"mode": "interp"
-		},
 		"extrap_only": {
 			"mode": "extrap"
 		},
 		"no_distillation": {
 			"teacher_ckpt": null
+		},
+		"no_inheritance": {
+			"rife_weights": null
 		}
 	}
 }

@@ -19,6 +19,15 @@
 			"build_min": 30
 		},
 		"p_real": 0.4,
+		"p_video_synth": 0.3,
+		"p_video_real": 0.6,
+		"p_video_mv": 0.15,
+		"p_drop_mv": 0.25,
+		"p_drop_depth": 0.3,
+		"long_every": 4,
+		"long_T": 16,
+		"long_patch": 96,
+		"mv_warmup_frac": 0.25,
 		"lr": 0.002,
 		"lr_teacher": 0.001,
 		"min_lr": 1e-6,
@@ -29,8 +38,9 @@
 		"w_grad": 0.1,
 		"w_fft": 0.05,
 		"w_temporal": 0.5,
+		"w_flow": 0.1,
 		"w_lpips": 0.05,
-		"w_distill": 0.5,
+		"w_distill": 0.0,
 		"val_bs": 8,
 		"val_batches": 4,
 		"val_interval_min": 8,
@@ -72,14 +82,16 @@
 		"no_gbuffers": {
 			"ablate_gbuffers": true
 		},
-		"bicubic_degradation": {
-			"degradation": "bicubic"
+		"no_motion_net": {
+			"motion_net": false,
+			"ablate_gbuffers": true
 		},
-		"no_temporal_loss": {
-			"w_temporal": 0.0
+		"no_video_training": {
+			"p_video_synth": 0.0,
+			"p_video_real": 0.0
 		},
-		"no_distillation": {
-			"teacher_ckpt": null
+		"no_long_unroll": {
+			"long_every": 0
 		}
 	}
 }

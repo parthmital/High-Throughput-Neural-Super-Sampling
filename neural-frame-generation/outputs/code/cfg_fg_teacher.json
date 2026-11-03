@@ -1,16 +1,21 @@
 {
 	"name": "fg_teacher",
 	"tier": "teacher",
-	"patch": 192,
+	"patch": 256,
 	"seed": 21,
-	"batch_per_gpu": 96,
+	"batch_per_gpu": 48,
 	"p_real": 0.4,
-	"p_extrap": 0.5,
+	"p_extrap": 0.4,
+	"p_tau": 0.5,
+	"p_mfg": 0.25,
+	"p_drop_mv": 0.3,
+	"p_drop_mv_real": 0.5,
+	"rife_weights": "/tmp/nss_rife/rife426.pt",
 	"p_ui": 0.5,
 	"p_menu": 0.03,
 	"p_cut": 0.03,
-	"p_flip": 0.1,
-	"lr": 0.001,
+	"p_flip": 0.2,
+	"lr": 0.0001,
 	"min_lr": 1e-6,
 	"warmup_frac": 0.03,
 	"weight_decay": 0.0001,
@@ -33,7 +38,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 5690
+			"count": 6000
 		},
 		"quad": {
 			"arrays": {

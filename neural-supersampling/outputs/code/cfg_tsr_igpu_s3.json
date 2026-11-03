@@ -7,6 +7,17 @@
 	"seed": 11,
 	"batch_per_gpu": 48,
 	"p_real": 0.4,
+	"p_video_synth": 0.3,
+	"p_video_real": 0.6,
+	"p_video_mv": 0.15,
+	"p_drop_mv": 0.25,
+	"p_drop_depth": 0.3,
+	"long_every": 4,
+	"long_T": 16,
+	"long_patch": 96,
+	"mv_warmup_frac": 0.25,
+	"w_flow": 0.1,
+	"rife_weights": "/tmp/nss_rife/rife426.pt",
 	"lr": 0.002,
 	"min_lr": 1e-6,
 	"warmup_frac": 0.03,
@@ -17,8 +28,8 @@
 	"w_fft": 0.05,
 	"w_temporal": 0.5,
 	"w_lpips": 0.05,
-	"w_distill": 0.5,
-	"teacher_ckpt": "/kaggle/working/weights/tsr_teacher_s3_best.pt",
+	"w_distill": 0.0,
+	"teacher_ckpt": null,
 	"teacher_tier": "teacher",
 	"train_seconds": 4500.0,
 	"val_interval_s": 480,
@@ -30,7 +41,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 6500
+			"count": 6191
 		},
 		"seq": {
 			"arrays": {

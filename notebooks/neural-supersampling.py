@@ -15,7 +15,7 @@
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, Hugging Face data in the fallback path, RAFT / AlexNet / DINOv2 weights). Attach the output of the `neural-data-pipeline` notebook (**Add Input > Notebook output**) and the same Kaggle datasets it lists (`soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`). Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget** (enforced; numbers in the configuration cell): caches at most 30 min, teacher 140 min, main student 120 min, parallel `igpu` 3x and `low` 2x students 75 min, three parallel ablation pairs 20 min each, evaluation in both modes and export about 25 min: about 7.4 hours of a 9.5-hour ceiling (the run of 24 October 2026 with the same training budgets took 7.13 hours, 6.4 minutes of it evaluation in one mode). `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
+# **Budget** (enforced; numbers in the configuration cell): the ceiling is Kaggle's 12-hour session limit minus a 72-minute margin (`RUN_BUDGET_H` 10.8). Caches at most 30 min, teacher 170 min, main student 190 min, parallel `igpu` 3x and `low` 2x students 110 min, three parallel ablation pairs 30 min each, evaluation in both modes and export about 25 min: about 10.3 hours. The run of 2 to 3 November 2026 used 140 / 120 / 75 / 20 minutes and took 7.46 hours (21 minutes of test suites and evaluation); the extra time goes to longer training of every model and 50 percent longer ablations. Stage budgets shrink automatically when caches take longer. A full run uses about 10.3 hours of Kaggle's weekly GPU quota. `QUICK_RUN = True` gives a 40-minute smoke test of every cell.
 #
 # **Outputs** in `/kaggle/working/`:
 #
@@ -181,12 +181,12 @@ DEVICES = [torch.device("cuda", i) for i in range(HW["gpus"])]
 # * `p_video_synth` / `p_video_real`: shares of synthetic and real samples turned into plain video (no jitter, depth or motion vectors); `p_video_mv` of those keep estimated motion vectors (as a decoder could supply). `p_drop_mv` / `p_drop_depth`: render samples whose motion vectors or depth are withheld (colour-only game captures).
 # * `long_every`, `long_T`, `long_patch`: every fourth step is a 16-frame synthetic sequence at 96x96, to train the recurrence beyond 6 frames. `mv_warmup_frac`: the share of each run with teacher-forced motion for the estimator (see `train_tsr.py`).
 # * Loss weights: temporal 0.5, LPIPS 0.05, motion estimation 0.1 (per low-resolution pixel of error). Distillation weight 0: in the runs of 20 to 21 and 24 October 2026 distillation gave no measurable gain while the teacher's forward pass cost about 20 percent of the steps, so the students now train without it and the teacher is the quality ceiling.
-# * `minutes` are wall-clock training budgets per stage; they are scaled down automatically if the run budget is short.
+# * `minutes` are wall-clock training budgets per stage, sized so the run fills `RUN_BUDGET_H`; they are scaled down automatically if the run budget is short. Validation curves flatten at the end of each run because the cosine schedule ends there, not because training has converged: the longer budgets of 24 October 2026 raised every model's best validation score (0.04 to 0.11 dB) over the run of 20 to 21 October.
 # * `cache.build_min` is the total decoding budget of all training caches.
 
 # %%
 QUICK_RUN = False
-RUN_BUDGET_H = 9.5
+RUN_BUDGET_H = 10.8  # Kaggle's 12-hour session limit minus a 72-minute margin
 CFG = {
     "seed": 11,
     "scale": 3,
@@ -231,10 +231,10 @@ CFG = {
     "val_batches": 2 if QUICK_RUN else 4,
     "val_interval_min": 8,
     "minutes": {
-        "teacher": 4 if QUICK_RUN else 140,
-        "student": 4 if QUICK_RUN else 120,
-        "pair": 3 if QUICK_RUN else 75,
-        "ablation": 3 if QUICK_RUN else 20,
+        "teacher": 4 if QUICK_RUN else 170,
+        "student": 4 if QUICK_RUN else 190,
+        "pair": 3 if QUICK_RUN else 110,
+        "ablation": 3 if QUICK_RUN else 30,
     },
     "eval": {
         "synthetic_per_class": 2 if QUICK_RUN else 6,
@@ -1432,10 +1432,15 @@ elif len(abl):
 # %% [markdown]
 # ## 26. Latency of fused models
 #
-# Times one fused FP16 step (including warps, jitter-aware upsampling and the final blend) on one T4 with CUDA events after warm-up, batch 1, for 640x360 to 1920x1080 (3x), 960x540 to 1920x1080 (2x) and 1280x720 to 3840x2160 (3x), with the built-in motion estimator running (plain video, `t4_mean_ms`) and with engine motion vectors, where it is skipped (`t4_mean_ms_engine_mv`). The GMAC column counts the estimator. PyTorch eager on a T4 ranks variants; in-engine latency on target GPUs needs the ONNX / DirectML path. The arithmetic estimate column converts multiply-accumulates to milliseconds for an assumed sustained FP16 throughput (a parameter, not a measurement). Expected output: latency table and chart.
+# Times one fused FP16 step (including warps, jitter-aware upsampling and the final blend) on one T4 with CUDA events after warm-up, cuDNN autotuning on, batch 1, for 640x360 to 1920x1080 (3x), 960x540 to 1920x1080 (2x) and 1280x720 to 3840x2160 (3x), with the built-in motion estimator running (plain video, `t4_mean_ms`) and with engine motion vectors, where it is skipped (`t4_mean_ms_engine_mv`). The GMAC column counts the estimator. PyTorch eager on a T4 ranks variants; in-engine latency on target GPUs needs the ONNX / DirectML path. The arithmetic estimate column converts multiply-accumulates to milliseconds for an assumed sustained FP16 throughput (a parameter, not a measurement). Expected output: latency table and chart.
 
 
 # %%
+# cuDNN picks the fastest kernel per shape, as a deployment runtime would; the run of 2 to 3 November 2026 timed with
+# PyTorch's default heuristics
+torch.backends.cudnn.benchmark = True
+
+
 @torch.no_grad()
 def time_step(net, scale, out_hw, iters=100, engine_mv=False):
     """Mean step time; engine_mv False times the plain-video path (built-in motion estimator running)."""

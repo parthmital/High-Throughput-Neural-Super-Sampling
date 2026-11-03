@@ -10,7 +10,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 5690
+			"count": 6000
 		},
 		"quad_val": {
 			"arrays": {
@@ -35,12 +35,12 @@
 			"reds": 5
 		},
 		"train": {
-			"vimeo_septuplet": 5493,
+			"vimeo_septuplet": 5494,
 			"reds": 252,
-			"vimeo1080p": 142,
+			"vimeo1080p": 141,
 			"sintel": 43,
 			"tartanair": 70
 		}
 	},
-	"cache_gb": 10.22
+	"cache_gb": 14.35
 }

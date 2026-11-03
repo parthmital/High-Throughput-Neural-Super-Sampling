@@ -1,13 +1,19 @@
-"""DDP training of the frame generator (interpolation and input-aware extrapolation, UI-aware).
+"""DDP training of the frame generator (interpolation at any in-between time, input-aware extrapolation,
+UI-aware).
+
+The generator's IFNet starts from the pre-trained RIFE 4.26 weights (the high tier loads them whole, smaller
+tiers inherit leading channel slices), so training is fine-tuning: it adds game content, UI handling,
+extrapolation and the use of engine data to a model that already estimates motion from colour alone.
 
 Each step mixes synthetic layered scenes rendered on the GPU (exact intermediate flows, disocclusions, thin
-geometry, particles, HUD / subtitles / menus, scene cuts, rapid camera reversals) with cached real quads of video
-frames (teacher optical flow from RAFT). Availability of engine motion vectors, depth and the camera prior is
-randomly dropped so one model serves engines that provide them and post-process integrations that do not.
+geometry, particles, HUD / subtitles / menus, scene cuts, rapid camera reversals, random in-between times) with
+cached real quads of video frames (teacher optical flow from RAFT; some samples are 3x multi-frame generation
+from frames k and k+3). Availability of engine motion vectors, depth and the camera prior is randomly dropped,
+also on real video, so one model serves engines that provide them and plain video that does not.
 
-Loss: Charbonnier + census + LPIPS on the generated frame, flow supervision (exact flows for synthetic data,
-RAFT flows for video), binary cross-entropy on the UI / static-overlay mask, and distillation of flows and output
-toward a privileged teacher (which sees the true target frame) when one is given."""
+Loss: Charbonnier + census + LPIPS on the generated frame, flow supervision (exact flows for synthetic data, RAFT
+flows for video at a quarter weight), binary cross-entropy on the UI / static-overlay mask, and distillation of
+flows and output toward a larger fine-tuned generator when one is given."""
 
 import argparse
 import json
@@ -20,7 +26,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nss_metrics import census_loss, charbonnier, load_lpips, psnr  # noqa: E402
-from nss_models import build_fg  # noqa: E402
+from nss_models import build_fg, load_ifnet_weights  # noqa: E402
 from nss_synth import fg_batch, fg_batch_from_frames, make_text_bank  # noqa: E402
 from nss_train import emit, make_loader, setup_ddp, train_loop  # noqa: E402
 
@@ -44,30 +50,42 @@ KEYS = [
     "menu",
     "ui_mask",
 ]
+RAFT_FLOW_WEIGHT = (
+    0.25  # RAFT labels on video are less reliable than the renderer's exact flows
+)
 
 
-def set_availability(b, synthetic, g, drop_mv=0.2, drop_depth=0.3, ablate_prior=False):
-    """Which auxiliary inputs the generator may use. Synthetic data has exact motion, depth and camera; they are
-    randomly dropped so the model also works without them. Video data has only estimated motion vectors.
-    """
+def set_availability(b, synthetic, g, drop_mv, drop_depth=0.3, ablate_prior=False):
+    """Which auxiliary inputs the generator may use. Synthetic data has exact motion, depth and camera; video
+    has only estimated motion vectors. Each is withheld at random (drop_mv for motion vectors) so the model
+    also works without them."""
     n, dev = b["i0"].shape[0], b["i0"].device
+    keep_mv = (torch.rand(n, device=dev, generator=g) >= drop_mv).float()
     if synthetic:
-        b["mv_avail"] = (torch.rand(n, device=dev, generator=g) >= drop_mv).float()
+        b["mv_avail"] = keep_mv
         b["depth_avail"] = (
             torch.rand(n, device=dev, generator=g) >= drop_depth
         ).float()
         b["cam_avail"] = (
             b["extrap"] * (torch.rand(n, device=dev, generator=g) >= 0.2).float()
         )
+        b["flow_w"] = torch.ones(n, device=dev)
     else:
-        b["mv_avail"] = (b["mv1_valid"].flatten(1).amax(1) > 0).float()
+        b["mv_avail"] = (b["mv1_valid"].flatten(1).amax(1) > 0).float() * keep_mv
         b["depth_avail"] = torch.zeros(n, device=dev)
         b["cam_avail"] = torch.zeros(n, device=dev)
+        b["flow_w"] = torch.full((n,), RAFT_FLOW_WEIGHT, device=dev)
     if ablate_prior:
         b["mv_avail"], b["cam_avail"] = torch.zeros(n, device=dev), torch.zeros(
             n, device=dev
         )
     return b
+
+
+def plain(b):
+    """The same batch without any engine data (ordinary video)."""
+    z = torch.zeros_like(b["mv_avail"])
+    return dict(b, mv_avail=z, depth_avail=z, cam_avail=z)
 
 
 def main():
@@ -79,7 +97,14 @@ def main():
     gen = torch.Generator(device=device)
     gen.manual_seed(cfg["seed"] * 100 + rank)
     P = cfg["patch"]
-    model = build_fg(cfg["tier"]).to(device)
+    log = lambda m: emit("LOG", {"msg": m}) if rank == 0 else None  # noqa: E731
+    model = build_fg(cfg["tier"])
+    if cfg.get("rife_weights"):
+        rep = load_ifnet_weights(
+            model.ifnet, torch.load(cfg["rife_weights"], weights_only=True)
+        )
+        log(f"IFNet initialised from RIFE 4.26: {rep}")
+    model = model.to(device)
     teacher = None
     if cfg.get("teacher_ckpt"):
         teacher = build_fg("teacher").to(device)
@@ -87,11 +112,7 @@ def main():
             torch.load(cfg["teacher_ckpt"], map_location=device)["ema"]
         )
         teacher.eval().requires_grad_(False)
-    lpips_fn = (
-        load_lpips(device, log=lambda m: emit("LOG", {"msg": m}))
-        if cfg["w_lpips"] > 0
-        else None
-    )
+    lpips_fn = load_lpips(device, log=log) if cfg["w_lpips"] > 0 else None
     tiles = None
     if cfg.get("ui_training", True):
         tiles = (
@@ -107,6 +128,7 @@ def main():
         caches, sizes, cfg["seed"] * 1000 + rank * 10**7, cfg["workers_per_rank"]
     )
     mode_p = {"interp": 0.0, "extrap": 1.0}.get(cfg.get("mode"), cfg["p_extrap"])
+    ablate = cfg.get("ablate_prior", False)
 
     def make_batch(raw, g):
         parts = []
@@ -121,13 +143,15 @@ def main():
                 p_cut=cfg["p_cut"],
                 p_menu=cfg["p_menu"],
                 p_flip=cfg["p_flip"],
+                p_tau=cfg["p_tau"],
             )
             parts.append(
                 set_availability(
                     {k: b[k] for k in KEYS},
                     True,
                     g,
-                    ablate_prior=cfg.get("ablate_prior", False),
+                    cfg["p_drop_mv"],
+                    ablate_prior=ablate,
                 )
             )
         if "quad/rgb" in raw and raw["quad/rgb"].shape[0] > 0:
@@ -139,13 +163,15 @@ def main():
                 tiles=tiles,
                 p_extrap=mode_p,
                 p_ui=cfg["p_ui"],
+                p_mfg=cfg["p_mfg"],
             )
             parts.append(
                 set_availability(
                     {k: b[k] for k in KEYS},
                     False,
                     g,
-                    ablate_prior=cfg.get("ablate_prior", False),
+                    cfg["p_drop_mv_real"],
+                    ablate_prior=ablate,
                 )
             )
         return {k: torch.cat([p[k] for p in parts], 0) for k in parts[0]}
@@ -159,9 +185,11 @@ def main():
             if lpips_fn is not None
             else out.new_zeros(())
         )
-        l_flow = ((aux["flow0"] - b["flow_t0"]).abs() * b["valid_t0"]).sum() / (
+        fw = b["flow_w"].view(-1, 1, 1, 1)
+        v0, v1 = b["valid_t0"] * fw, b["valid_t1"] * fw
+        l_flow = ((aux["flow0"] - b["flow_t0"]).abs() * v0).sum() / (
             b["valid_t0"].sum() * 2 + 1
-        ) + ((aux["flow1"] - b["flow_t1"]).abs() * b["valid_t1"]).sum() / (
+        ) + ((aux["flow1"] - b["flow_t1"]).abs() * v1).sum() / (
             b["valid_t1"].sum() * 2 + 1
         )
         ui_t = (b["ui_mask"] > 0.5).float()
@@ -236,29 +264,45 @@ def main():
 
     @torch.no_grad()
     def val_fn(ema_model):
-        rows = {"psnr": [], "psnr_interp": [], "psnr_extrap": [], "psnr_ui": []}
+        """psnr_engine: engine data as drawn for the batch; psnr_plain: the same samples without any engine
+        data; psnr (the selection metric) is their mean."""
+        rows = {
+            k: []
+            for k in (
+                "psnr_engine",
+                "psnr_plain",
+                "psnr_interp",
+                "psnr_extrap",
+                "psnr_ui",
+            )
+        }
         for vb in val_batches:
             b = {k: v.to(device) for k, v in vb.items()}
-            with torch.autocast("cuda", dtype=torch.float16):
-                out = ema_model(b)[0].float().clamp(0, 1)
-            p = psnr(out, b["target"])
-            rows["psnr"].append(p)
-            rows["psnr_interp"].append(p[b["extrap"] < 0.5])
-            rows["psnr_extrap"].append(p[b["extrap"] > 0.5])
-            has_ui = b["ui_mask"].flatten(1).amax(1) > 0.5
-            if has_ui.any():
-                rows["psnr_ui"].append(
-                    psnr(
-                        out[has_ui],
-                        b["target"][has_ui],
-                        mask=(b["ui_mask"][has_ui] > 0.5),
+            for key, bb in (("psnr_engine", b), ("psnr_plain", plain(b))):
+                with torch.autocast("cuda", dtype=torch.float16):
+                    out = ema_model(bb)[0].float().clamp(0, 1)
+                p = psnr(out, b["target"])
+                rows[key].append(p)
+                if key == "psnr_plain":
+                    continue
+                rows["psnr_interp"].append(p[b["extrap"] < 0.5])
+                rows["psnr_extrap"].append(p[b["extrap"] > 0.5])
+                has_ui = b["ui_mask"].flatten(1).amax(1) > 0.5
+                if has_ui.any():
+                    rows["psnr_ui"].append(
+                        psnr(
+                            out[has_ui],
+                            b["target"][has_ui],
+                            mask=(b["ui_mask"][has_ui] > 0.5),
+                        )
                     )
-                )
-        return {
+        res = {
             k: torch.cat(v).mean().item()
             for k, v in rows.items()
             if v and torch.cat(v).numel()
         }
+        res["psnr"] = 0.5 * (res["psnr_engine"] + res["psnr_plain"])
+        return res
 
     train_loop(cfg, model, step_fn, val_fn, rank, world, device, loader)
     if world > 1:

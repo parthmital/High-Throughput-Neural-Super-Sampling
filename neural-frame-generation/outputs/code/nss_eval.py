@@ -136,10 +136,33 @@ def test_clips(
     return out
 
 
-def sr_inputs(clip, scale, device, raft=None, jitter=True, native=False, phases=16):
+def sr_inputs(
+    clip, scale, device, raft=None, jitter=True, native=False, phases=16, plain=False
+):
     """Batch (N = 1) for the TSR network from a clip: jittered single-sample low-resolution frames (or the
     native low-resolution render), motion vectors (exact, or RAFT on consecutive full-resolution frames),
-    validity, depth, full-resolution targets."""
+    validity, depth, full-resolution targets. plain: the clip as ordinary video instead (as_plain_video): the
+    exact or RAFT motion is then kept as a metric label only."""
+    b = _sr_inputs(clip, scale, device, raft, jitter, native, phases)
+    return as_plain_video(b, scale) if plain else b
+
+
+def as_plain_video(b, scale):
+    """The batch as ordinary video, the standard bicubic (BI) degradation of video super-resolution: an
+    anti-aliased bicubic downscale of the targets, no jitter and no depth, motion vectors or reactive mask
+    (the network's built-in estimator must supply motion); kind = 0. Motion labels stay for the metrics.
+    """
+    b = dict(b)
+    b["lr"] = S.video_lr(b["hr"], scale, None, blur=False, noise=False)
+    for k in ("mv_lr", "valid_lr", "depth_lr", "reactive_lr", "jitter"):
+        b[k] = torch.zeros_like(b[k])
+    n = b["lr"].shape[0]
+    z = torch.zeros(n, device=b["lr"].device)
+    b["mv_quality"], b["has_depth"], b["kind"] = z, z, z
+    return b
+
+
+def _sr_inputs(clip, scale, device, raft, jitter, native, phases):
     hr = (
         torch.from_numpy(clip["rgb"]).to(device).permute(0, 3, 1, 2).float()[None]
         / 255.0
@@ -242,6 +265,8 @@ def sr_inputs(clip, scale, device, raft=None, jitter=True, native=False, phases=
         "exposure": torch.zeros(1, T, device=device),
         "has_depth": torch.tensor([1.0 if "depth" in clip else 0.0], device=device),
         "mv_quality": torch.tensor([quality], device=device),
+        "label_quality": torch.tensor([quality], device=device),
+        "kind": torch.ones(1, device=device),
         "speed_class": torch.full((1,), -1, device=device),
     }
 
@@ -274,6 +299,7 @@ def frame_inputs(b, t):
         "jitter": b["jitter"][:, t],
         "has_depth": b["has_depth"],
         "mv_quality": b["mv_quality"],
+        "kind": b["kind"],
     }
 
 
@@ -359,7 +385,10 @@ def sr_frame_metrics(
     hr = b["hr"]
     n, T = out.shape[:2]
     rows = []
-    exact = b["mv_quality"] >= 1.0
+    label_q = b.get(
+        "label_quality", b["mv_quality"]
+    )  # quality of the motion labels, not of the input
+    exact = label_q >= 1.0
     for t in range(skip_first, T):
         o, g = out[:, t], hr[:, t]
         yo, yg = M.rgb_to_y(o), M.rgb_to_y(g)
@@ -400,9 +429,7 @@ def sr_frame_metrics(
                     "lpips": None if lp is None else lp[i].item(),
                     "warp_err": None if (we is None or not exact[i]) else we[i].item(),
                     "temporal_err": (
-                        None
-                        if (tce is None or b["mv_quality"][i] <= 0)
-                        else tce[i].item()
+                        None if (tce is None or label_q[i] <= 0) else tce[i].item()
                     ),
                     "tof": None if tof is None else tof[i].item(),
                     "mv_px": mv_px[i].item(),
@@ -452,6 +479,22 @@ def fg_suite(
     b["depth_avail"] = torch.ones(n, device=device)
     b["cam_avail"] = b["extrap"].clone()
     return b
+
+
+def without_engine(b):
+    """The batch with no engine data (motion vectors, depth, camera): frame generation on ordinary video."""
+    z = torch.zeros_like(b["mv_avail"])
+    return dict(b, mv_avail=z, depth_avail=z, cam_avail=z)
+
+
+@torch.no_grad()
+def run_rife(net, b):
+    """Reference: pre-trained RIFE 4.26 unchanged (a high-tier FGNet holding only the RIFE weights), from the
+    two frames alone; its blend without the residual and UI head is RIFE's own output.
+    """
+    with torch.autocast("cuda", dtype=torch.float16):
+        aux = net(without_engine(b))[1]
+    return aux["merged"].float().clamp(0, 1)
 
 
 @torch.no_grad()
