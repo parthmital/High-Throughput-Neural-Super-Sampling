@@ -568,12 +568,26 @@ def fg_metrics(out, b, lpips_fn=None):
 
 @torch.no_grad()
 def cut_score(i0, i1, mv1=None):
-    """Scene-cut score: luma-histogram distance plus motion-compensated difference (higher = more likely a cut)."""
+    """Scene-cut score (higher = more likely a cut): the half-L1 distance of the 32-bin luma histograms, plus,
+    when the motion vector of I1 is given, twice the mean motion-compensated difference. Without motion vectors
+    the score is the histogram distance alone, which ordinary motion barely changes; a raw frame difference
+    would read fast motion as a cut (in the run of 2 to 3 November 2026 it gated 35 to 100 percent of the real
+    test samples without engine data, all of them free of cuts)."""
     y0, y1 = M.rgb_to_y(i0), M.rgb_to_y(i1)
     h0 = torch.stack([torch.histc(y, bins=32, min=0, max=1) for y in y0.flatten(1)])
     h1 = torch.stack([torch.histc(y, bins=32, min=0, max=1) for y in y1.flatten(1)])
     h0, h1 = h0 / h0.sum(1, keepdim=True), h1 / h1.sum(1, keepdim=True)
     hist = 0.5 * (h0 - h1).abs().sum(1)
-    w = backward_warp(i0, mv1) if mv1 is not None else i0
-    diff = (i1 - w).abs().mean(dim=(1, 2, 3))
-    return hist + 2.0 * diff
+    if mv1 is None:
+        return hist
+    return hist + 2.0 * (i1 - backward_warp(i0, mv1)).abs().mean(dim=(1, 2, 3))
+
+
+@torch.no_grad()
+def cut_gate(b, thr, thr_plain):
+    """Per sample, True where generation is skipped (the newest real frame is shown): the motion-compensated
+    score against thr where the motion vector of I1 is available, the histogram distance against thr_plain
+    elsewhere."""
+    with_mv = cut_score(b["i0"], b["i1"], b["mv1"]) > thr
+    without = cut_score(b["i0"], b["i1"]) > thr_plain
+    return torch.where(b["mv_avail"] > 0.5, with_mv, without)

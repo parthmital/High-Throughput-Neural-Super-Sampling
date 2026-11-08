@@ -10,7 +10,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 6000
+			"count": 5940
 		},
 		"quad_val": {
 			"arrays": {
@@ -26,7 +26,7 @@
 				"flows": "/tmp/nss_cache/quad_train_flows.npy",
 				"meta": "/tmp/nss_cache/quad_train_meta.npy"
 			},
-			"count": 6000
+			"count": 3805
 		}
 	},
 	"quad_sources": {
@@ -35,11 +35,11 @@
 			"reds": 5
 		},
 		"train": {
-			"vimeo_septuplet": 5494,
-			"reds": 252,
-			"vimeo1080p": 141,
-			"sintel": 43,
-			"tartanair": 70
+			"vimeo_septuplet": 3483,
+			"reds": 158,
+			"vimeo1080p": 91,
+			"sintel": 28,
+			"tartanair": 45
 		}
 	},
 	"cache_gb": 14.35

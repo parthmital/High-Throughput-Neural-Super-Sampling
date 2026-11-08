@@ -1,34 +1,34 @@
-20:41:05 | start: manifest
-20:41:09 | done: manifest in 0.1 min (run total 0.01 h)
-20:41:09 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
-20:41:09 | start: caches
-20:41:47 | still_val.npy: 256 crops (0 decode failures)
-20:48:41 | still_train.npy: 6191 crops (4 decode failures)
-20:49:38 | win_val: 192 windows (0 failures)
-21:05:41 | win_train: 3600 windows (0 failures)
-21:07:19 | done: caches in 26.2 min (run total 0.44 h)
-21:07:28 | RIFE 4.26 into the low tier's motion estimator: {'exact': 11, 'sliced': 42, 'missing': 0}
-21:07:31 | start: batch_probe
-21:08:06 | done: batch_probe in 0.6 min (run total 0.46 h)
-21:08:06 | start: train_teacher
-23:28:35 | done: train_teacher in 140.5 min (run total 2.80 h)
-23:28:35 | start: train_student
-01:28:53 | done: train_student in 120.3 min (run total 4.80 h)
-01:28:53 | start: train_pair
-02:44:13 | done: train_pair in 75.3 min (run total 6.06 h)
-02:44:13 | start: ablations
-03:44:58 | done: ablations in 60.7 min (run total 7.07 h)
-03:45:02 | start: test_suites
-03:47:00 | vimeo1080p vimeo1080p/SK_000/c5b4b1f0c0: skipped (blank)
-03:47:05 | vimeo1080p vimeo1080p/723 Palisades Beach Rd. - Santa Monica_000/b013664eae: skipped (blank)
-03:47:31 | done: test_suites in 2.5 min (run total 7.11 h)
-03:47:32 | start: evaluation
-03:48:21 | synthetic static done
-03:49:11 | synthetic slow done
-03:50:02 | synthetic medium done
-03:50:52 | synthetic fast done
-03:53:35 | tartanair done
-03:57:34 | sintel done
-03:59:37 | vid4 done
-04:05:38 | vimeo1080p done
-04:06:02 | done: evaluation in 18.5 min (run total 7.42 h)
+17:48:36 | start: manifest
+17:48:43 | done: manifest in 0.1 min (run total 0.01 h)
+17:48:43 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
+17:48:44 | start: caches
+17:49:16 | still_val.npy: 256 crops (0 decode failures)
+17:56:12 | still_train.npy: 6500 crops (4 decode failures)
+17:56:44 | win_val: 192 windows (0 failures)
+18:06:57 | win_train: 3600 windows (0 failures)
+18:08:42 | done: caches in 20.0 min (run total 0.34 h)
+18:08:51 | RIFE 4.26 into the low tier's motion estimator: {'exact': 11, 'sliced': 42, 'missing': 0}
+18:08:54 | start: batch_probe
+18:09:30 | done: batch_probe in 0.6 min (run total 0.35 h)
+18:09:31 | start: train_teacher
+21:00:01 | done: train_teacher in 170.5 min (run total 3.20 h)
+21:00:02 | start: train_student
+00:10:20 | done: train_student in 190.3 min (run total 6.37 h)
+00:10:20 | start: train_pair
+02:00:38 | done: train_pair in 110.3 min (run total 8.21 h)
+02:00:38 | start: ablations
+03:31:31 | done: ablations in 90.9 min (run total 9.72 h)
+03:31:35 | start: test_suites
+03:33:42 | vimeo1080p vimeo1080p/SK_000/c5b4b1f0c0: skipped (blank)
+03:33:48 | vimeo1080p vimeo1080p/723 Palisades Beach Rd. - Santa Monica_000/b013664eae: skipped (blank)
+03:34:16 | done: test_suites in 2.7 min (run total 9.77 h)
+03:34:16 | start: evaluation
+03:35:09 | synthetic static done
+03:36:01 | synthetic slow done
+03:36:54 | synthetic medium done
+03:37:46 | synthetic fast done
+03:40:35 | tartanair done
+03:44:44 | sintel done
+03:46:50 | vid4 done
+03:53:05 | vimeo1080p done
+03:53:28 | done: evaluation in 19.2 min (run total 10.09 h)

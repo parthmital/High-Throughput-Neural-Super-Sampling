@@ -1,6 +1,6 @@
 {
 	"quick_run": false,
-	"budget_h": 9.5,
+	"budget_h": 10.8,
 	"cfg": {
 		"seed": 11,
 		"scale": 3,
@@ -45,10 +45,10 @@
 		"val_batches": 4,
 		"val_interval_min": 8,
 		"minutes": {
-			"teacher": 140,
-			"student": 120,
-			"pair": 75,
-			"ablation": 20
+			"teacher": 170,
+			"student": 190,
+			"pair": 110,
+			"ablation": 30
 		},
 		"eval": {
 			"synthetic_per_class": 6,

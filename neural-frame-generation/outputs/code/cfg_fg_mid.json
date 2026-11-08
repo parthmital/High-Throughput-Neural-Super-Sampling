@@ -3,7 +3,7 @@
 	"tier": "mid",
 	"patch": 256,
 	"seed": 21,
-	"batch_per_gpu": 32,
+	"batch_per_gpu": 24,
 	"p_real": 0.4,
 	"p_extrap": 0.4,
 	"p_tau": 0.5,
@@ -28,7 +28,7 @@
 	"w_distill": 0.5,
 	"teacher_ckpt": "/kaggle/working/weights/fg_teacher_best.pt",
 	"ui_training": true,
-	"train_seconds": 4500.0,
+	"train_seconds": 7137.000008021083,
 	"val_interval_s": 480,
 	"progress_interval_s": 15,
 	"sync_every": 10,
@@ -38,7 +38,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 6000
+			"count": 5940
 		},
 		"quad": {
 			"arrays": {
@@ -46,7 +46,7 @@
 				"flows": "/tmp/nss_cache/quad_train_flows.npy",
 				"meta": "/tmp/nss_cache/quad_train_meta.npy"
 			},
-			"count": 6000
+			"count": 3805
 		}
 	},
 	"val_caches": {

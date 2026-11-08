@@ -1,6 +1,6 @@
 {
 	"quick_run": false,
-	"budget_h": 9.5,
+	"budget_h": 10.8,
 	"cfg": {
 		"seed": 21,
 		"patch": 256,
@@ -41,14 +41,15 @@
 		"val_batches": 4,
 		"val_interval_min": 8,
 		"minutes": {
-			"teacher": 100,
-			"student": 120,
-			"pair": 75,
-			"ablation": 20
+			"teacher": 150,
+			"student": 200,
+			"pair": 120,
+			"ablation": 30
 		},
 		"eval": {
 			"synthetic_per_suite": 48,
 			"real_clips": 12,
+			"native_clips": 6,
 			"eval_reserve_h": 1.0
 		},
 		"pipeline": {

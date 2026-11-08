@@ -651,28 +651,32 @@ def tsr_macs_per_lr_pixel(model, sample_hw=(64, 64)):
 # Frame generation
 # ---------------------------------------------------------------------------------------------------------------
 # widths / n_res: the IFNet flow blocks (the high tier is RIFE 4.26's network); refine: width of the half-resolution
-# head that predicts the residual and the UI mask; flow_scale: resolution of the flow estimation relative to the
-# frame (RIFE's scale argument; 0.5 halves every level, about a quarter of the flow cost).
+# head that predicts the residual and the UI mask; flow_lines: the most image lines the flow estimation runs at.
+# Taller frames are halved until they fit (RIFE's scale argument, chosen per resolution as RIFE recommends; 0.5
+# is about a quarter of the flow cost), so a 1080p frame runs the igpu and low tiers' flow at 540 lines, while
+# 256-pixel training crops and video up to 576 lines keep full resolution. The run of 2 to 3 November 2026 used a fixed
+# scale of 0.5 for igpu and low, so they trained with flow at 128 pixels and ended no better than frame
+# averaging on Middlebury (28.4 dB against 28.0; mid 33.7, high 34.3).
 FG_TIERS = {
     "igpu": {
         "widths": (64, 48, 32, 24, 16),
         "n_res": 3,
         "refine": 12,
-        "flow_scale": 0.5,
+        "flow_lines": 576,
     },
     "low": {
         "widths": (96, 64, 48, 32, 16),
         "n_res": 4,
         "refine": 16,
-        "flow_scale": 0.5,
+        "flow_lines": 576,
     },
     "mid": {
         "widths": (128, 96, 64, 48, 24),
         "n_res": 6,
         "refine": 24,
-        "flow_scale": 1.0,
+        "flow_lines": 1152,
     },
-    "high": {"widths": RIFE_WIDTHS, "n_res": 8, "refine": 32, "flow_scale": 1.0},
+    "high": {"widths": RIFE_WIDTHS, "n_res": 8, "refine": 32, "flow_lines": 1152},
 }
 FG_TIERS["teacher"] = FG_TIERS[
     "high"
@@ -711,12 +715,19 @@ class FGNet(nn.Module):
     so HUD, subtitles and menus are taken from the newest real frame instead of being interpolated.
     """
 
-    def __init__(self, widths, n_res, refine, flow_scale=1.0):
+    def __init__(self, widths, n_res, refine, flow_lines=1152):
         super().__init__()
-        self.flow_scale = flow_scale
+        self.flow_lines = flow_lines
         self.scales = RIFE_SCALES[-len(widths) :]
         self.ifnet = IFNet(widths, n_res, n_hint=FG_HINT, n_hint_flow=FG_HINT_FLOW)
         self.refine = FGRefine(refine)
+
+    def flow_scale(self, height):
+        """Resolution of the flow estimation relative to a frame of the given height: 1, 1/2, 1/4, ..."""
+        s = 1.0
+        while height * s > self.flow_lines:
+            s *= 0.5
+        return s
 
     @staticmethod
     def priors(f):
@@ -745,7 +756,7 @@ class FGNet(nn.Module):
 
     def forward(self, f):
         i0, i1 = f["i0"], f["i1"]
-        s = self.flow_scale
+        s = self.flow_scale(i0.shape[-2])
         mult = int(4 * self.scales[0] / s)
         i0p, (H0, W0) = pad_to(i0, mult)
         i1p = pad_to(i1, mult)[0]

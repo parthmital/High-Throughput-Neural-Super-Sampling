@@ -1,5 +1,7 @@
 {
-	"threshold": 0.12235647439956665,
+	"threshold": 0.1417369842529297,
 	"detection_rate": 1.0,
+	"threshold_plain": 0.043121337890625,
+	"detection_rate_plain": 1.0,
 	"false_alarm_target": 0.01
 }

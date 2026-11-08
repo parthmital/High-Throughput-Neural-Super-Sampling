@@ -5,7 +5,7 @@ NeuralSS is a research project for open, hardware-agnostic neural reconstruction
 - **Temporal super-resolution (TSR):** a small recurrent network that turns low-resolution frames (3x and 2x, for example 640x360 to 1920x1080) into full-resolution frames, using its own history. It takes jittered game renders with motion vectors and depth, or ordinary video with no side information, in which case a built-in motion estimator supplies the motion.
 - **Frame generation (FG):** a network that creates in-between frames at any time (interpolation, so 2x to 6x frame generation) or a future frame (extrapolation) from two real frames. It estimates motion from the colour frames alone (an IFNet with the design and pre-trained weights of RIFE 4.26) and uses engine motion vectors, depth and camera input when they exist. It copies HUD and subtitles from the newest real frame instead of blending them, and skips generation on scene cuts.
 
-Both networks use only convolutions, transposed convolutions, resizing and grid sampling, and export to ONNX. Everything is trained and evaluated in three Kaggle notebooks (GPU T4 x2) built from one shared Python library. All three notebooks have run on Kaggle, and their downloaded outputs (metrics, plots, logs, weights) are in this repository. The two training notebooks were then changed on 3 November 2026 to fix what those runs revealed; that version has not run on Kaggle yet (see [Project status](#project-status)).
+Both networks use only convolutions, transposed convolutions, resizing and grid sampling, and export to ONNX. Everything is trained and evaluated in three Kaggle notebooks (GPU T4 x2) built from one shared Python library. All three notebooks have run on Kaggle, and their downloaded outputs (metrics, plots, logs, weights) are in this repository. The two training notebooks were changed on 3 November 2026 to fix what the runs of 2 to 3 November revealed, and the changed versions ran on Kaggle on 3 to 4 November 2026 (temporal super-resolution) and 8 November 2026 (frame generation) (see [Project status](#project-status)).
 
 The full research plan, design rationale, competitive analysis and dataset licences are in [RESEARCH.md](RESEARCH.md). This README covers how the repository works, how to run it, and what each notebook produced.
 
@@ -33,7 +33,7 @@ The notebooks run on Kaggle, not locally. Training and evaluation need two GPUs 
 1. **Create the data-pipeline notebook on Kaggle.** Upload [neural-data-pipeline/neural-data-pipeline.ipynb](neural-data-pipeline/neural-data-pipeline.ipynb). In the notebook settings choose **Accelerator: GPU T4 x2** and turn **Internet on**. Attach these Kaggle datasets (**Add Input**): `soumikrakshit/div2k-high-resolution-images`, `daehoyang/flickr2k`, `amithkesavmrajagiri/reds-dataset`, `wangsally/vimeo-90k-7`, `chenshu123/vimeo-triplet`, `artemmmtry/mpi-sintel-dataset`, `uom200647r/vid4-dataset`. An optional Kaggle secret `HF_TOKEN` raises Hugging Face download limits.
 2. **Run it** with **Save Version > Save & Run All**. Expected result: about 0.6 hours; the output contains `nss_data/nss_manifest.parquet` and `outputs.zip`.
 3. **Create the two training notebooks** from [neural-supersampling/neural-supersampling.ipynb](neural-supersampling/neural-supersampling.ipynb) and [neural-frame-generation/neural-frame-generation.ipynb](neural-frame-generation/neural-frame-generation.ipynb) with the same accelerator, Internet and datasets, and also attach the pipeline notebook's output (**Add Input > Notebook output**).
-4. **Run each one** with **Save & Run All**. Expected result: about 10.3 hours each, within the notebooks' 10.8-hour ceiling (Kaggle's 12-hour session limit minus a 72-minute margin); `outputs.zip` and every file appear in the notebook's **Output** tab. This is an estimate: the runs of 2 to 3 November 2026 took 7.46 and 6.59 hours with shorter training budgets, and the current notebooks add 2.75 and 3.4 hours of training. Together the two runs use about 21 hours of Kaggle's weekly GPU quota (about 30 hours). Both notebooks download the RIFE 4.26 weights (23 MB) from `huggingface.co/hzwer/RIFE`, so Internet must be on.
+4. **Run each one** with **Save & Run All**. Expected result: about 10 hours each, within the notebooks' 10.8-hour ceiling (Kaggle's 12-hour session limit minus a 72-minute margin); `outputs.zip` and every file appear in the notebook's **Output** tab. The runs of 3 to 4 November 2026 (temporal super-resolution) and 8 November 2026 (frame generation) took 10.13 and 10.07 hours. Together the two runs use about 20 hours of Kaggle's weekly GPU quota (about 30 hours). Both notebooks download the RIFE 4.26 weights (23 MB) from `huggingface.co/hzwer/RIFE`, so Internet must be on.
 5. **Optional smoke test:** set `QUICK_RUN = True` in the configuration cell for a short run of every cell (about 40 minutes).
 
 Common errors:
@@ -48,28 +48,22 @@ Common errors:
 
 ## Project status
 
-| Notebook                  | Kaggle run           | Duration | Result                                                                                                                                                                                                                |
-| :------------------------ | :------------------- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `neural-data-pipeline`    | 18 October 2026      | 0.63 h   | 12,300 items split into 8,874 train, 1,087 val and 1,432 test with zero cross-split duplicates                                                                                                                        |
-| `neural-supersampling`    | 2 to 3 November 2026 | 7.46 h   | On ordinary video (no motion vectors) the 3x student beats bicubic on all five suites by 1.2 to 2.1 dB PSNR-Y; with engine data it beats every baseline; static scenes now converge (35.63 dB at frame 16, was 33.97) |
-| `neural-frame-generation` | 2 to 3 November 2026 | 6.59 h   | The fine-tuned `high` tier beats unchanged RIFE 4.26; the `low` and `igpu` students do not work on ordinary video; plain-video scores are distorted by a cut-detector defect (fixed since, see below)                 |
+| Notebook                  | Kaggle run           | Duration | Result                                                                                                                                                                                                                                       |
+| :------------------------ | :------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `neural-data-pipeline`    | 18 October 2026      | 0.63 h   | 12,300 items split into 8,874 train, 1,087 val and 1,432 test with zero cross-split duplicates                                                                                                                                               |
+| `neural-supersampling`    | 3 to 4 November 2026 | 10.13 h  | On ordinary video the 3x student beats bicubic on all five suites by 1.2 to 2.2 dB PSNR-Y; with engine data it beats analytic TAAU by 2.8 to 4.9 dB with lower temporal-change error on all five; within 0.3 dB of the previous, shorter run |
+| `neural-frame-generation` | 8 November 2026      | 10.07 h  | The fine-tuned `high` tier beats unchanged RIFE 4.26; the `low` tier gained 3.4 dB on Middlebury but is still 1.8 dB below RIFE; the plain-video cut gate still false-alarms on 3x multi-frame samples; latency unchanged                    |
 
-Both training runs started at about 20:41 UTC on 2 November 2026 (Kaggle clock, from the notebook logs and saved notebook metadata) and ended at about 04:08 UTC on 3 November. No training run failed in either notebook (`metrics/failed_runs.json` is empty). Image: Python 3.13.16, PyTorch 2.11.0 with CUDA 13.0, 2 Tesla T4, 4 CPU cores, 31.3 GB RAM.
+The TSR run started at 17:48 UTC on 3 November 2026 and ended at 03:56 UTC on 4 November. The FG run started at 02:30 UTC on 8 November 2026 and ended at 12:34 UTC (Kaggle clock, from the saved notebook metadata). No training run failed in either notebook (`metrics/failed_runs.json` is empty). Image: Python 3.13.16, PyTorch 2.11.0 with CUDA 13.0, 2 Tesla T4, 4 CPU cores, 31.3 GB RAM.
 
-**What these runs measured.** They are the first runs of the redesign of 3 November 2026 ([RESEARCH.md section 21](RESEARCH.md#21-redesign-for-plain-video-and-dlss-4-class-quality-3-november-2026)): a built-in motion estimator in TSR, plain-video training and evaluation in both notebooks, 16-frame TSR unrolls, an FG rebuilt around RIFE 4.26's IFNet with its pre-trained weights, and RIFE 4.26 unchanged as an FG reference. The notebooks that ran are the versions of commit `a7fb282`; their exact library code is in each `outputs/code/` folder, and the executed notebooks with every output are kept at [neural-supersampling/outputs/neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb) and [neural-frame-generation/outputs/neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb).
+**What these runs measured.** They measure the changes made on 3 November 2026 after the first runs of the redesign ([RESEARCH.md section 22](RESEARCH.md#22-analysis-of-the-runs-of-2-to-3-november-2026-and-changes)): a histogram-only cut detector for plain video, FG flow resolution chosen per frame height so `igpu` and `low` train at full flow resolution, a native-1080p FG suite, cuDNN autotuning for latency, and training budgets that fill the 12-hour session. The notebooks that ran are the versions of commit `6f5c49b`, unchanged (since then only the FG results plot hides its empty multi-frame engine panel and tilts its suite labels); their exact library code is in each `outputs/code/` folder, and the executed notebooks with every output are kept at [neural-supersampling/outputs/neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb) and [neural-frame-generation/outputs/neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb). The analysis is in [RESEARCH.md section 23](RESEARCH.md#23-analysis-of-the-runs-of-3-to-4-and-8-november-2026-and-progress).
 
-- **TSR works on ordinary video.** In plain mode (bicubic downscale, no jitter, depth or motion vectors) the 3x student leads bicubic by 2.10 dB on synthetic game scenes, 1.63 on TartanAir, 1.20 on Sintel, 1.75 on Vid4 and 1.17 on Vimeo-1080p, and wins 27 of 28 real clips. The 16-frame unrolls removed the late static-scene decline: the ablation without them falls from 31.6 dB at frame 4 to 29.6 dB at frame 15, while the student holds 35.6 dB.
-- **FG: RIFE fine-tuning helps, the small tiers fail.** Measured after the run on the independent Middlebury interpolation set (12 sequences, colour only, CPU; `.agent-local` script, see [RESEARCH.md section 22](RESEARCH.md#22-analysis-of-the-runs-of-2-to-3-november-2026-and-changes)): `high` 34.30 dB, `mid` 33.65, RIFE 4.26 33.34, frame averaging 28.02, `low` 28.38, `igpu` 28.48. The `low` and `igpu` tiers estimated flow at half resolution even on 256-pixel training crops (flow at 128 pixels).
-- **FG plain-video defect.** Without motion vectors the scene-cut detector compared raw frames against a threshold calibrated with motion compensation, so it flagged ordinary motion as cuts and replaced 35 to 100 percent of the real plain-video samples with frame repeat (all of Vid4). The plain-video FG tables below are therefore mostly frame repeat; tables on the samples the detector left alone are given as well.
+- **TSR is stable and saturated.** Every test mean is within 0.3 dB of the run of 2 to 3 November 2026 although the student trained 58 percent longer, so the next TSR gains need more data, not more time. The 3x student wins 27 of 28 real clips against bicubic on plain video and 28 of 28 against analytic TAAU with engine data, and static scenes converge to 35.75 dB at frame 16.
+- **FG: full-resolution flow training helped the small tiers, but not enough.** On the independent Middlebury interpolation set (12 sequences, colour only, measured locally on CPU with the downloaded weights): `high` 34.23 dB, `mid` 33.83, RIFE 4.26 33.34, `low` 31.56 (was 28.13), `igpu` 30.30 (was 28.45), frame averaging 28.02. `low` now beats frame averaging on every real plain-video suite but trails RIFE by 1.5 to 5.0 dB.
+- **FG cut gate: better, still not deployable.** It detects every synthetic cut, and on cut-free real clips it now gates 0 to 25 percent of two-frame samples (was 35 to 100 percent), but 30 to 50 percent of 3x multi-frame samples and 9 percent of continuous synthetic pairs. Tables on the samples the gate left alone are given with the saved means.
+- **Latency did not move.** cuDNN autotuning left the FG `low` step at 48.1 ms and the TSR `low` step at 27.7 ms per 1080p frame on a T4.
 
-**Changes of 3 November 2026 after these runs, not yet run on Kaggle** ([RESEARCH.md section 22](RESEARCH.md#22-analysis-of-the-runs-of-2-to-3-november-2026-and-changes)):
-
-1. **FG cut detector:** without motion vectors it now scores the luma-histogram distance alone, with its own calibrated threshold, and the notebook saves the share of gated samples per suite (`metrics/cut_gate_rates.csv`).
-2. **FG flow resolution per frame height:** each tier estimates flow at no more than 576 (`igpu`, `low`) or 1152 (`mid`, `high`) image lines, halving taller frames. 1080p cost is unchanged; training crops and sub-576-line clips now run the flow at full resolution. A native-1080p Vimeo suite (`vimeo1080p_native`) measures the half-resolution path as deployed.
-3. **Full use of the Kaggle session:** the run ceiling rises from 9.5 to 10.8 hours and training budgets from 6.6 and 5.9 to 9.3 hours per notebook (TSR teacher 170, student 190, pair 110, ablations 30 minutes; FG 150, 200, 120, 30).
-4. **Latency timing** with cuDNN autotuning in both notebooks.
-
-Their effect on quality is `Not measured in the current repository.` until the next Kaggle run. The weights and numbers below are from the runs of 2 to 3 November 2026.
+**How far from the goal.** Of the five Kaggle-phase success criteria in [RESEARCH.md section 14](RESEARCH.md#14-experiments-and-ablations), four are met and FG extrapolation is partly met (plain reprojection with exact motion vectors is still better on TartanAir by 1.8 dB and about equal on Sintel). Everything after the Kaggle phase is not started: engine captures and a comparison with FSR, DLSS or XeSS, the 1.5x ratio, DirectML or Vulkan runtimes, timing on integrated GPUs, INT8 and a release trained on permissive data. No tier has yet run within its latency budget on any GPU. The full assessment is in [RESEARCH.md section 23.3](RESEARCH.md#233-progress-against-the-objective-section-1).
 
 ## How it works
 
@@ -161,8 +155,9 @@ flowchart LR
 | `src/neuralss/`                                     | The single source of the shared library, embedded into every notebook: run folders and launcher (`nss_common`), data sources and decoding (`nss_data`), copy detection and split (`nss_dedup`, `nss_pipeline`), training caches (`nss_cache`), the synthetic renderer and batch builders including the plain-video degradation (`nss_synth`), the IFNet motion estimator with RIFE weight loading and the TSR and FG networks (`nss_models`), losses, metrics and baselines (`nss_metrics`), the DDP loop (`nss_train`), evaluation helpers (`nss_eval`) and the two training entry points |
 | `notebooks/`                                        | Percent-format notebook sources                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `tools/build_notebooks.py`                          | Builds the `.ipynb` files from `notebooks/` and `src/neuralss`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `paper/`                                            | Journal manuscript on the whole project (Journal of Real-Time Image Processing, Springer Nature template): sources, figures, references, built PDFs; see [paper/README.md](paper/README.md)                                                                                                                                                                                                                                                                                                                                                                                                |
 | `neural-data-pipeline/`                             | The executed data-pipeline notebook (run of 18 October 2026) and its outputs, including `nss_data/nss_manifest.parquet`                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `neural-supersampling/`, `neural-frame-generation/` | The current notebook (with the changes made after the last run, no outputs) and the outputs of the runs of 2 to 3 November 2026, including `<name>.executed.ipynb` with every output                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `neural-supersampling/`, `neural-frame-generation/` | The notebook (no outputs) and the outputs of the runs of 3 to 4 November 2026 (`neural-supersampling`) and 8 November 2026 (`neural-frame-generation`), including `<name>.executed.ipynb` with every output                                                                                                                                                                                                                                                                                                                                                                                |
 | `.gitignore`, `.gitattributes`, `.prettierrc.json`  | Ignored local folders and archives, line-ending rules, Markdown / JSON formatting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Inside every `outputs/` folder: `code/` holds the library and per-run JSON configs exactly as written on Kaggle, `logs/` the notebook log and one log per training run, `metrics/` every CSV and JSON result, `plots/` every figure, and for the training notebooks `predictions/` full-size sample frames and `weights/` checkpoints and ONNX models.
@@ -289,17 +284,17 @@ _Minutes per pipeline stage._
 
 ## Notebook 2: temporal super-resolution
 
-Run of 2 to 3 November 2026 (PyTorch 2.11.0, CUDA 13.0, Python 3.13.16, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 7.46 hours; no failed runs). Outputs: [neural-supersampling/outputs/](neural-supersampling/outputs/); executed notebook: [neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb). The current notebook differs from the one that ran only in its budgets (section 12 below plans 170 / 190 / 110 / 30 minutes) and in cuDNN autotuning for the latency timing.
+Run of 3 to 4 November 2026 (17:48 to 03:56 UTC; PyTorch 2.11.0, CUDA 13.0, Python 3.13.16, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 10.13 hours; no failed runs). Outputs: [neural-supersampling/outputs/](neural-supersampling/outputs/); executed notebook: [neural-supersampling.executed.ipynb](neural-supersampling/outputs/neural-supersampling.executed.ipynb). The notebook that ran has the same sources as the committed one. Its training budgets (section 12) are larger than those of the earlier run of 2 to 3 November 2026 (teacher 140 minutes, student 120, pair 75, ablations 20 per pair).
 
 Every suite is evaluated in two modes. **Engine**: jittered render-like input with motion vectors and depth (exact on synthetic, TartanAir and Sintel; on video suites RAFT motion from the full-resolution frames, the protocol of earlier runs). **Plain**: the clip as ordinary video (bicubic downscale, no jitter, depth or motion vectors), so the built-in motion estimator supplies the motion.
 
-**Sections 1 to 4: library, setup, hardware, configuration.** Writes the ten library modules and `train_tsr.py`; `lpips`, `flip-evaluator` and `onnxruntime` all installed. Main settings (`metrics/config.json`): 3x primary and 2x secondary scale, 192-px output patches, 6-frame sequences and a 16-frame 96-px synthetic sequence every fourth step, 40 percent real windows per batch, plain video in 30 percent of synthetic and 60 percent of real samples, learning rate 2e-3 (teacher 1e-3), loss weights gradient 0.1, Fourier 0.05, temporal 0.5, motion 0.1, LPIPS 0.05, distillation 0. Budgets: teacher 140 min, student 120, pair 75, ablations 20 per pair; caches 30 min.
+**Sections 1 to 4: library, setup, hardware, configuration.** Writes the ten library modules and `train_tsr.py`, and `lpips`, `flip-evaluator` and `onnxruntime` are all installed. Main settings (`metrics/config.json`): 3x primary and 2x secondary scale, 192-px output patches, 6-frame sequences and a 16-frame 96-px synthetic sequence every fourth step, 40 percent real windows per batch, plain video in 30 percent of synthetic and 60 percent of real samples, learning rate 2e-3 (teacher 1e-3), loss weights gradient 0.1, Fourier 0.05, temporal 0.5, motion 0.1, LPIPS 0.05, distillation 0. Budgets: teacher 170 min, student 190, pair 110, ablations 30 per pair; caches 30 min.
 
 **Section 5: manifest.** Loaded from the attached pipeline output; every source was reachable (`reachable_sources.json`).
 
 **Section 6: item selection.** 4,123 texture and 5,120 sequence items for training, 252 and 850 for validation.
 
-**Section 7: caches (26.2 min, 9.30 GB).** 256 validation and 6,191 training still crops (4 decode failures; the stills' share of the decoding budget ended before 6,500), 192 validation and 3,600 training windows. Training windows by source: Vimeo-90K 3,267, REDS 149, Vimeo-1080p 91, TartanAir 39, Sintel 28, GameIR 26; validation windows: Vimeo-90K 188, REDS 4 (`caches.json`).
+**Section 7: caches (20.0 min, 9.30 GB).** 256 validation and 6,500 training still crops (4 decode failures), 192 validation and 3,600 training windows (no failures). Training windows by source: Vimeo-90K 3,267, REDS 149, Vimeo-1080p 91, TartanAir 39, Sintel 28, GameIR 26; validation windows: Vimeo-90K 188, REDS 4 (`caches.json`).
 
 **Section 8: cache inspection.** 1.9 percent of windows have exact motion and 98.1 percent RAFT motion; 1.8 percent have depth; mean motion 1.50 px per frame.
 
@@ -315,7 +310,7 @@ _Real windows: first and last frame, motion vectors (hue = direction, brightness
 
 ![Synthetic training sequence](neural-supersampling/outputs/plots/synthetic_preview.png)
 
-_One synthetic sequence at three time steps: aliased jittered input, anti-aliased target, exact motion vectors, valid history, depth and particle (reactive) mask._
+_One synthetic sequence at t = 1, 3 and 5: the jittered render and plain-video low-resolution inputs, the 4x supersampled target, exact motion vectors, valid history, depth and the particle (reactive) mask._
 
 **Section 10: model tiers.** RIFE 4.26 slices loaded into the `low` tier's motion estimator (11 exact, 42 sliced, 0 missing tensors). Measured with forward hooks (`model_tiers.csv`, motion estimator included); fused-versus-unfused parity 0.0 for every tier.
 
@@ -340,37 +335,37 @@ _GMAC per 1080p output frame for each tier at 3x and 2x._
 
 | Batch | Teacher VRAM % | Teacher seq/s | Student VRAM % | Student seq/s |
 | ----: | -------------: | ------------: | -------------: | ------------: |
-|     4 |            5.0 |          10.6 |            2.4 |          13.6 |
-|     8 |            8.6 |          19.1 |            3.9 |          24.1 |
-|    12 |           12.2 |          24.0 |            5.5 |          30.8 |
-|    16 |           15.8 |          27.0 |            7.0 |          34.8 |
-|    24 |           23.3 |          29.7 |           10.1 |          39.8 |
-|    32 |           30.3 |          31.0 |           13.2 |          42.5 |
-|    48 |           45.1 |          31.5 |           19.5 |          43.1 |
+|     4 |            5.0 |           9.1 |            2.4 |          11.8 |
+|     8 |            8.6 |          17.4 |            3.9 |          21.8 |
+|    12 |           12.2 |          22.3 |            5.5 |          28.9 |
+|    16 |           15.8 |          25.2 |            7.0 |          33.2 |
+|    24 |           23.3 |          28.3 |           10.2 |          37.7 |
+|    32 |           30.3 |          29.7 |           13.2 |          40.1 |
+|    48 |           45.1 |          29.9 |           19.5 |          40.7 |
 
-**Section 12: launcher and budget.** 8.04 hours were available for training, so the budgets ran at full scale (scale 1.00).
+**Section 12: launcher and budget.** 9.45 hours were available for training after 0.35 hours of caches and probe and a 1.0-hour evaluation reserve, so the budgets ran at full scale (scale 1.00).
 
 **Sections 13 to 16: training.** Logs in `logs/<run>.log`, histories in `metrics/<run>_history.json` and `history_<run>.csv`, configs in `code/cfg_<run>.json`. No student was distilled. Ablations: `no_history` (single frame), `no_gbuffers` (colour-only render input, the estimator supplies motion), `no_motion_net` (colour only and no estimator), `no_video_training` (render samples only), `no_long_unroll` (no 16-frame steps).
 
 | Stage             | Run                                           |        Steps | Train s      | Best validation PSNR-Y (round) |
 | :---------------- | :-------------------------------------------- | -----------: | :----------- | :----------------------------- |
-| A, both GPUs      | `tsr_teacher_s3`                              |        5,590 | 8,408        | 33.56 dB (17)                  |
-| B, both GPUs      | `tsr_low_s3`                                  |        6,690 | 7,206        | 32.59 dB (14)                  |
-| C, GPU 0 / GPU 1  | `tsr_igpu_s3`, `tsr_low_s2`                   | 4,970, 3,600 | 4,505, 4,511 | 31.65 (8), 36.46 (9)           |
-| Ablations, pair 1 | `abl_reference`, `abl_no_history`             | 1,130, 1,330 | 1,204, 1,209 | 31.72 (5), 31.30 (5)           |
-| Ablations, pair 2 | `abl_no_gbuffers`, `abl_no_motion_net`        | 1,130, 1,270 | 1,203, 1,204 | 31.31 (5), 31.15 (5)           |
-| Ablations, pair 3 | `abl_no_video_training`, `abl_no_long_unroll` | 1,130, 1,110 | 1,206, 1,201 | 31.00 (5), 31.77 (5)           |
+| A, both GPUs      | `tsr_teacher_s3`                              |        6,640 | 10,211       | 33.47 dB (20)                  |
+| B, both GPUs      | `tsr_low_s3`                                  |       10,400 | 11,406       | 32.49 dB (23)                  |
+| C, GPU 0 / GPU 1  | `tsr_igpu_s3`, `tsr_low_s2`                   | 7,220, 5,220 | 6,602, 6,608 | 31.62 (13), 36.39 (13)         |
+| Ablations, pair 1 | `abl_reference`, `abl_no_history`             | 1,680, 1,970 | 1,811, 1,802 | 31.81 (5), 31.28 (5)           |
+| Ablations, pair 2 | `abl_no_gbuffers`, `abl_no_motion_net`        | 1,670, 1,900 | 1,804, 1,804 | 31.47 (5), 31.33 (5)           |
+| Ablations, pair 3 | `abl_no_video_training`, `abl_no_long_unroll` | 1,700, 1,680 | 1,810, 1,810 | 31.06 (5), 31.88 (5)           |
 
 **Section 17: training curves.** The selection metric is the mean of validation PSNR-Y on a render copy and a plain-video copy of every validation batch (`best_validation.csv`):
 
 | Run              |  Best | Render | Video | Last frame |    TCE | Samples/s | Peak memory (GB) |
 | :--------------- | ----: | -----: | ----: | ---------: | -----: | --------: | ---------------: |
-| `tsr_teacher_s3` | 33.56 |  33.50 | 33.61 |      33.83 | 0.0135 |      57.6 |             7.92 |
-| `tsr_low_s3`     | 32.59 |  32.41 | 32.76 |      32.79 | 0.0148 |      80.4 |             4.19 |
-| `tsr_igpu_s3`    | 31.65 |  31.27 | 32.02 |      31.82 | 0.0158 |      47.8 |             3.24 |
-| `tsr_low_s2`     | 36.46 |  36.51 | 36.41 |      36.61 | 0.0110 |      34.6 |             5.73 |
+| `tsr_teacher_s3` | 33.47 |  33.43 | 33.51 |      33.63 | 0.0137 |      56.4 |             7.92 |
+| `tsr_low_s3`     | 32.49 |  32.28 | 32.70 |      32.58 | 0.0147 |      79.0 |             4.19 |
+| `tsr_igpu_s3`    | 31.62 |  31.23 | 32.02 |      31.72 | 0.0158 |      47.4 |             3.24 |
+| `tsr_low_s2`     | 36.39 |  36.44 | 36.34 |      36.46 | 0.0109 |      34.2 |             5.73 |
 
-Render-copy PSNR-Y per round: teacher 31.20 to 33.50 over 18 rounds (+0.03 dB over the last three), `low` 3x 30.87 to 32.41 over 15 (+0.03), `igpu` 30.60 to 31.27 over 10 (0.00), `low` 2x 34.81 to 36.51 over 10 (+0.07). The curves flatten as the cosine schedule ends, not because training has converged; the current notebook gives every run 30 to 60 percent more time. Each ablation validates on batches built with its own recipe, so ablation validation scores are not comparable; section 25 compares them on the test suites.
+Render-copy PSNR-Y per round: teacher 31.04 to 33.43 over 21 rounds (+0.03 dB over the last three), `low` 3x 30.63 to 32.28 over 24 (+0.01), `igpu` 30.46 to 31.23 over 14 (+0.01), `low` 2x 34.46 to 36.44 over 14 (+0.03). Every main run's best round is its last round, and each gained only 0.01 to 0.03 dB over its last three rounds. The curves flatten as the cosine schedule ends, not because training has converged. The ablations were still rising faster (the reference gained 0.26 dB over its last three rounds), so their scores are short-run values. Each ablation validates on batches built with its own recipe, so ablation validation scores are not comparable; section 25 compares them on the test suites.
 
 ![TSR training curves](neural-supersampling/outputs/plots/training_curves.png)
 
@@ -378,101 +373,98 @@ _Validation PSNR-Y, validation temporal-change error and train loss against minu
 
 **Section 18: load and fuse.** Ten models loaded (teacher, three students, six ablations); fused FP32 parity 0.0 for every one.
 
-**Section 19: test suites (2.5 min).** 24 synthetic test stills (6 per motion class), 8 TartanAir, 8 Sintel, 4 Vid4, 8 Vimeo-1080p and 4 GameIR native clips. Two blank Vimeo-1080p clips were skipped and replaced by the next clips of that source.
+**Section 19: test suites (2.7 min).** 24 synthetic test stills (6 per motion class), 8 TartanAir, 8 Sintel, 4 Vid4, 8 Vimeo-1080p and 4 GameIR native clips. Two blank Vimeo-1080p clips were skipped and replaced by the next clips of that source.
 
-**Section 20: evaluation (18.5 min).** 23,480 per-frame metric rows (`test_per_frame.csv`): synthetic-game 5,760 engine and 5,040 plain, TartanAir, Sintel and Vimeo-1080p 1,920 and 1,680 each, Vid4 960 and 840, GameIR native 80.
+**Section 20: evaluation (19.2 min).** 23,480 per-frame metric rows (`test_per_frame.csv`): synthetic-game 5,760 engine and 5,040 plain, TartanAir, Sintel and Vimeo-1080p 1,920 and 1,680 each, Vid4 960 and 840, GameIR native 80. The notebook skips the first frame of every sequence (no history yet), and every mean below is over the recorded frames.
 
-**Section 21: results by suite and method** (`test_results.csv`, mean over frames after the first). Higher is better for PSNR and SSIM; lower is better for LPIPS, temporal-change error (TCE) and tOF. `bicubic` and `bilinear` sample at the true jittered positions in engine mode.
+**Section 21: results by suite and method** (`test_results.csv`, mean over the recorded frames). Higher is better for PSNR and SSIM; lower is better for LPIPS, temporal-change error (TCE) and tOF. `bicubic` and `bilinear` sample at the true jittered positions in engine mode.
 
 3x, engine mode:
 
-| Suite          | Method        | PSNR-Y | SSIM-Y | PSNR disocc. | PSNR detail | LPIPS |    TCE |   tOF |
-| :------------- | :------------ | -----: | -----: | -----------: | ----------: | ----: | -----: | ----: |
-| synthetic-game | bilinear      |  29.80 |  0.833 |        34.47 |       23.87 | 0.273 | 0.0253 | 0.782 |
-| synthetic-game | bicubic       |  29.50 |  0.832 |        34.08 |       23.53 | 0.288 | 0.0321 | 0.844 |
-| synthetic-game | analytic_taau |  29.35 |  0.817 |        31.51 |       23.61 | 0.261 | 0.0110 | 0.790 |
-| synthetic-game | igpu_s3       |  32.50 |  0.903 |        34.15 |       26.43 | 0.108 | 0.0127 | 0.612 |
-| synthetic-game | student_s3    |  34.11 |  0.929 |        35.39 |       28.01 | 0.061 | 0.0111 | 0.538 |
-| synthetic-game | teacher_s3    |  35.47 |  0.946 |        36.39 |       29.36 | 0.041 | 0.0093 | 0.392 |
-| tartanair      | bilinear      |  31.52 |  0.890 |        30.85 |       24.64 | 0.216 | 0.0132 | 0.485 |
-| tartanair      | bicubic       |  31.83 |  0.896 |        31.18 |       24.92 | 0.216 | 0.0149 | 0.486 |
-| tartanair      | analytic_taau |  30.64 |  0.875 |        27.92 |       23.85 | 0.243 | 0.0104 | 0.415 |
-| tartanair      | igpu_s3       |  32.95 |  0.920 |        29.78 |       26.07 | 0.107 | 0.0105 | 0.382 |
-| tartanair      | student_s3    |  33.38 |  0.927 |        30.33 |       26.50 | 0.092 | 0.0103 | 0.393 |
-| tartanair      | teacher_s3    |  33.79 |  0.933 |        30.64 |       26.95 | 0.074 | 0.0101 | 0.354 |
-| sintel         | bilinear      |  32.55 |  0.874 |        30.49 |       26.61 | 0.269 | 0.0127 | 1.703 |
-| sintel         | bicubic       |  32.82 |  0.881 |        30.84 |       26.86 | 0.275 | 0.0148 | 1.564 |
-| sintel         | analytic_taau |  31.07 |  0.848 |        27.58 |       25.19 | 0.271 | 0.0092 | 1.519 |
-| sintel         | igpu_s3       |  33.59 |  0.909 |        29.77 |       27.59 | 0.141 | 0.0093 | 1.317 |
-| sintel         | student_s3    |  34.19 |  0.917 |        30.51 |       28.28 | 0.120 | 0.0088 | 1.648 |
-| sintel         | teacher_s3    |  35.07 |  0.928 |        31.29 |       29.11 | 0.090 | 0.0082 | 1.390 |
-| vid4           | bilinear      |  24.55 |  0.722 |        22.32 |       19.71 | 0.362 | 0.0368 | 0.397 |
-| vid4           | bicubic       |  24.58 |  0.738 |        22.33 |       19.60 | 0.391 | 0.0433 | 0.398 |
-| vid4           | analytic_taau |  23.96 |  0.679 |        20.53 |       19.29 | 0.382 | 0.0236 | 0.183 |
-| vid4           | igpu_s3       |  26.65 |  0.839 |        22.20 |       21.47 | 0.154 | 0.0238 | 0.154 |
-| vid4           | student_s3    |  27.32 |  0.866 |        22.39 |       22.03 | 0.116 | 0.0233 | 0.149 |
-| vid4           | teacher_s3    |  28.15 |  0.886 |        23.36 |       22.86 | 0.086 | 0.0225 | 0.140 |
-| vimeo1080p     | bilinear      |  34.80 |  0.899 |        40.65 |       28.19 | 0.189 | 0.0116 | 4.212 |
-| vimeo1080p     | bicubic       |  35.21 |  0.902 |        41.50 |       28.67 | 0.191 | 0.0136 | 4.077 |
-| vimeo1080p     | analytic_taau |  33.43 |  0.888 |        36.98 |       26.79 | 0.203 | 0.0076 | 6.128 |
-| vimeo1080p     | igpu_s3       |  36.85 |  0.937 |        40.67 |       30.39 | 0.073 | 0.0076 | 2.715 |
-| vimeo1080p     | student_s3    |  37.72 |  0.945 |        41.60 |       31.26 | 0.054 | 0.0073 | 3.683 |
-| vimeo1080p     | teacher_s3    |  38.58 |  0.952 |        43.10 |       32.21 | 0.037 | 0.0068 | 2.757 |
+| Suite                                                                         | Method        | PSNR-Y | SSIM-Y | PSNR disocc. | PSNR detail | LPIPS |    TCE |   tOF |
+| :---------------------------------------------------------------------------- | :------------ | -----: | -----: | -----------: | ----------: | ----: | -----: | ----: |
+| synthetic-game                                                                | bilinear      |  29.80 |  0.833 |        34.47 |       23.87 | 0.273 | 0.0253 | 0.782 |
+| synthetic-game                                                                | bicubic       |  29.50 |  0.832 |        34.08 |       23.53 | 0.288 | 0.0321 | 0.844 |
+| synthetic-game                                                                | analytic_taau |  29.35 |  0.817 |        31.51 |       23.61 | 0.261 | 0.0110 | 0.790 |
+| synthetic-game                                                                | igpu_s3       |  32.72 |  0.907 |        34.25 |       26.64 | 0.097 | 0.0125 | 0.606 |
+| synthetic-game                                                                | student_s3    |  34.27 |  0.931 |        35.48 |       28.17 | 0.058 | 0.0109 | 0.529 |
+| synthetic-game                                                                | teacher_s3    |  35.55 |  0.947 |        36.41 |       29.43 | 0.041 | 0.0092 | 0.403 |
+| tartanair                                                                     | bilinear      |  31.52 |  0.890 |        30.85 |       24.64 | 0.216 | 0.0132 | 0.485 |
+| tartanair                                                                     | bicubic       |  31.83 |  0.896 |        31.18 |       24.92 | 0.216 | 0.0149 | 0.486 |
+| tartanair                                                                     | analytic_taau |  30.64 |  0.875 |        27.92 |       23.85 | 0.243 | 0.0104 | 0.415 |
+| tartanair                                                                     | igpu_s3       |  33.00 |  0.920 |        29.66 |       26.12 | 0.103 | 0.0105 | 0.392 |
+| tartanair                                                                     | student_s3    |  33.43 |  0.928 |        30.34 |       26.56 | 0.090 | 0.0103 | 0.382 |
+| tartanair                                                                     | teacher_s3    |  33.81 |  0.934 |        30.63 |       26.97 | 0.071 | 0.0101 | 0.334 |
+| sintel                                                                        | bilinear      |  32.55 |  0.874 |        30.49 |       26.61 | 0.269 | 0.0127 | 1.703 |
+| sintel                                                                        | bicubic       |  32.82 |  0.881 |        30.84 |       26.86 | 0.275 | 0.0148 | 1.564 |
+| sintel                                                                        | analytic_taau |  31.07 |  0.848 |        27.58 |       25.19 | 0.271 | 0.0092 | 1.519 |
+| sintel                                                                        | igpu_s3       |  33.70 |  0.909 |        29.83 |       27.72 | 0.136 | 0.0093 | 1.463 |
+| sintel                                                                        | student_s3    |  34.48 |  0.921 |        30.76 |       28.52 | 0.107 | 0.0087 | 1.371 |
+| sintel                                                                        | teacher_s3    |  35.08 |  0.928 |        31.35 |       29.16 | 0.092 | 0.0082 | 1.343 |
+| vid4                                                                          | bilinear      |  24.55 |  0.722 |        22.32 |       19.71 | 0.362 | 0.0368 | 0.397 |
+| vid4                                                                          | bicubic       |  24.58 |  0.738 |        22.33 |       19.60 | 0.391 | 0.0433 | 0.398 |
+| vid4                                                                          | analytic_taau |  23.96 |  0.679 |        20.53 |       19.29 | 0.382 | 0.0236 | 0.183 |
+| vid4                                                                          | igpu_s3       |  26.75 |  0.842 |        22.15 |       21.58 | 0.154 | 0.0236 | 0.155 |
+| vid4                                                                          | student_s3    |  27.32 |  0.863 |        22.56 |       22.06 | 0.118 | 0.0229 | 0.148 |
+| vid4                                                                          | teacher_s3    |  28.20 |  0.888 |        23.21 |       22.91 | 0.085 | 0.0227 | 0.144 |
+| vimeo1080p                                                                    | bilinear      |  34.80 |  0.899 |        40.65 |       28.19 | 0.189 | 0.0116 | 4.212 |
+| vimeo1080p                                                                    | bicubic       |  35.21 |  0.902 |        41.50 |       28.67 | 0.191 | 0.0136 | 4.077 |
+| vimeo1080p                                                                    | analytic_taau |  33.43 |  0.888 |        36.98 |       26.79 | 0.203 | 0.0076 | 6.128 |
+| vimeo1080p                                                                    | igpu_s3       |  36.88 |  0.938 |        40.64 |       30.43 | 0.074 | 0.0076 | 2.996 |
+| vimeo1080p                                                                    | student_s3    |  37.77 |  0.945 |        41.98 |       31.35 | 0.052 | 0.0071 | 3.786 |
+| vimeo1080p                                                                    | teacher_s3    |  38.57 |  0.952 |        43.04 |       32.21 | 0.035 | 0.0069 | 3.244 |
+| 3x, plain mode (ordinary video; no TAA baseline, which needs motion vectors): |
 
-3x, plain mode (ordinary video; no TAA baseline, which needs motion vectors):
+| Suite                                                                                                                                    | Method     | PSNR-Y | SSIM-Y | PSNR disocc. | PSNR detail | LPIPS |    TCE |   tOF |
+| :--------------------------------------------------------------------------------------------------------------------------------------- | :--------- | -----: | -----: | -----------: | ----------: | ----: | -----: | ----: |
+| synthetic-game                                                                                                                           | bilinear   |  30.36 |  0.826 |        35.22 |       24.79 | 0.256 | 0.0090 | 0.573 |
+| synthetic-game                                                                                                                           | bicubic    |  31.23 |  0.850 |        35.95 |       25.60 | 0.260 | 0.0090 | 0.588 |
+| synthetic-game                                                                                                                           | igpu_s3    |  32.65 |  0.888 |        36.92 |       27.07 | 0.101 | 0.0098 | 0.387 |
+| synthetic-game                                                                                                                           | student_s3 |  33.42 |  0.904 |        37.72 |       27.85 | 0.082 | 0.0087 | 0.396 |
+| synthetic-game                                                                                                                           | teacher_s3 |  34.17 |  0.918 |        38.50 |       28.61 | 0.064 | 0.0077 | 0.323 |
+| tartanair                                                                                                                                | bilinear   |  31.55 |  0.884 |        31.02 |       24.78 | 0.227 | 0.0107 | 0.379 |
+| tartanair                                                                                                                                | bicubic    |  32.34 |  0.897 |        31.77 |       25.49 | 0.227 | 0.0103 | 0.381 |
+| tartanair                                                                                                                                | igpu_s3    |  33.55 |  0.917 |        32.57 |       26.76 | 0.105 | 0.0106 | 0.438 |
+| tartanair                                                                                                                                | student_s3 |  34.03 |  0.925 |        32.92 |       27.25 | 0.087 | 0.0102 | 0.350 |
+| tartanair                                                                                                                                | teacher_s3 |  34.34 |  0.930 |        33.17 |       27.59 | 0.068 | 0.0100 | 0.306 |
+| sintel                                                                                                                                   | bilinear   |  32.61 |  0.865 |        30.55 |       26.82 | 0.274 | 0.0084 | 1.316 |
+| sintel                                                                                                                                   | bicubic    |  33.38 |  0.880 |        31.37 |       27.55 | 0.281 | 0.0081 | 1.354 |
+| sintel                                                                                                                                   | igpu_s3    |  34.23 |  0.898 |        32.30 |       28.62 | 0.125 | 0.0094 | 1.190 |
+| sintel                                                                                                                                   | student_s3 |  34.64 |  0.906 |        32.67 |       29.06 | 0.105 | 0.0090 | 1.112 |
+| sintel                                                                                                                                   | teacher_s3 |  34.99 |  0.912 |        32.98 |       29.46 | 0.084 | 0.0087 | 0.946 |
+| vid4                                                                                                                                     | bilinear   |  24.62 |  0.695 |        22.43 |       20.05 | 0.362 | 0.0229 | 0.151 |
+| vid4                                                                                                                                     | bicubic    |  25.24 |  0.728 |        23.10 |       20.58 | 0.400 | 0.0222 | 0.145 |
+| vid4                                                                                                                                     | igpu_s3    |  26.52 |  0.806 |        23.94 |       21.82 | 0.166 | 0.0228 | 0.135 |
+| vid4                                                                                                                                     | student_s3 |  27.00 |  0.827 |        24.15 |       22.30 | 0.147 | 0.0218 | 0.129 |
+| vid4                                                                                                                                     | teacher_s3 |  27.48 |  0.847 |        24.57 |       22.83 | 0.119 | 0.0215 | 0.121 |
+| vimeo1080p                                                                                                                               | bilinear   |  34.88 |  0.893 |        40.53 |       28.36 | 0.200 | 0.0062 | 3.409 |
+| vimeo1080p                                                                                                                               | bicubic    |  35.77 |  0.902 |        41.87 |       29.28 | 0.205 | 0.0059 | 3.652 |
+| vimeo1080p                                                                                                                               | igpu_s3    |  36.50 |  0.918 |        42.43 |       30.16 | 0.090 | 0.0063 | 3.512 |
+| vimeo1080p                                                                                                                               | student_s3 |  36.96 |  0.923 |        43.21 |       30.73 | 0.075 | 0.0060 | 3.473 |
+| vimeo1080p                                                                                                                               | teacher_s3 |  37.33 |  0.927 |        43.79 |       31.20 | 0.062 | 0.0058 | 2.826 |
+| 2x (`low` 2x student against baselines; GameIR native uses the engine's own 720p render as input and has no plain mode), PSNR-Y / LPIPS: |
 
-| Suite          | Method     | PSNR-Y | SSIM-Y | PSNR disocc. | PSNR detail | LPIPS |    TCE |   tOF |
-| :------------- | :--------- | -----: | -----: | -----------: | ----------: | ----: | -----: | ----: |
-| synthetic-game | bilinear   |  30.36 |  0.826 |        35.22 |       24.79 | 0.256 | 0.0090 | 0.573 |
-| synthetic-game | bicubic    |  31.23 |  0.850 |        35.95 |       25.60 | 0.260 | 0.0090 | 0.588 |
-| synthetic-game | igpu_s3    |  32.51 |  0.885 |        36.85 |       26.93 | 0.104 | 0.0100 | 0.498 |
-| synthetic-game | student_s3 |  33.34 |  0.902 |        37.68 |       27.74 | 0.083 | 0.0088 | 0.337 |
-| synthetic-game | teacher_s3 |  34.11 |  0.916 |        38.42 |       28.57 | 0.065 | 0.0077 | 0.339 |
-| tartanair      | bilinear   |  31.55 |  0.884 |        31.02 |       24.78 | 0.227 | 0.0107 | 0.379 |
-| tartanair      | bicubic    |  32.34 |  0.897 |        31.77 |       25.49 | 0.227 | 0.0103 | 0.381 |
-| tartanair      | igpu_s3    |  33.54 |  0.917 |        32.54 |       26.73 | 0.108 | 0.0106 | 0.444 |
-| tartanair      | student_s3 |  33.97 |  0.923 |        32.93 |       27.18 | 0.089 | 0.0102 | 0.348 |
-| tartanair      | teacher_s3 |  34.39 |  0.930 |        33.16 |       27.64 | 0.071 | 0.0099 | 0.315 |
-| sintel         | bilinear   |  32.61 |  0.865 |        30.55 |       26.82 | 0.274 | 0.0084 | 1.316 |
-| sintel         | bicubic    |  33.38 |  0.880 |        31.37 |       27.55 | 0.281 | 0.0081 | 1.354 |
-| sintel         | igpu_s3    |  34.23 |  0.898 |        32.29 |       28.58 | 0.127 | 0.0094 | 1.325 |
-| sintel         | student_s3 |  34.58 |  0.905 |        32.63 |       29.00 | 0.107 | 0.0090 | 1.154 |
-| sintel         | teacher_s3 |  34.96 |  0.912 |        32.95 |       29.42 | 0.085 | 0.0087 | 1.014 |
-| vid4           | bilinear   |  24.62 |  0.695 |        22.43 |       20.05 | 0.362 | 0.0229 | 0.151 |
-| vid4           | bicubic    |  25.24 |  0.728 |        23.10 |       20.58 | 0.400 | 0.0222 | 0.145 |
-| vid4           | igpu_s3    |  26.43 |  0.803 |        23.88 |       21.72 | 0.170 | 0.0229 | 0.137 |
-| vid4           | student_s3 |  26.99 |  0.826 |        24.18 |       22.27 | 0.148 | 0.0218 | 0.130 |
-| vid4           | teacher_s3 |  27.51 |  0.847 |        24.68 |       22.86 | 0.122 | 0.0213 | 0.123 |
-| vimeo1080p     | bilinear   |  34.88 |  0.893 |        40.53 |       28.36 | 0.200 | 0.0062 | 3.409 |
-| vimeo1080p     | bicubic    |  35.77 |  0.902 |        41.87 |       29.28 | 0.205 | 0.0059 | 3.652 |
-| vimeo1080p     | igpu_s3    |  36.50 |  0.918 |        42.41 |       30.17 | 0.092 | 0.0063 | 3.170 |
-| vimeo1080p     | student_s3 |  36.94 |  0.922 |        43.12 |       30.63 | 0.076 | 0.0060 | 2.947 |
-| vimeo1080p     | teacher_s3 |  37.29 |  0.926 |        43.54 |       31.18 | 0.064 | 0.0057 | 1.721 |
-
-Particle-region PSNR (synthetic-game, engine): bicubic 33.01, bilinear 33.13, analytic TAAU 29.64, `igpu` 33.76, student 35.06, teacher 37.04 dB. Warping error along exact motion (synthetic-game, engine): teacher 0.0111, student 0.0122, analytic TAAU 0.0092, bilinear 0.0268.
-
-2x (`low` 2x student against baselines; GameIR native uses the engine's own 720p render as input and has no plain mode), PSNR-Y / LPIPS:
-
-| Suite          | Mode   | Bilinear      | Bicubic       | Analytic TAAU | Student 2x    |
-| :------------- | :----- | :------------ | :------------ | :------------ | :------------ |
-| synthetic-game | engine | 33.35 / 0.108 | 33.41 / 0.126 | 30.85 / 0.193 | 38.17 / 0.024 |
-| synthetic-game | plain  | 32.95 / 0.168 | 34.59 / 0.140 |               | 37.22 / 0.035 |
-| tartanair      | engine | 33.98 / 0.121 | 34.71 / 0.115 | 31.44 / 0.212 | 35.47 / 0.061 |
-| tartanair      | plain  | 33.66 / 0.166 | 34.86 / 0.136 |               | 36.64 / 0.051 |
-| sintel         | engine | 35.45 / 0.142 | 36.37 / 0.139 | 31.70 / 0.220 | 37.50 / 0.068 |
-| sintel         | plain  | 35.01 / 0.188 | 36.39 / 0.158 |               | 38.12 / 0.050 |
-| vid4           | engine | 27.78 / 0.191 | 28.98 / 0.202 | 25.00 / 0.347 | 30.60 / 0.058 |
-| vid4           | plain  | 27.07 / 0.261 | 28.59 / 0.242 |               | 30.94 / 0.066 |
-| vimeo1080p     | engine | 37.78 / 0.106 | 38.79 / 0.103 | 34.47 / 0.173 | 41.49 / 0.022 |
-| vimeo1080p     | plain  | 37.32 / 0.144 | 38.68 / 0.123 |               | 40.31 / 0.037 |
-| gameir-native  | engine | 32.30 / 0.190 | 32.33 / 0.169 | 30.83 / 0.227 | 32.59 / 0.146 |
+| Suite                                                                                                                                                                                                                                                                               | Mode   |      Bilinear |       Bicubic | Analytic TAAU |    Student 2x |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- | ------------: | ------------: | ------------: | ------------: |
+| synthetic-game                                                                                                                                                                                                                                                                      | engine | 33.35 / 0.108 | 33.41 / 0.126 | 30.85 / 0.193 | 38.43 / 0.024 |
+| synthetic-game                                                                                                                                                                                                                                                                      | plain  | 32.95 / 0.168 | 34.59 / 0.140 |               | 37.26 / 0.035 |
+| tartanair                                                                                                                                                                                                                                                                           | engine | 33.98 / 0.121 | 34.71 / 0.115 | 31.44 / 0.212 | 35.51 / 0.063 |
+| tartanair                                                                                                                                                                                                                                                                           | plain  | 33.66 / 0.166 | 34.86 / 0.136 |               | 36.65 / 0.047 |
+| sintel                                                                                                                                                                                                                                                                              | engine | 35.45 / 0.142 | 36.37 / 0.139 | 31.70 / 0.220 | 37.62 / 0.068 |
+| sintel                                                                                                                                                                                                                                                                              | plain  | 35.01 / 0.188 | 36.39 / 0.158 |               | 38.07 / 0.050 |
+| vid4                                                                                                                                                                                                                                                                                | engine | 27.78 / 0.191 | 28.98 / 0.202 | 25.00 / 0.347 | 30.76 / 0.058 |
+| vid4                                                                                                                                                                                                                                                                                | plain  | 27.07 / 0.261 | 28.59 / 0.242 |               | 31.05 / 0.063 |
+| vimeo1080p                                                                                                                                                                                                                                                                          | engine | 37.78 / 0.106 | 38.79 / 0.103 | 34.47 / 0.173 | 41.59 / 0.022 |
+| vimeo1080p                                                                                                                                                                                                                                                                          | plain  | 37.32 / 0.144 | 38.68 / 0.123 |               | 40.25 / 0.040 |
+| gameir-native                                                                                                                                                                                                                                                                       | engine | 32.30 / 0.190 | 32.33 / 0.169 | 30.83 / 0.227 | 32.60 / 0.142 |
+| Particle-region PSNR (synthetic-game, engine): bicubic 33.01, bilinear 33.13, analytic TAAU 29.64, `igpu` 33.94, student 35.19, teacher 37.17 dB. Warping error along exact motion (synthetic-game, engine): teacher 0.0110, student 0.0122, analytic TAAU 0.0092, bilinear 0.0268. |
 
 What the numbers say:
 
-- **Ordinary video works.** In plain mode the 3x student beats bicubic on every suite by 1.17 (Vimeo-1080p) to 2.10 dB (synthetic) PSNR-Y at less than half its LPIPS, and wins 27 of the 28 real clips (from `test_per_frame.csv`; the exception is the Vimeo-1080p clip `Soft Fangs` at above 50 dB, bicubic 52.80 against 51.14). The 2x student leads bicubic by 1.6 to 2.6 dB in plain mode. The student's plain-mode TCE is within 0.0009 of bicubic's (lower on synthetic, TartanAir and Vid4, higher on Sintel and Vimeo-1080p).
-- **Engine mode is close to the previous design.** Against the run of 24 October 2026 (old design, same protocol) the 3x student gained 0.17 (synthetic), 0.25 (TartanAir), 0.37 (Vid4) and 0.49 dB (Vimeo-1080p) and lost 0.30 dB on Sintel; the teacher moved by -0.33 (Sintel) to +0.19 dB (Vid4). The student beats the analytic TAA upscaler by 2.7 to 4.8 dB, with a temporal-change error 0.0001 to 0.0004 lower on TartanAir, Sintel, Vid4 and Vimeo-1080p and 0.0001 higher on synthetic scenes.
-- **Plain gains are smaller than engine gains**, as expected: plain inputs carry no jitter, so there is no sub-pixel information to accumulate, and the teacher leads the student by only 0.35 to 0.78 dB there (0.4 to 1.4 dB in engine mode).
-- The `igpu` student (137,844 fused parameters) is 0.35 to 0.83 dB behind the student in plain mode.
+- **Ordinary video works.** In plain mode the 3x student beats bicubic on every suite by 1.19 (Vimeo-1080p) to 2.19 dB (synthetic) PSNR-Y at less than half its LPIPS, and wins 27 of the 28 real clips (from `test_per_frame.csv`; the exception is the Vimeo-1080p clip `Soft Fangs` at above 50 dB, bicubic 52.80 against 51.27). The 2x student leads bicubic by 1.6 to 2.7 dB in plain mode. The student's plain-mode TCE is within 0.0009 of bicubic's (lower on synthetic, TartanAir and Vid4, higher on Sintel and Vimeo-1080p).
+- **Engine mode gained modestly over the previous design.** Against the run of 24 October 2026 (old design, same protocol, commit `82e6e56`) the 3x student gained 0.32 (synthetic), 0.30 (TartanAir), 0.37 (Vid4) and 0.53 dB (Vimeo-1080p) and was 0.02 dB below on Sintel; the teacher moved by -0.32 (Sintel) to +0.25 (Vid4) dB. The student beats the analytic TAA upscaler by 2.8 to 4.9 dB, with a temporal-change error 0.0001 to 0.0007 lower on every engine suite.
+- **Plain gains are smaller than engine gains**, as expected: plain inputs carry no jitter, so there is no sub-pixel information to accumulate, and the teacher leads the student by only 0.3 to 0.8 dB there (0.4 to 1.3 dB in engine mode).
+- The `igpu` student (137,844 fused parameters) is 0.4 to 0.8 dB behind the student in plain mode.
 
 ![Quality against stability](neural-supersampling/outputs/plots/quality_vs_stability.png)
 
@@ -480,16 +472,15 @@ _PSNR-Y against temporal-change error per suite and method; top-left is sharp an
 
 **Section 22: motion classes and regions (synthetic-game, 3x).** Measured motion per class: static 0.0, slow 2.65, medium 10.44, fast 17.62 output px per frame. PSNR-Y (dB), engine / plain:
 
-| Method        | Static        | Slow          | Medium        | Fast          |
-| :------------ | :------------ | :------------ | :------------ | :------------ |
-| bilinear      | 26.70 / 27.49 | 30.37 / 30.64 | 25.56 / 26.55 | 36.58 / 36.76 |
-| bicubic       | 26.25 / 28.21 | 30.19 / 31.66 | 24.93 / 27.12 | 36.65 / 37.95 |
-| analytic_taau | 27.68 /       | 29.40 /       | 25.48 /       | 34.85 /       |
-| igpu_s3       | 31.27 / 28.58 | 32.58 / 33.87 | 27.43 / 28.31 | 38.72 / 39.30 |
-| student_s3    | 32.98 / 28.88 | 34.72 / 35.12 | 28.50 / 29.06 | 40.25 / 40.28 |
-| teacher_s3    | 34.48 / 29.33 | 36.43 / 35.90 | 29.49 / 29.85 | 41.51 / 41.37 |
-
-Static content gains most from jittered engine input (the student leads the best baseline on static scenes by 5.3 dB in engine mode and by 0.7 dB in plain mode). The fast class scores higher than medium for every method, including bicubic, so the classes also differ in texture content; compare methods within a class.
+| Method                                                                                                                                                                                                                                                                                                                         |        Static |          Slow |        Medium |          Fast |
+| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: | ------------: | ------------: | ------------: |
+| bilinear                                                                                                                                                                                                                                                                                                                       | 26.70 / 27.49 | 30.37 / 30.64 | 25.56 / 26.55 | 36.58 / 36.76 |
+| bicubic                                                                                                                                                                                                                                                                                                                        | 26.25 / 28.21 | 30.19 / 31.66 | 24.93 / 27.12 | 36.65 / 37.95 |
+| analytic_taau                                                                                                                                                                                                                                                                                                                  |       27.68 / |       29.40 / |       25.48 / |       34.85 / |
+| `igpu`                                                                                                                                                                                                                                                                                                                         | 31.48 / 28.66 | 32.99 / 34.14 | 27.54 / 28.39 | 38.87 / 39.41 |
+| `low` 3x student                                                                                                                                                                                                                                                                                                               | 33.06 / 28.94 | 34.91 / 35.20 | 28.64 / 29.18 | 40.46 / 40.37 |
+| 3x teacher                                                                                                                                                                                                                                                                                                                     | 34.57 / 29.38 | 36.53 / 35.96 | 29.61 / 29.91 | 41.51 / 41.42 |
+| Static content gains most from jittered engine input (the student leads the best baseline on static scenes by 5.4 dB in engine mode and by 0.7 dB in plain mode). The fast class scores higher than medium for every method, including bicubic, so the classes also differ in texture content; compare methods within a class. |
 
 ![Motion classes and regions](neural-supersampling/outputs/plots/motion_regions.png)
 
@@ -497,22 +488,22 @@ _PSNR-Y by motion class, PSNR-Y inside disocclusions, fine detail and particles,
 
 **Section 23: static-scene convergence** (`static_convergence.csv`, 16 frames, static camera with sub-pixel jitter, engine mode):
 
-| Method             | Last-frame PSNR-Y (dB) | Last-frame FLIP |
-| :----------------- | ---------------------: | --------------: |
-| bilinear           |                  27.29 |          0.0679 |
-| analytic_taau      |                  28.42 |          0.0621 |
-| student_s3         |                  35.63 |          0.0259 |
-| igpu_s3            |                  32.96 |          0.0346 |
-| teacher_s3         |                  38.11 |          0.0205 |
-| abl_reference      |                  32.14 |          0.0365 |
-| abl_no_long_unroll |                  29.64 |          0.0454 |
-| abl_no_history     |                  27.98 |          0.0572 |
+| Method               | Last-frame PSNR-Y (dB) | Last-frame FLIP |
+| :------------------- | ---------------------: | --------------: |
+| bilinear             |                  27.29 |          0.0679 |
+| analytic_taau        |                  28.42 |          0.0621 |
+| `student_s3`         |                  35.75 |          0.0252 |
+| `igpu_s3`            |                  33.17 |          0.0327 |
+| `teacher_s3`         |                  38.26 |          0.0203 |
+| `abl_reference`      |                  32.73 |          0.0364 |
+| `abl_no_long_unroll` |                  29.96 |          0.0458 |
+| `abl_no_history`     |                  28.08 |          0.0548 |
 
 ![Static convergence](neural-supersampling/outputs/plots/static_convergence.png)
 
-_PSNR-Y against frame index with a static camera. The teacher rises to about 38.2 dB by frame 13 and the student to about 35.8 dB by frame 13, both holding to frame 15; `igpu` levels at about 33.2 dB. The ablation without 16-frame unrolls peaks at frame 4 (31.6 dB) and falls to 29.6 dB, the decline the students showed on 24 October 2026; the 20-minute reference with them stays at about 32 dB._
+_PSNR-Y against frame index with a static camera. The teacher reaches about 38 dB by frame 12 and holds to frame 15 (38.26 dB at the last frame); the student rises to about 35.8 dB by frame 13 and holds to frame 15 (35.75 dB); `igpu` levels at about 33.2 dB. The ablation without 16-frame unrolls peaks at about 32.4 dB around frame 6 and falls to 30.0 dB at frame 15 (29.96 dB), while the 30-minute reference with them stays near 33 dB from frame 6 on (32.73 dB at the last frame)._
 
-The 16-frame unrolls fixed the static-scene decline: the student's last-frame PSNR-Y rose from 33.97 to 35.63 dB and its FLIP halved (0.052 to 0.026) against the run of 24 October 2026.
+The 16-frame unrolls fixed the static-scene decline: the student's last-frame PSNR-Y rose from 33.97 to 35.75 dB and its FLIP fell from 0.052 to 0.025 against the run of 24 October 2026.
 
 **Section 24: visual comparisons.** Full last frames per method are saved in `predictions/`.
 
@@ -538,61 +529,60 @@ _Vid4 as plain video (bicubic downscale, no motion vectors): the networks restor
 | `low` 3x student | ![student](neural-supersampling/outputs/predictions/visual_synthetic_fast_student_s3.png) | ![student](neural-supersampling/outputs/predictions/visual_tartanair_student_s3.png) | ![student](neural-supersampling/outputs/predictions/visual_vid4_plain_student_s3.png) |
 | 3x teacher       | ![teacher](neural-supersampling/outputs/predictions/visual_synthetic_fast_teacher_s3.png) | ![teacher](neural-supersampling/outputs/predictions/visual_tartanair_teacher_s3.png) | ![teacher](neural-supersampling/outputs/predictions/visual_vid4_plain_teacher_s3.png) |
 
-**Section 25: ablations** (`ablations.csv`, `low` 3x, 20 minutes each). PSNR-Y delta to `abl_reference` (reference: synthetic 32.31 engine / 32.66 plain, TartanAir 32.90 / 33.50, Vid4 26.54 / 26.38 dB):
+**Section 25: ablations** (`ablations.csv`, `low` 3x, 30 minutes each). PSNR-Y delta to `abl_reference` (reference: synthetic 32.78 engine / 32.79 plain, TartanAir 33.02 / 33.59, Vid4 26.69 / 26.50 dB):
 
 | Ablation          | Synthetic engine | Synthetic plain | TartanAir engine | TartanAir plain | Vid4 engine | Vid4 plain |
 | :---------------- | ---------------: | --------------: | ---------------: | --------------: | ----------: | ---------: |
-| no G-buffers      |            -1.76 |           -0.04 |            -0.97 |           -0.03 |       -1.25 |      -0.07 |
-| no history        |            -1.63 |           +0.20 |            -0.70 |           +0.04 |       -1.91 |      -0.33 |
-| no long unroll    |            -0.34 |           -0.36 |            -0.08 |           -0.08 |       -0.20 |      -0.25 |
-| no motion net     |            -0.89 |           -0.28 |            -0.21 |           -0.22 |       -0.80 |      -0.42 |
-| no video training |            +0.30 |           -1.64 |            +0.06 |           -1.30 |       +0.16 |      -1.32 |
-
-Plain-video training is what makes plain video work (1.3 to 1.6 dB) and costs at most 0.3 dB on render input. Without the motion estimator the model loses 0.2 to 0.4 dB on plain video. History is worth 0.7 to 1.9 dB with jittered input and little on plain video at this budget. The long unrolls add 0.1 to 0.4 dB on average and 2.5 dB at frame 16 of a static scene (section 23). Differences of about 0.2 dB are within the unmeasured run-to-run noise.
+| no G-buffers      |            -1.75 |           -0.05 |            -0.72 |           -0.03 |       -1.06 |      -0.12 |
+| no history        |            -1.94 |           +0.12 |            -0.71 |           -0.01 |       -2.04 |      -0.43 |
+| no long unroll    |            -0.18 |           -0.56 |            -0.02 |           -0.23 |       -0.08 |      -0.44 |
+| no motion net     |            -0.80 |           -0.16 |            -0.35 |           -0.21 |       -0.77 |      -0.46 |
+| no video training |            +0.45 |           -1.58 |            +0.17 |           -1.18 |       +0.29 |      -1.26 |
 
 ![TSR ablations](neural-supersampling/outputs/plots/ablations.png)
 
-_PSNR-Y change and temporal-change error change against the reference per ablation, suite and mode._
+_PSNR-Y change against the reference per ablation, suite and mode (engine on the left, plain on the right)._
 
-**Section 26: latency** (`latency.csv`, fused FP16 step, batch 1, PyTorch eager on one T4, cuDNN default heuristics; `t4_mean_ms` runs the motion estimator (plain video), `t4_mean_ms_engine_mv` skips it; the estimate columns assume a sustained FP16 throughput and are not measurements):
+Plain-video training is what makes plain video work (1.2 to 1.6 dB) and costs 0.17 to 0.45 dB on render input. Without the motion estimator the model loses 0.16 to 0.46 dB on plain video. History is worth 0.7 to 2.0 dB with jittered input and -0.4 to +0.1 dB on plain video at this budget. The long unrolls add 0.02 to 0.56 dB across suites and modes, and 2.8 dB at the last frame of a static scene (section 23). Differences of about 0.2 dB are within the unmeasured run-to-run noise.
 
-| Model      | Scale | Output    | Plain, T4 mean (ms) | Plain, p95 (ms) | Engine MV, T4 mean (ms) |   GMAC | Estimate at 4 TFLOPS (ms) |
-| :--------- | ----: | :-------- | ------------------: | --------------: | ----------------------: | -----: | ------------------------: |
-| igpu_s3    |     3 | 1920x1080 |               17.00 |           17.77 |                   10.32 |   6.20 |                      3.10 |
-| igpu_s3    |     3 | 3840x2160 |               64.22 |           65.13 |                   41.30 |  24.80 |                     12.40 |
-| student_s3 |     3 | 1920x1080 |               27.57 |           28.10 |                   20.88 |  16.13 |                      8.06 |
-| student_s3 |     3 | 3840x2160 |              106.74 |          107.53 |                   81.68 |  64.52 |                     32.26 |
-| student_s2 |     2 | 1920x1080 |               43.08 |           43.62 |                   29.41 |  30.70 |                     15.35 |
-| teacher_s3 |     3 | 1920x1080 |               58.26 |           59.04 |                   49.54 | 156.09 |                     78.04 |
-| teacher_s3 |     3 | 3840x2160 |              227.23 |          228.45 |                  196.77 | 624.36 |                    312.18 |
+**Section 26: latency** (`latency.csv`, fused FP16 step, batch 1, PyTorch eager on one T4, cuDNN autotuning (`cudnn.benchmark`, which the run of 2 to 3 November 2026 did not set); `t4_mean_ms` runs the motion estimator (plain video), `t4_mean_ms_engine_mv` skips it; the estimate columns assume a sustained FP16 throughput and are not measurements):
 
-With engine motion vectors the student takes 20.9 ms at 1080p, against 14.1 ms for the old design (cause not isolated; the output-resolution refinement is new); the motion estimator adds about 7 ms. The current notebook times with cuDNN autotuning.
+| Model                                                                                                                                                                                                                                                                 | Scale | Output    | Plain, T4 mean (ms) | Plain, p95 (ms) | Engine MV, T4 mean (ms) |   GMAC | Estimate at 4 TFLOPS (ms) |
+| :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: | :-------- | ------------------: | --------------: | ----------------------: | -----: | ------------------------: |
+| igpu_s3                                                                                                                                                                                                                                                               |     3 | 1920x1080 |               16.28 |           16.66 |                    9.99 |   6.20 |                      3.10 |
+| igpu_s3                                                                                                                                                                                                                                                               |     3 | 3840x2160 |               61.54 |           62.71 |                   40.47 |  24.80 |                     12.40 |
+| student_s3                                                                                                                                                                                                                                                            |     3 | 1920x1080 |               27.67 |           28.50 |                   21.05 |  16.13 |                      8.06 |
+| student_s3                                                                                                                                                                                                                                                            |     3 | 3840x2160 |              110.65 |          112.27 |                   83.38 |  64.52 |                     32.26 |
+| student_s2                                                                                                                                                                                                                                                            |     2 | 1920x1080 |               42.57 |           42.97 |                   29.85 |  30.70 |                     15.35 |
+| teacher_s3                                                                                                                                                                                                                                                            |     3 | 1920x1080 |               58.74 |           59.53 |                   50.11 | 156.09 |                     78.05 |
+| teacher_s3                                                                                                                                                                                                                                                            |     3 | 3840x2160 |              240.86 |          246.35 |                  220.15 | 624.36 |                    312.18 |
+| With engine motion vectors the student takes 21.0 ms at 1080p, against 14.1 ms for the old design on 24 October 2026 (cause not isolated; the output-resolution refinement is new, and the old design had no motion estimator). The motion estimator adds about 7 ms. |
 
 ![TSR latency](neural-supersampling/outputs/plots/latency.png)
 
 _Mean T4 milliseconds per frame for each model and output size._
 
-**Section 27: ONNX export** (`onnx_export.json`, opset 17, static shapes): `student_s3` 1.475 MB, ONNX Runtime max difference 1.6e-5; `igpu_s3` 0.706 MB, 9.8e-6.
+**Section 27: ONNX export** (`onnx_export.json`, opset 17, static shapes): `student_s3` 1.475 MB, ONNX Runtime max difference 2.8e-5; `igpu_s3` 0.706 MB, 1.5e-5.
 
-**Section 28: summary** (`summary.json`, `stage_times.csv`). Stage minutes: manifest 0.07, caches 26.15, batch probe 0.58, teacher 140.48, student 120.30, pair 75.33, ablations 60.75, test suites 2.48, evaluation 18.50.
+**Section 28: summary** (`summary.json`, `stage_times.csv`). Stage minutes: manifest 0.12, caches 19.97, batch probe 0.61, teacher 170.51, student 190.31, pair 110.29, ablations 90.88, test suites 2.68, evaluation 19.21.
 
 ![TSR stage times](neural-supersampling/outputs/plots/stage_times.png)
 
 _Minutes per stage of the TSR run._
 
-**Sections 29 and 30.** Deleted 9.30 GB of caches and zipped 133 files (0.12 GB) into `outputs.zip`.
+**Sections 29 and 30.** Deleted 9.30 GB of caches and zipped the outputs into `outputs.zip`. The file count and size of the zip are `Not measured in the current repository.`
 
 ## Notebook 3: frame generation
 
-Run of 2 to 3 November 2026 (PyTorch 2.11.0, CUDA 13.0, Python 3.13.16, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 6.59 hours; no failed runs). Outputs: [neural-frame-generation/outputs/](neural-frame-generation/outputs/); executed notebook: [neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb). The current notebook differs from the one that ran in the cut detector, the per-resolution flow scale of the tiers, the native-1080p suite, the budgets and cuDNN autotuning for latency ([Project status](#project-status)).
+Run of 8 November 2026 (02:30 to 12:34 UTC; PyTorch 2.11.0, CUDA 13.0, Python 3.13.16, 2 x Tesla T4, 4 CPU cores, 31.3 GB RAM; 10.07 hours; no failed runs). Outputs: [neural-frame-generation/outputs/](neural-frame-generation/outputs/); executed notebook: [neural-frame-generation.executed.ipynb](neural-frame-generation/outputs/neural-frame-generation.executed.ipynb). This is the first Kaggle run of the changes listed in [RESEARCH.md section 22](RESEARCH.md#22-analysis-of-the-runs-of-2-to-3-november-2026-and-changes): the notebook that ran has the same sources as the committed one, and its budgets and latency timing are those of section 26 below ([Project status](#project-status)).
 
-Every suite is evaluated with engine data (**engine**: motion vectors of I1, exact on TartanAir and Sintel, RAFT on video; depth and camera on synthetic suites) and without any (**plain**: ordinary video). Tiers: `igpu` and `low` (the main student, flow at half resolution in this run), `mid`, and `high`, which is RIFE 4.26's network fine-tuned (the run named `fg_teacher`). `rife_4.26` is the pre-trained RIFE 4.26 unchanged, from the two frames alone.
+Every suite is evaluated with engine data (**engine**: motion vectors of I1, exact on TartanAir and Sintel, RAFT on video; depth and camera on synthetic suites) and without any (**plain**: ordinary video). Tiers: `igpu` and `low` (the main student), `mid`, and `high`, which is RIFE 4.26's network fine-tuned (the run named `fg_teacher`). `rife_4.26` is the pre-trained RIFE 4.26 unchanged, from the two frames alone.
 
-**Sections 1 to 4: library, setup, hardware, configuration.** All three optional packages installed. Settings (`metrics/config.json`): 256-px patches, 40 percent real quads, 40 percent extrapolation, random in-between times in half of synthetic interpolation samples, 3x multi-frame samples in a quarter of real interpolation samples, motion vectors withheld from 30 percent of synthetic and 50 percent of real samples, HUD in 50 percent, menus and cuts 3 percent, camera reversals 20 percent; learning rate 4e-4 (`high` 1e-4); loss weights census 0.5, LPIPS 0.1, flow 0.01, UI 0.2, distillation 0.5. Budgets: teacher 100, student 120, pair 75, ablations 20 min; caches 30 min.
+**Sections 1 to 4: library, setup, hardware, configuration.** All three optional packages installed. Settings (`metrics/config.json`): 256-px patches, 40 percent real quads, 40 percent extrapolation, random in-between times in half of synthetic interpolation samples, 3x multi-frame samples in a quarter of real interpolation samples, motion vectors withheld from 30 percent of synthetic and 50 percent of real samples, HUD in 50 percent, menus and cuts 3 percent, camera reversals 20 percent; learning rate 4e-4 (`high` 1e-4); loss weights census 0.5, LPIPS 0.1, flow 0.01, UI 0.2, distillation 0.5. Budgets: teacher 150 min, student 200, pair 120, ablations 30 min; caches 30 min.
 
 **Sections 5 and 6: manifest and items.** Same manifest as the TSR run (all sources reachable). 4,083 texture and 5,080 quad items for training, 252 and 850 for validation. GameIR is not used (its frames are 10 rendered frames apart).
 
-**Section 7: caches (26.3 min, 14.35 GB).** 256 validation and 6,000 training still crops (2 decode failures), 256 validation and 6,000 training quads, all with RAFT flows. Training quads: Vimeo-90K 5,494, REDS 252, Vimeo-1080p 141, TartanAir 70, Sintel 43; validation quads: Vimeo-90K 251, REDS 5.
+**Section 7: caches (31.4 min, 14.35 GB).** 256 validation and 5,940 training still crops (2 decode failures), 256 validation and 3,805 training quads, all with RAFT flows. The decoding budget of the caches (30 minutes, shared: a quarter for stills and three quarters for quads) stopped both training builds before their 6,000 targets, so the caches hold 5,940 crops and 3,805 quads. Training quads: Vimeo-90K 3,483, REDS 158, Vimeo-1080p 91, Sintel 28, TartanAir 45; validation quads: Vimeo-90K 251, REDS 5.
 
 **Section 8: synthetic preview.**
 
@@ -600,49 +590,49 @@ Every suite is evaluated with engine data (**engine**: motion vectors of I1, exa
 
 _Interpolation, extrapolation with a camera reversal, HUD with a subtitle change, a menu and a scene cut: I0, I1, target, UI mask and exact target-to-I1 flow._
 
-**Section 9: model tiers** (`model_tiers.csv`, parity 0.0 for every tier). RIFE 4.26 loaded into the `high` tier with 153 exact and 5 sliced tensors (the five hint-extended inputs) and 0 missing.
+**Section 9: model tiers** (`model_tiers.csv`, parity 0.0 for every tier). Each tier estimates flow at no more than 576 image lines (`igpu`, `low`) or 1152 lines (`mid`, `high`): taller frames are halved until they fit (`flow_scale` in `nss_models.py`). A 1080p frame therefore runs the flow of `igpu` and `low` at 540 lines and that of `mid` and `high` at 1080 lines. Training crops of 256 pixels and clips up to 576 lines keep full-resolution flow in every tier. RIFE 4.26 loaded into the `high` tier with 153 exact and 5 sliced tensors (the five hint-extended inputs) and 0 missing.
 
-| Tier             |    Params | Flow scale (this run) | GMAC per generated 1080p frame | Of which per-frame encoder |
-| :--------------- | --------: | --------------------: | -----------------------------: | -------------------------: |
-| igpu             |   454,320 |                   0.5 |                           9.40 |                       1.57 |
-| low              |   952,988 |                   0.5 |                          12.71 |                       1.57 |
-| mid              | 2,287,088 |                   1.0 |                          44.30 |                       6.29 |
-| high (`teacher`) | 5,714,508 |                   1.0 |                          76.73 |                       6.29 |
+| Tier             |    Params | Flow scale at 1080p | GMAC per generated 1080p frame | Of which per-frame encoder |
+| :--------------- | --------: | ------------------: | -----------------------------: | -------------------------: |
+| `igpu`           |   454,320 |                 0.5 |                           9.40 |                       1.57 |
+| `low`            |   952,988 |                 0.5 |                          12.71 |                       1.57 |
+| `mid`            | 2,287,088 |                 1.0 |                          44.30 |                       6.29 |
+| high (`teacher`) | 5,714,508 |                 1.0 |                          76.73 |                       6.29 |
 
-**Section 10: batch probe (0.7 min).** Every size up to 64 fit; the teacher got 48 per GPU (64 used 85.3 percent of VRAM) and the student 64 (`batch_probe.csv`).
+**Section 10: batch probe (0.8 min).** Every size up to 64 fit. The teacher and the student both got 48 per GPU, and 64 used 85.3 percent of VRAM for the teacher (`batch_probe.csv`).
 
 | Batch | Teacher VRAM % | Teacher samples/s | Student + teacher VRAM % | Student samples/s |
 | ----: | -------------: | ----------------: | -----------------------: | ----------------: |
-|     4 |            7.3 |              19.5 |                      5.9 |              25.6 |
-|     8 |           12.4 |              27.7 |                     10.0 |              31.3 |
-|    12 |           17.7 |              29.8 |                     14.3 |              33.2 |
-|    16 |           22.8 |              30.5 |                     18.5 |              34.9 |
-|    24 |           33.2 |              31.6 |                     26.8 |              36.0 |
-|    32 |           43.7 |              32.2 |                     35.1 |              36.3 |
-|    48 |           64.5 |              33.1 |                     51.9 |              36.8 |
-|    64 |           85.3 |              33.3 |                     68.6 |              36.7 |
+|     4 |            7.3 |              19.9 |                      6.6 |              22.6 |
+|     8 |           12.4 |              28.0 |                     11.2 |              26.0 |
+|    12 |           17.7 |              29.7 |                     16.1 |              26.8 |
+|    16 |           22.8 |              30.2 |                     20.8 |              27.7 |
+|    24 |           33.2 |              31.1 |                     30.4 |              28.5 |
+|    32 |           43.6 |              31.3 |                     39.9 |              28.9 |
+|    48 |           64.5 |              31.9 |                     59.1 |              29.7 |
+|    64 |           85.3 |              31.3 |                     78.2 |              30.0 |
 
-**Sections 11 to 15: training** (budgets at full scale, scale 1.00). The `low`, `igpu` and `mid` tiers were distilled from the fine-tuned `high` tier. Ablations (all `low` tier): `no_ui_training`, `no_motion_prior` (never any engine motion or camera), `extrap_only`, `no_distillation`, `no_inheritance` (random initialisation instead of RIFE slices).
+**Sections 11 to 15: training** (budgets scaled by 0.99 to fit the session: 148.7, 198.3, 119.0 and 29.7 minutes). The `low`, `igpu` and `mid` tiers were distilled from the fine-tuned `high` tier. Ablations (all `low` tier): `no_ui_training`, `no_motion_prior` (never any engine motion or camera), `extrap_only`, `no_distillation`, `no_inheritance` (random initialisation instead of RIFE slices).
 
 | Stage             | Run                                         |        Steps | Train s      | Best validation PSNR (round) |
 | :---------------- | :------------------------------------------ | -----------: | :----------- | :--------------------------- |
-| A, both GPUs      | `fg_teacher` (`high`)                       |        4,490 | 6,012        | 30.81 dB (10)                |
-| B, both GPUs      | `fg_low`                                    |        4,640 | 7,207        | 27.60 dB (14)                |
-| C, GPU 0 / GPU 1  | `fg_igpu`, `fg_mid`                         | 2,920, 4,560 | 4,507, 4,507 | 26.60 (9), 29.98 (9)         |
-| Ablations, pair 1 | `abl_reference`, `abl_no_ui_training`       |     770, 830 | 1,210, 1,213 | 26.08 (5), 26.57 (5)         |
-| Ablations, pair 2 | `abl_no_motion_prior`, `abl_extrap_only`    |     770, 770 | 1,208, 1,209 | 25.92 (5), 24.95 (5)         |
-| Ablations, pair 3 | `abl_no_distillation`, `abl_no_inheritance` |     910, 780 | 1,211, 1,215 | 25.89 (5), 25.54 (5)         |
+| A, both GPUs      | `fg_teacher` (`high`)                       |        6,590 | 8,934        | 30.99 dB (18)                |
+| B, both GPUs      | `fg_low`                                    |        8,250 | 11,897       | 29.29 dB (24)                |
+| C, GPU 0 / GPU 1  | `fg_igpu`, `fg_mid`                         | 4,980, 9,420 | 7,152, 7,139 | 27.35 (14), 30.47 (14)       |
+| Ablations, pair 1 | `abl_reference`, `abl_no_ui_training`       | 1,240, 1,330 | 1,798, 1,796 | 26.89 (5), 27.75 (5)         |
+| Ablations, pair 2 | `abl_no_motion_prior`, `abl_extrap_only`    | 1,240, 1,260 | 1,794, 1,797 | 26.41 (5), 25.69 (5)         |
+| Ablations, pair 3 | `abl_no_distillation`, `abl_no_inheritance` | 1,410, 1,260 | 1,787, 1,793 | 26.75 (5), 25.99 (5)         |
 
 **Section 16: training curves.** The selection metric is the mean of validation PSNR with the engine data drawn for each sample and without any (`best_validation.csv`):
 
 | Run          |  Best | Engine | Plain | Interp | Extrap | UI region | Samples/s | Peak memory (GB) |
 | :----------- | ----: | -----: | ----: | -----: | -----: | --------: | --------: | ---------------: |
-| `fg_teacher` | 30.81 |  30.88 | 30.75 |  32.06 |  29.25 |     30.76 |      71.9 |             8.91 |
-| `fg_low`     | 27.60 |  28.16 | 27.04 |  28.66 |  27.48 |     27.98 |      82.5 |             9.36 |
-| `fg_mid`     | 29.98 |  30.06 | 29.90 |  30.84 |  28.99 |     31.87 |      32.5 |             5.67 |
-| `fg_igpu`    | 26.60 |  27.28 | 25.92 |  27.64 |  26.79 |     27.14 |      41.5 |             9.25 |
+| `fg_teacher` | 30.99 |  31.01 | 30.97 |  32.25 |  29.30 |     31.89 |      71.0 |             8.91 |
+| `fg_low`     | 29.29 |  29.68 | 28.89 |  30.58 |  28.44 |     32.05 |      66.7 |             8.09 |
+| `fg_mid`     | 30.47 |  30.52 | 30.42 |  31.52 |  29.15 |     32.95 |      31.7 |             4.28 |
+| `fg_igpu`    | 27.35 |  28.26 | 26.44 |  28.98 |  27.27 |     31.25 |      33.5 |             7.96 |
 
-Engine-copy PSNR per round: `high` 29.91 to 30.87 over 13 rounds, `low` 26.19 to 28.16 over 15 (still +0.06 dB over its last three rounds), `mid` 28.52 to 30.06 over 10, `igpu` 26.24 to 27.28 over 10. As for TSR, each ablation validates on its own recipe, so ablation validation scores are not comparable.
+Engine-copy PSNR per round: `high` 30.00 to 31.01 over 19 rounds (+0.01 dB over its last three), `low` 27.01 to 29.68 over 25 (+0.02), `mid` 28.56 to 30.52 over 15 (+0.04), `igpu` 26.95 to 28.26 over 15 (+0.03). Each main run's best round is its last round, so the validation score was still rising, slowly, when the budgets ended. As for TSR, each ablation validates on its own recipe, so ablation validation scores are not comparable.
 
 ![FG training curves](neural-frame-generation/outputs/plots/training_curves.png)
 
@@ -650,107 +640,112 @@ _Validation PSNR and train loss against minutes for every run._
 
 **Section 17: load and fuse.** Ten models fused to FP16 (`high`, student, `igpu`, `mid`, six ablations).
 
-**Section 18: cut detector** (`cut_detector.json`): threshold 0.1224 on the motion-compensated score for 1 percent false alarms on continuous synthetic pairs; detection rate 1.0. The same threshold was applied without motion vectors, where the score has no motion compensation; see section 20.
+**Section 18: cut detector** (`cut_detector.json`). With motion vectors the score is motion-compensated: threshold 0.1417 for 1 percent false alarms on continuous synthetic pairs, detection rate 1.0. Without motion vectors the score is the luma-histogram distance alone, with its own threshold of 0.0431 (detection rate 1.0 on the synthetic cut pairs).
 
 ![Cut detector](neural-frame-generation/outputs/plots/cut_detector.png)
 
-_Scene-cut score for continuous and cut pairs, with the chosen threshold._
+_Scene-cut score for continuous and cut pairs with the chosen threshold, with motion vectors (left) and without them, as the histogram distance alone (right)._
 
-**Section 19: test suites (1.4 min).** 48 synthetic test stills; 48 Vimeo-90K triplets, 10 TartanAir, 10 Sintel, 12 Vimeo-1080p and 4 Vid4 clips. Four Vimeo-1080p clips were skipped (blank, frozen or with a cut) and replaced by the next clips of that source.
+**Section 19: test suites (2.3 min).** 48 synthetic test stills; 48 Vimeo-90K triplets, 10 TartanAir, 10 Sintel, 12 Vimeo-1080p, 4 Vid4 clips and 6 native-resolution Vimeo-1080p clips (`vimeo1080p_native`, 1072x1904 crops, where the `igpu` and `low` tiers estimate flow at half resolution as they would in a 1080p game). Four Vimeo-1080p clips were skipped (blank, frozen or with a cut) and replaced by the next clips of that source; three of them were skipped again in the native suite.
 
-**Section 20: evaluation (5.5 min).** 24,048 metric rows (`test_per_sample.csv`).
+**Section 20: evaluation (8.4 min).** 24,528 metric rows (`test_per_sample.csv`).
 
-**Cut-gate defect.** Every network and RIFE output is replaced by the newest real frame when the cut detector fires. Without motion vectors its score was the raw frame difference plus the histogram distance, compared with the threshold calibrated on motion-compensated scores, so ordinary motion read as a cut. Counted post hoc from `test_per_sample.csv` (a gated output equals frame repeat; `.agent-local` script), gated samples per suite: plain-video Vimeo-90K triplet 17 of 48, TartanAir 6 of 10, Sintel 8 of 10, Vimeo-1080p 4 of 12, Vid4 4 of 4, synthetic 73 of 192, and 3x multi-frame 50 to 100 percent; with engine data 0 to 20 percent on real suites (Sintel 2 of 10) and 5 percent on synthetic. The real test clips contain no cuts (`E.test_clips` rejects them), so every gated real sample is a false alarm. The current notebook uses the histogram distance alone, with its own threshold, when there are no motion vectors.
+**Cut gate.** Every network and RIFE output is replaced by the newest real frame when the cut detector fires, and the notebook counts the gated samples per suite (`metrics/cut_gate_rates.csv`). The run of 2 to 3 November 2026 scored plain video with the motion-compensated threshold, so ordinary motion read as a cut: 17 of 48 plain Vimeo-90K triplets, 6 of 10 TartanAir, 8 of 10 Sintel, 4 of 12 Vimeo-1080p, 4 of 4 Vid4 and 73 of 192 synthetic samples were gated there (post hoc from that run). With the histogram-only threshold this run gates 3 of 48 plain Vimeo-90K triplets, 1 of 10 TartanAir, 2 of 10 Sintel, 3 of 12 Vimeo-1080p, 1 of 6 native Vimeo-1080p and 0 of 4 Vid4 clips, and 18 of 192 plain synthetic samples (5 of 192 with engine data). The synthetic cut suite is gated in every case (48 of 48 in each mode). The real test clips contain no cuts (`E.test_clips` rejects them), so every gated real sample is a false alarm, and the detector still gates a small share of them: 2 of 10 Sintel clips in both modes, 1 of 12 Vimeo-1080p clips in engine mode, and 0 to 50 percent of the 3x multi-frame samples on real suites.
 
-**Section 21: results by suite, mode and method** (`test_results.csv`). PSNR in dB, as saved (gated). With engine data:
+**Section 21: results by suite, mode and method** (`test_results.csv`, mean over the recorded frames of each clip, as saved, gated samples included). PSNR in dB. With engine data:
 
-| Suite         | Mode   | Repeat | Average | MV reprojection | RIFE 4.26 | `igpu` | Student | `mid` | `high` |
-| :------------ | :----- | -----: | ------: | --------------: | --------: | -----: | ------: | ----: | -----: |
-| vimeo_triplet | interp |  23.06 |   26.03 |           31.83 |     34.59 |  32.19 |   32.63 | 34.08 |  34.72 |
-| tartanair     | interp |  18.84 |   20.81 |           27.98 |     29.79 |  28.51 |   28.68 | 29.10 |  30.02 |
-| tartanair     | extrap |  18.88 |   18.71 |           26.91 |     19.02 |  24.33 |   24.83 | 25.09 |  25.01 |
-| sintel        | interp |  20.93 |   22.87 |           24.46 |     25.10 |  23.80 |   23.93 | 24.55 |  24.68 |
-| sintel        | extrap |  20.95 |   20.50 |           23.29 |     21.00 |  22.63 |   22.42 | 22.70 |  22.80 |
-| vid4          | interp |  20.69 |   24.09 |           27.35 |     28.21 |  26.52 |   26.66 | 28.27 |  29.12 |
-| vid4          | extrap |  21.41 |   19.73 |           25.89 |     21.95 |  24.57 |   24.32 | 25.31 |  25.95 |
-| vimeo1080p    | interp |  27.54 |   30.77 |           32.84 |     33.73 |  30.27 |   30.88 | 33.37 |  33.96 |
-| vimeo1080p    | extrap |  29.46 |   26.79 |           30.72 |     27.23 |  30.45 |   29.52 | 32.11 |  32.11 |
-| synthetic     | interp |  29.41 |   34.93 |           36.00 |     40.15 |  34.72 |   35.74 | 37.39 |  38.72 |
-| synthetic     | extrap |  29.38 |   26.91 |           32.48 |     27.89 |  31.56 |   32.18 | 33.04 |  33.44 |
+| Suite                                                                                                                                                                                                                                      | Mode   | Repeat | Average | MV reprojection | RIFE 4.26 | `igpu` | Student | `mid` | `high` |
+| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- | -----: | ------: | --------------: | --------: | -----: | ------: | ----: | -----: |
+| vimeo_triplet                                                                                                                                                                                                                              | interp |  23.06 |   26.03 |           31.83 |     34.80 |  33.34 |   34.08 | 34.47 |  35.03 |
+| vimeo1080p                                                                                                                                                                                                                                 | interp |  27.54 |   30.77 |           32.84 |     33.73 |  32.51 |   33.05 | 33.49 |  34.05 |
+| vimeo1080p                                                                                                                                                                                                                                 | extrap |  29.46 |   26.79 |           30.72 |     27.23 |  31.54 |   31.85 | 32.27 |  32.50 |
+| vimeo1080p_native                                                                                                                                                                                                                          | interp |  27.82 |   29.68 |           31.81 |     32.67 |  31.98 |   31.34 | 32.68 |  32.89 |
+| vimeo1080p_native                                                                                                                                                                                                                          | extrap |  28.58 |   26.75 |           29.86 |     27.08 |  29.88 |   29.86 | 30.60 |  30.63 |
+| tartanair                                                                                                                                                                                                                                  | interp |  18.84 |   20.81 |           27.98 |     29.79 |  29.29 |   29.58 | 29.47 |  29.98 |
+| tartanair                                                                                                                                                                                                                                  | extrap |  18.88 |   18.71 |           26.91 |     19.02 |  24.79 |   24.77 | 25.22 |  25.12 |
+| sintel                                                                                                                                                                                                                                     | interp |  20.93 |   22.87 |           24.46 |     25.10 |  24.20 |   24.03 | 24.57 |  24.48 |
+| sintel                                                                                                                                                                                                                                     | extrap |  20.95 |   20.50 |           23.29 |     21.00 |  22.78 |   22.69 | 22.74 |  22.74 |
+| vid4                                                                                                                                                                                                                                       | interp |  20.69 |   24.09 |           27.35 |     28.21 |  28.05 |   28.33 | 28.86 |  28.94 |
+| vid4                                                                                                                                                                                                                                       | extrap |  21.41 |   19.73 |           25.89 |     21.95 |  25.81 |   24.99 | 25.63 |  25.92 |
+| synthetic                                                                                                                                                                                                                                  | interp |  29.41 |   34.93 |           36.00 |     40.48 |  35.96 |   37.31 | 37.93 |  39.34 |
+| synthetic                                                                                                                                                                                                                                  | extrap |  29.38 |   26.91 |           32.48 |     27.89 |  31.72 |   33.05 | 33.61 |  33.85 |
+| The saved plain-video means (`test_results.csv`, `summary.json`) include the gated samples: for example Vimeo-90K triplet interpolation RIFE 33.88, `high` 34.31 and student 32.06 dB, and Vid4 interpolation RIFE 28.21, `high` 29.05 dB. |
 
-Plain video, on the samples the cut detector did not gate (post hoc from `test_per_sample.csv`; Vid4 has none left; the Sintel and TartanAir rows rest on 2 to 4 samples):
+Plain video, on the samples the cut gate did not replace (from `test_per_sample.csv`: a sample is gated when its RIFE 4.26 output equals frame repeat exactly, and these counts match `cut_gate_rates.csv`). The Sintel, TartanAir, Vid4 and native rows rest on 4 to 14 samples each:
 
-| Suite         | Mode   | Samples | Repeat | Average | RIFE 4.26 | `igpu` | Student | `mid` | `high` |
-| :------------ | :----- | ------: | -----: | ------: | --------: | -----: | ------: | ----: | -----: |
-| vimeo_triplet | interp |      31 |  25.28 |   28.46 |     36.25 |  29.87 |   31.74 | 35.80 |  36.47 |
-| vimeo1080p    | interp |       8 |  32.06 |   35.00 |     37.67 |  32.41 |   32.67 | 37.50 |  38.24 |
-| vimeo1080p    | extrap |       8 |  32.67 |   30.29 |     29.32 |  31.39 |   28.40 | 34.34 |  34.54 |
-| vimeo1080p    | mfg3x  |      12 |  33.38 |   35.93 |     37.68 |  32.77 |   33.27 | 37.55 |  38.12 |
-| tartanair     | interp |       4 |  21.67 |   23.47 |     32.21 |  24.12 |   26.23 | 31.21 |  32.73 |
-| tartanair     | extrap |       4 |  21.85 |   21.64 |     22.01 |  22.01 |   24.46 | 27.41 |  27.47 |
-| tartanair     | mfg3x  |       4 |  22.71 |   24.29 |     31.71 |  24.60 |   25.45 | 30.07 |  32.11 |
-| sintel        | interp |       2 |  23.74 |   25.70 |     29.13 |  25.36 |   25.98 | 27.49 |  28.25 |
-| sintel        | extrap |       2 |  24.32 |   23.36 |     24.25 |  24.41 |   24.67 | 26.04 |  26.35 |
-| synthetic     | interp |     119 |  35.90 |   43.27 |     46.66 |  37.09 |   38.93 | 42.70 |  44.72 |
-| synthetic     | extrap |     119 |  35.86 |   32.34 |     33.39 |  33.80 |   34.21 | 37.80 |  38.74 |
+| Suite                 | Mode   | Samples | Repeat | Average | RIFE 4.26 | `igpu` | Student | `mid` | `high` |
+| :-------------------- | :----- | ------: | -----: | ------: | --------: | -----: | ------: | ----: | -----: |
+| vimeo_triplet         | interp |      45 |  23.34 |   26.36 |     34.87 |  29.69 |   32.94 | 34.38 |  35.33 |
+| vimeo1080p            | interp |       9 |  29.33 |   32.47 |     36.93 |  32.89 |   34.93 | 36.52 |  37.14 |
+| vimeo1080p            | extrap |       9 |  30.15 |   28.15 |     27.27 |  29.92 |   31.31 | 33.08 |  33.38 |
+| vimeo1080p            | mfg3x  |      16 |  29.87 |   32.27 |     37.01 |  32.86 |   34.54 | 36.24 |  37.07 |
+| vimeo1080p_native     | interp |       5 |  27.21 |   29.37 |     33.00 |  29.58 |   31.21 | 33.01 |  33.24 |
+| vimeo1080p_native     | extrap |       5 |  28.79 |   26.82 |     27.01 |  27.86 |   28.94 | 31.01 |  30.65 |
+| vimeo1080p_native     | mfg3x  |       8 |  29.51 |   31.03 |     34.76 |  30.38 |   32.18 | 34.66 |  35.20 |
+| tartanair             | interp |       9 |  19.31 |   21.29 |     30.18 |  22.08 |   25.23 | 28.64 |  30.11 |
+| tartanair             | extrap |       9 |  19.37 |   19.15 |     19.51 |  19.55 |   22.28 | 24.82 |  24.94 |
+| tartanair             | mfg3x  |      14 |  18.71 |   20.61 |     27.77 |  21.02 |   23.47 | 26.63 |  27.91 |
+| sintel                | interp |       8 |  21.66 |   23.60 |     26.88 |  23.75 |   24.48 | 25.97 |  26.38 |
+| sintel                | extrap |       8 |  21.90 |   21.42 |     21.97 |  22.14 |   22.94 | 23.85 |  24.02 |
+| sintel                | mfg3x  |      10 |  21.66 |   23.50 |     26.14 |  23.11 |   23.53 | 25.22 |  25.71 |
+| vid4                  | interp |       4 |  20.69 |   24.09 |     28.21 |  26.23 |   26.72 | 28.66 |  29.05 |
+| vid4                  | extrap |       4 |  21.41 |   19.73 |     21.95 |  21.86 |   23.93 | 25.31 |  25.67 |
+| vid4                  | mfg3x  |       8 |  19.56 |   21.42 |     26.03 |  24.45 |   25.44 | 26.52 |  26.82 |
+| synthetic             | interp |     174 |  30.71 |   36.57 |     41.97 |  34.32 |   37.10 | 39.26 |  41.06 |
+| synthetic             | extrap |     174 |  30.68 |   28.01 |     29.03 |  29.64 |   32.65 | 34.86 |  35.20 |
+| What the numbers say: |
 
-The saved plain-video means (`test_results.csv`, `summary.json`) mix these with gated samples: for example Vimeo-90K triplet RIFE 30.15, `high` 30.29, student 27.23 dB, and every method 20.69 dB on Vid4 interpolation.
-
-What the numbers say:
-
-- **The fine-tuned `high` tier is the best model.** It beats RIFE 4.26 on every plain-video interpolation suite with enough samples (+0.22 dB on Vimeo-90K triplet, +0.57 on Vimeo-1080p, +0.44 on 3x multi-frame Vimeo-1080p; on the 2 remaining Sintel samples it is 0.88 dB below) and extrapolates far better than RIFE, which cannot extrapolate (Vimeo-1080p 34.54 against 29.32 dB). On the independent Middlebury set it scores 34.30 dB against RIFE's 33.34 ([Project status](#project-status)). It loses to RIFE on synthetic interpolation (44.72 against 46.66 dB, mostly static scenes where its residual head adds error: 50.3 against 57.4 dB with engine data).
-- **The `low` and `igpu` students do not work on ordinary video.** On Vimeo-90K triplet they are 4.5 and 6.4 dB below RIFE, and on Vimeo-1080p interpolation they score below frame averaging (32.67 and 32.41 against 35.00 dB). Their flow ran at half resolution on 256-pixel training crops; the current notebook removes that (section 22 of RESEARCH.md).
-- **Engine motion vectors barely help interpolation**: with them `high` is -0.53 (Sintel) to +0.91 dB (Vid4) from RIFE on the ungated real samples, about what it gains without them; plain reprojection with exact motion vectors stays below RIFE on interpolation. For **extrapolation they matter**: with them `high` is 1.8 to 6.0 dB above RIFE, and plain reprojection with exact engine motion is still best on TartanAir (26.91 against 25.01 dB) and Sintel (23.29 against 22.80).
+- **The fine-tuned `high` tier is the strongest model on most suites.** On ordinary video it beats RIFE 4.26 on Vimeo-90K triplet interpolation (+0.46 dB, 45 samples), Vimeo-1080p interpolation (+0.21 dB, 9 samples; native +0.25 dB, 5 samples) and Vid4 (+0.84 dB, 4 samples). It is level with RIFE on TartanAir (-0.06 dB, 9 samples) and trails it on Sintel (-0.50 dB, 8 samples) and on synthetic interpolation (41.06 against 41.97 dB, mostly static scenes where its residual head adds error: 50.7 against 57.4 dB with engine data). It extrapolates far better than RIFE, which cannot extrapolate: +2.1 to +6.1 dB on the real plain suites and +2.2 to +6.1 dB with engine data, for example Vimeo-1080p 33.38 against 27.27 dB on plain extrapolation. On the independent Middlebury "other" interpolation set, measured locally on 8 November 2026 with this run's weights (colour frames only, CPU; log `.agent-local/logs/2026-11-08_middlebury_fg_tiers.log`), `high` scores 34.23 dB against RIFE 4.26's 33.34 dB.
+- **The `low` and `igpu` students now beat frame averaging on ordinary video, but trail RIFE 4.26.** On the real plain interpolation suites `low` leads frame averaging by 0.9 to 6.6 dB and `igpu` by 0.2 to 3.3 dB (`igpu` is 2.2 dB below averaging on synthetic interpolation), while `low` trails RIFE 4.26 by 1.5 to 5.0 dB and `igpu` by 2.0 to 8.1 dB. On Vimeo-90K triplet the gaps are 1.9 dB (`low`) and 5.2 dB (`igpu`). Both tiers also rise above the previous run on Middlebury: `low` 31.56 dB and `igpu` 30.30 dB, against 28.13 and 28.45 dB before, and above RIFE 4.26 at half flow resolution (30.90 dB), though not RIFE 4.26 at full resolution (33.34 dB).
+- **Engine motion vectors barely change interpolation.** With them `high` is -0.78 (Sintel) to +0.73 dB (Vid4) from RIFE 4.26 on the ungated real samples, against -0.50 to +0.84 dB without them. Plain reprojection with exact motion vectors stays below RIFE 4.26 on every interpolation suite. For **extrapolation they matter**: with them `high` is 2.2 to 6.1 dB above RIFE, and plain reprojection with exact engine motion is still the best method on TartanAir (26.91 against 25.12 dB for `high`, as saved) and Sintel (23.29 against 22.74 dB).
 
 ![Real suites](neural-frame-generation/outputs/plots/real_results.png)
 
-_PSNR per method on the real suites for interpolation, extrapolation and 3x multi-frame generation, with and without engine data (as saved, so the plain panels include the gated samples)._
+_PSNR per method on the real suites for interpolation, extrapolation and 3x multi-frame generation, with and without engine data (as saved, so the plain panels include the gated samples). The 3x engine panel is empty because multi-frame samples are plain only._
 
 **Section 22: motion, UI, menus, cuts and reversals.** Measured motion between real frames per synthetic class: static 0.0, slow 1.65, medium 5.53, fast 13.79 px. Synthetic PSNR by motion class with engine data (dB, as saved):
 
-| Mode   | Method          | Static |  Slow | Medium |  Fast |
-| :----- | :-------------- | -----: | ----: | -----: | ----: |
-| interp | repeat          |  46.23 | 28.45 |  22.88 | 20.07 |
-| interp | MV reprojection |  52.32 | 34.44 |  30.54 | 26.69 |
-| interp | RIFE 4.26       |  57.35 | 37.54 |  35.95 | 29.78 |
-| interp | `igpu`          |  45.39 | 35.69 |  31.57 | 26.22 |
-| interp | student         |  48.26 | 36.36 |  31.98 | 26.38 |
-| interp | `mid`           |  47.77 | 38.95 |  34.75 | 28.08 |
-| interp | `high`          |  50.30 | 39.60 |  35.55 | 29.43 |
-| extrap | repeat          |  46.23 | 28.41 |  22.89 | 19.99 |
-| extrap | MV reprojection |  42.92 | 32.73 |  29.13 | 25.14 |
-| extrap | RIFE 4.26       |  40.27 | 28.40 |  22.99 | 19.89 |
-| extrap | `igpu`          |  41.72 | 32.38 |  28.36 | 23.80 |
-| extrap | student         |  43.40 | 32.77 |  28.58 | 23.97 |
-| extrap | `mid`           |  43.24 | 34.26 |  30.28 | 24.39 |
-| extrap | `high`          |  44.22 | 34.66 |  30.31 | 24.56 |
+| Mode                                                                                                     | Method          | Static |  Slow | Medium |  Fast |
+| :------------------------------------------------------------------------------------------------------- | :-------------- | -----: | ----: | -----: | ----: |
+| interp                                                                                                   | repeat          |  46.23 | 28.45 |  22.88 | 20.07 |
+| extrap                                                                                                   | repeat          |  46.23 | 28.41 |  22.89 | 19.99 |
+| interp                                                                                                   | MV reprojection |  52.32 | 34.44 |  30.54 | 26.69 |
+| extrap                                                                                                   | MV reprojection |  42.92 | 32.73 |  29.13 | 25.14 |
+| interp                                                                                                   | RIFE 4.26       |  57.35 | 37.54 |  35.95 | 31.08 |
+| extrap                                                                                                   | RIFE 4.26       |  40.27 | 28.40 |  22.99 | 19.90 |
+| interp                                                                                                   | `igpu`          |  46.21 | 36.66 |  33.00 | 27.97 |
+| extrap                                                                                                   | `igpu`          |  41.99 | 32.36 |  28.44 | 24.11 |
+| interp                                                                                                   | Student         |  47.42 | 38.54 |  34.41 | 28.85 |
+| extrap                                                                                                   | Student         |  43.47 | 33.89 |  29.83 | 25.01 |
+| interp                                                                                                   | `mid`           |  47.74 | 39.34 |  35.22 | 29.43 |
+| extrap                                                                                                   | `mid`           |  43.65 | 34.97 |  30.61 | 25.23 |
+| interp                                                                                                   | `high`          |  50.71 | 40.04 |  35.87 | 30.75 |
+| extrap                                                                                                   | `high`          |  44.39 | 35.01 |  30.58 | 25.42 |
+| UI suite with engine data (`ui_results.csv`; ghosting = share of UI pixels off by more than 10 percent): |
 
-UI suite with engine data (`ui_results.csv`; ghosting = share of UI pixels off by more than 10 percent):
+| Mode                                                                                                                                                                                                                                                                                                                                                  | Method           |  PSNR | UI PSNR | UI ghosting rate |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------- | ----: | ------: | ---------------: |
+| interp                                                                                                                                                                                                                                                                                                                                                | repeat           | 26.39 |   47.86 |            0.025 |
+| interp                                                                                                                                                                                                                                                                                                                                                | average          | 26.12 |   31.67 |            0.300 |
+| interp                                                                                                                                                                                                                                                                                                                                                | MV reprojection  | 25.48 |   16.66 |            0.302 |
+| interp                                                                                                                                                                                                                                                                                                                                                | RIFE 4.26        | 27.47 |   22.18 |            0.228 |
+| interp                                                                                                                                                                                                                                                                                                                                                | `igpu`           | 31.21 |   31.53 |            0.062 |
+| interp                                                                                                                                                                                                                                                                                                                                                | student          | 32.40 |   33.23 |            0.047 |
+| interp                                                                                                                                                                                                                                                                                                                                                | `mid`            | 33.02 |   34.38 |            0.048 |
+| interp                                                                                                                                                                                                                                                                                                                                                | `high`           | 33.40 |   32.63 |            0.049 |
+| interp                                                                                                                                                                                                                                                                                                                                                | student+ui_layer | 34.64 |   53.79 |            0.010 |
+| interp                                                                                                                                                                                                                                                                                                                                                | `igpu`+ui_layer  | 32.83 |   52.58 |            0.011 |
+| extrap                                                                                                                                                                                                                                                                                                                                                | repeat           | 26.96 |   46.69 |            0.020 |
+| extrap                                                                                                                                                                                                                                                                                                                                                | MV reprojection  | 24.37 |   18.50 |            0.363 |
+| extrap                                                                                                                                                                                                                                                                                                                                                | RIFE 4.26        | 26.19 |   32.05 |            0.048 |
+| extrap                                                                                                                                                                                                                                                                                                                                                | student          | 29.78 |   34.13 |            0.042 |
+| extrap                                                                                                                                                                                                                                                                                                                                                | `high`           | 30.32 |   33.46 |            0.054 |
+| extrap                                                                                                                                                                                                                                                                                                                                                | student+ui_layer | 30.75 |   49.46 |            0.013 |
+| The learned UI mask cuts ghosting from 0.23 (RIFE 4.26) and 0.30 (reprojection and averaging) to 0.047 to 0.062 (student, `mid`, `high` and `igpu`). With the engine's separate UI layer it is 0.010 to 0.011, below frame repeat (0.025). The student's interpolation ghosting (0.047) is about the same as the 0.046 of the 24 October 2026 design. |
 
-| Mode   | Method           |  PSNR | UI PSNR | UI ghosting rate |
-| :----- | :--------------- | ----: | ------: | ---------------: |
-| interp | repeat           | 26.39 |   47.86 |            0.026 |
-| interp | average          | 26.12 |   31.67 |            0.300 |
-| interp | MV reprojection  | 25.48 |   16.66 |            0.302 |
-| interp | RIFE 4.26        | 28.10 |   24.96 |            0.180 |
-| interp | `igpu`           | 29.65 |   30.09 |            0.091 |
-| interp | student          | 29.93 |   31.37 |            0.078 |
-| interp | `mid`            | 32.28 |   34.41 |            0.052 |
-| interp | `high`           | 32.58 |   33.36 |            0.049 |
-| interp | student+ui_layer | 31.57 |   51.40 |            0.012 |
-| interp | `igpu`+ui_layer  | 31.14 |   51.12 |            0.012 |
-| extrap | repeat           | 26.96 |   46.69 |            0.020 |
-| extrap | MV reprojection  | 24.37 |   18.50 |            0.363 |
-| extrap | RIFE 4.26        | 26.23 |   32.54 |            0.047 |
-| extrap | student          | 28.67 |   31.80 |            0.083 |
-| extrap | `high`           | 30.02 |   33.69 |            0.052 |
-| extrap | student+ui_layer | 29.80 |   48.29 |            0.014 |
+Menus (engine, interpolation): student 35.12 dB, with the UI layer 43.77, `high` 35.26, `mid` 36.42, RIFE 4.26 33.36, repeat 34.82, MV reprojection 26.69. Cuts: every gated method outputs the newest real frame (PSNR capped at 100 dB), against 26.87 (interpolation) and 26.20 (extrapolation) for MV reprojection and about 15.0 for averaging.
 
-The learned UI mask cuts ghosting from 0.18 (RIFE) and 0.30 (reprojection) to 0.05 to 0.09; with the engine's separate UI layer it is 0.012, below frame repeat. The student's interpolation ghosting is higher than the old design's 0.046.
-
-Menus (engine, interpolation): student 35.42 dB, with the UI layer 40.95, `high` 35.31, `mid` 37.29, RIFE 33.72, repeat 34.82, MV reprojection 26.69. Cuts: every gated method outputs the newest real frame (PSNR capped at 100 dB), against 26.87 (interpolation) and 26.20 (extrapolation) for MV reprojection and about 15.0 for averaging.
-
-Camera reversal (extrapolation, engine), without / with the late-latched camera prior: student 25.05 / 26.10 dB, `igpu` 24.93 / 25.99, `mid` 25.95 / 26.77, `high` 26.30 / 26.85; frame repeat 25.91, RIFE 25.85, MV reprojection 24.71. **The camera prior now works** (+0.55 to +1.06 dB; it made no difference in the old design), and with it every tier beats frame repeat (25.91 dB) on this suite.
+Camera reversal (extrapolation, engine), without / with the late-latched camera prior: student 25.30 / 28.01 dB, `igpu` 24.99 / 26.65, `mid` 26.06 / 27.04, `high` 26.30 / 27.07; frame repeat 25.91, RIFE 4.26 25.85, MV reprojection 24.71. **The camera prior works** (+0.8 to +2.7 dB, most for the smallest tiers), and with it every tier beats frame repeat (25.91 dB) on this suite.
 
 ![FG special cases](neural-frame-generation/outputs/plots/special_cases.png)
 
@@ -758,13 +753,12 @@ _PSNR by motion class, UI ghosting rate per method, menu and cut correctness, an
 
 **Section 23: temporal consistency of the displayed sequence** (`temporal_consistency.csv`, tOF in px, lower is better; networks without engine data and without the cut gate; per clip in `temporal_consistency_per_clip.csv`):
 
-| Suite         | Average | MV reprojection | RIFE 4.26 | `igpu` | Student | `mid` | `high` |
-| :------------ | ------: | --------------: | --------: | -----: | ------: | ----: | -----: |
-| tartanair     |   8.282 |           0.750 |     0.672 |  8.096 |   6.589 | 2.076 |  0.743 |
-| vimeo1080p    |   6.369 |          11.477 |     8.738 | 10.417 |  10.245 | 9.620 |  9.927 |
-| vimeo_triplet |   1.774 |           0.306 |     0.284 |  1.664 |   1.335 | 0.386 |  0.339 |
-
-RIFE is the most consistent on TartanAir and Vimeo-90K triplet, with `high` close behind; the `low` and `igpu` students are closer to frame averaging than to RIFE, consistent with their image scores. On Vimeo-1080p frame averaging again has the lowest tOF.
+| Suite                                                                                                                                                                                                                                                                                                                         | Average | MV reprojection | RIFE 4.26 | `igpu` | Student | `mid` | `high` |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: | --------------: | --------: | -----: | ------: | ----: | -----: |
+| tartanair                                                                                                                                                                                                                                                                                                                     |   8.282 |           0.750 |     0.672 |  7.798 |   5.349 | 1.806 |  0.834 |
+| vimeo1080p                                                                                                                                                                                                                                                                                                                    |   6.369 |          11.477 |     8.739 |  9.139 |  10.079 | 9.920 | 10.035 |
+| vimeo_triplet                                                                                                                                                                                                                                                                                                                 |   1.774 |           0.306 |     0.284 |  1.653 |   1.095 | 0.419 |  0.312 |
+| RIFE 4.26 is the most consistent on TartanAir and Vimeo-90K triplet, with `high` close behind (0.834 and 0.312 against 0.672 and 0.284 px); the `low` and `igpu` students are closer to frame averaging than to RIFE, consistent with their image scores. On Vimeo-1080p frame averaging again has the lowest tOF (6.369 px). |
 
 **Section 24: visual comparisons.**
 
@@ -789,91 +783,91 @@ Full-size frames of both samples, saved in `predictions/`:
 | Student, no engine data | ![student plain](neural-frame-generation/outputs/predictions/visual_ui_student_no_engine_data.png) | ![student plain](neural-frame-generation/outputs/predictions/visual_extrap_student_no_engine_data.png) |
 | Student + UI layer      | ![student ui](neural-frame-generation/outputs/predictions/visual_ui_student_ui_layer.png)          | Not applicable (no UI in this sample)                                                                  |
 
-**Section 25: ablations** (`ablations.csv`, `low` tier, 20 minutes each, as saved). PSNR in dB and UI ghosting rate:
+**Section 25: ablations** (`ablations.csv`, `low` tier, 30 minutes each, as saved). PSNR in dB and UI ghosting rate:
 
 | Ablation        | Vimeo-90K triplet interp, engine | Vimeo-90K triplet interp, plain | TartanAir interp, engine | TartanAir extrap, engine | Synthetic interp, engine | Synthetic extrap, engine | UI ghosting, interp, engine |
 | :-------------- | -------------------------------: | ------------------------------: | -----------------------: | -----------------------: | -----------------------: | -----------------------: | --------------------------: |
-| reference       |                            31.08 |                           25.53 |                    26.81 |                    22.94 |                    33.02 |                    30.51 |                       0.105 |
-| no UI training  |                            32.01 |                           26.37 |                    27.69 |                    23.89 |                    35.25 |                    31.87 |                       0.321 |
-| no motion prior |                            27.59 |                           26.12 |                    21.02 |                    19.22 |                    31.01 |                    27.79 |                       0.057 |
-| extrap only     |                            22.17 |                           22.09 |                    19.14 |                    23.90 |                    23.30 |                    31.15 |                       0.141 |
-| no distillation |                            31.10 |                           25.25 |                    26.70 |                    21.63 |                    32.68 |                    29.99 |                       0.100 |
-| no inheritance  |                            30.60 |                           24.43 |                    27.08 |                    23.94 |                    33.62 |                    31.55 |                       0.191 |
-
-At 20 minutes every ablation is far below RIFE, so these runs mostly show early-training effects. Engine motion priors are worth 3.5 to 5.8 dB with engine data on real suites. UI training costs 0.8 to 2.2 dB on scenes without UI and is what keeps ghosting low (0.105 against 0.321). Distillation adds 0.5 to 1.3 dB on extrapolation. Random initialisation is no worse than RIFE slices on several suites, so the slices give the narrow tiers little head start. The extrapolation-only model extrapolates 1.0 dB better on TartanAir than the shared one.
+| reference       |                            32.73 |                           28.01 |                    28.30 |                    24.24 |                    34.60 |                    31.41 |                       0.073 |
+| no UI training  |                            33.64 |                           30.00 |                    29.10 |                    24.93 |                    36.54 |                    32.30 |                       0.362 |
+| no motion prior |                            29.36 |                           29.19 |                    21.53 |                    19.04 |                    32.39 |                    28.31 |                       0.051 |
+| extrap only     |                            21.29 |                           21.02 |                    18.96 |                    24.72 |                    21.77 |                    32.01 |                       0.215 |
+| no distillation |                            32.53 |                           27.71 |                    28.11 |                    22.97 |                    34.22 |                    31.24 |                       0.074 |
+| no inheritance  |                            31.94 |                           25.47 |                    27.35 |                    24.55 |                    33.93 |                    31.88 |                       0.085 |
 
 ![FG ablations](neural-frame-generation/outputs/plots/ablations.png)
 
 _PSNR change against the reference per ablation, mode and input mode, all suites._
 
-**Section 26: latency and pacing model** (`latency.csv`, `pacing_model.csv`). T4 eager PyTorch, fused FP16, batch 1, every engine input present, cuDNN default heuristics:
+On interpolation every ablation is below RIFE 4.26, so at 30 minutes these runs mostly show early-training effects. Engine motion priors are worth 3.4 to 6.8 dB with engine data on the real suites (Vimeo-90K triplet 3.4, TartanAir interpolation 6.8, TartanAir extrapolation 5.2). UI training costs 0.7 to 2.0 dB on scenes without UI and is what keeps ghosting low (0.073 against 0.362). Distillation adds 1.3 dB on TartanAir extrapolation and 0.2 dB on synthetic extrapolation. Random initialisation is 0.7 to 2.5 dB worse than the RIFE slices on interpolation, but 0.3 to 0.5 dB better on extrapolation, so the slices help the narrow tiers only for interpolation. The extrapolation-only model extrapolates 0.5 dB better on TartanAir (24.72 against 24.24) and 0.6 dB better on synthetic scenes than the shared one.
 
-| Model   | Output    | T4 mean (ms) | T4 p95 (ms) |   GMAC | Estimate at 4 TFLOPS (ms) |
-| :------ | :-------- | -----------: | ----------: | -----: | ------------------------: |
-| igpu    | 1920x1080 |        46.16 |       46.65 |   9.40 |                      4.70 |
-| igpu    | 2560x1440 |        80.91 |       81.44 |  16.71 |                      8.36 |
-| student | 1920x1080 |        47.53 |       48.09 |  12.71 |                      6.36 |
-| student | 2560x1440 |        83.82 |       84.87 |  22.60 |                     11.30 |
-| mid     | 1920x1080 |       104.62 |      105.20 |  44.30 |                     22.15 |
-| mid     | 2560x1440 |       188.42 |      190.72 |  78.76 |                     39.38 |
-| high    | 1920x1080 |       114.88 |      115.93 |  76.73 |                     38.37 |
-| high    | 2560x1440 |       206.55 |      208.22 | 136.41 |                     68.20 |
+**Section 26: latency and pacing model** (`latency.csv`, `pacing_model.csv`). T4 eager PyTorch, fused FP16, batch 1, every engine input present, cuDNN autotuning (`cudnn.benchmark`, which the run of 2 to 3 November 2026 did not set):
 
-The pacing model (`nss_metrics.simulate_latency`) is driven by the measured 47.53 ms student time:
+| Model                                                                                                                                                                                                                                                                                                                                      | Output    | T4 mean (ms) | T4 p95 (ms) |   GMAC | Estimate at 4 TFLOPS (ms) |
+| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------- | -----------: | ----------: | -----: | ------------------------: |
+| igpu                                                                                                                                                                                                                                                                                                                                       | 1920x1080 |        46.77 |       47.32 |   9.40 |                      4.70 |
+| igpu                                                                                                                                                                                                                                                                                                                                       | 2560x1440 |        49.95 |       50.45 |  16.71 |                      8.36 |
+| student                                                                                                                                                                                                                                                                                                                                    | 1920x1080 |        48.10 |       48.58 |  12.71 |                      6.36 |
+| student                                                                                                                                                                                                                                                                                                                                    | 2560x1440 |        51.90 |       52.64 |  22.60 |                     11.30 |
+| mid                                                                                                                                                                                                                                                                                                                                        | 1920x1080 |       106.56 |      107.30 |  44.30 |                     22.15 |
+| mid                                                                                                                                                                                                                                                                                                                                        | 2560x1440 |        85.72 |       87.16 |  78.76 |                     39.38 |
+| high                                                                                                                                                                                                                                                                                                                                       | 1920x1080 |       120.40 |      121.54 |  76.73 |                     38.37 |
+| high                                                                                                                                                                                                                                                                                                                                       | 2560x1440 |        91.15 |       91.65 | 136.41 |                     68.20 |
+| The 2560x1440 GMAC values are the 1920x1080 values multiplied by the pixel ratio (1.78), so they do not follow the flow rule of section 9. At 1440 lines the flow of `mid` and `high` runs at half resolution and that of `igpu` and `low` at a quarter, which is why the 1440p rows of `mid` and `high` are faster than their 1080p rows. |
 
-| Base render (ms) | Mode        | Displayed fps | Game latency (ms) | Camera latency (ms) | Content age (ms) |
-| ---------------: | :---------- | ------------: | ----------------: | ------------------: | ---------------: |
-|             33.3 | native      |         30.01 |             38.33 |               38.33 |            38.33 |
-|             33.3 | interp      |         24.74 |            126.29 |               85.86 |           106.08 |
-|             33.3 | extrap      |         24.74 |             38.33 |               58.55 |            58.55 |
-|             33.3 | extrap_late |         24.74 |             38.33 |               43.43 |            58.55 |
-|             25.0 | native      |         39.97 |             30.02 |               30.02 |            30.02 |
-|             25.0 | interp      |         27.57 |            113.83 |               77.55 |            95.69 |
-|             25.0 | extrap      |         27.57 |             30.02 |               48.16 |            48.16 |
-|             25.0 | extrap_late |         27.57 |             30.02 |               39.28 |            48.16 |
-|             16.7 | native      |         59.84 |             21.72 |               21.72 |            21.72 |
-|             16.7 | interp      |         31.13 |            101.37 |               69.24 |            85.31 |
-|             16.7 | extrap      |         31.13 |             21.72 |               37.78 |            37.78 |
-|             16.7 | extrap_late |         31.13 |             21.72 |               35.12 |            37.78 |
+The pacing model (`nss_metrics.simulate_latency`) is driven by the measured 48.10 ms student time:
 
-At 47.5 ms per generated frame on the same T4 that renders, frame generation lowers the displayed rate (30 to 24.7 fps) instead of raising it. The eager PyTorch time is 7.5 times the arithmetic estimate and about 3 times the old design's 16.1 ms; in-engine latency on target GPUs is `Not measured in the current repository.` The current notebook times with cuDNN autotuning.
+|                                                                                                                                                                                                                                                                                                                                      Base render (ms) | Mode        | Displayed fps | Game latency (ms) | Camera latency (ms) | Content age (ms) |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :---------- | ------------: | ----------------: | ------------------: | ---------------: |
+|                                                                                                                                                                                                                                                                                                                                                  33.3 | native      |         30.01 |             38.33 |               38.33 |            38.33 |
+|                                                                                                                                                                                                                                                                                                                                                  33.3 | interp      |         24.56 |            127.15 |               86.43 |           106.79 |
+|                                                                                                                                                                                                                                                                                                                                                  33.3 | extrap      |         24.56 |             38.33 |               58.69 |            58.69 |
+|                                                                                                                                                                                                                                                                                                                                                  33.3 | extrap_late |         24.56 |             38.33 |               43.72 |            58.69 |
+|                                                                                                                                                                                                                                                                                                                                                  25.0 | native      |         39.97 |             30.02 |               30.02 |            30.02 |
+|                                                                                                                                                                                                                                                                                                                                                  25.0 | interp      |         27.35 |            114.69 |               78.12 |            96.40 |
+|                                                                                                                                                                                                                                                                                                                                                  25.0 | extrap      |         27.35 |             30.02 |               48.30 |            48.30 |
+|                                                                                                                                                                                                                                                                                                                                                  25.0 | extrap_late |         27.35 |             30.02 |               39.56 |            48.30 |
+|                                                                                                                                                                                                                                                                                                                                                  16.7 | native      |         59.84 |             21.72 |               21.72 |            21.72 |
+|                                                                                                                                                                                                                                                                                                                                                  16.7 | interp      |         30.86 |            102.22 |               69.82 |            86.02 |
+|                                                                                                                                                                                                                                                                                                                                                  16.7 | extrap      |         30.86 |             21.72 |               37.92 |            37.92 |
+|                                                                                                                                                                                                                                                                                                                                                  16.7 | extrap_late |         30.86 |             21.72 |               35.41 |            37.92 |
+| At 48.1 ms per generated frame on the same T4 that renders, frame generation lowers the displayed rate (30 to 24.6 fps) instead of raising it. The eager PyTorch time is 7.6 times the arithmetic estimate and about 3 times the 16.1 ms of the 24 October 2026 design; in-engine latency on target GPUs is `Not measured in the current repository.` |
 
 ![Pacing model](neural-frame-generation/outputs/plots/pacing_model.png)
 
 _Displayed frame rate against game input latency (left) and camera latency (right) for each mode and base render time._
 
-**Section 27: ONNX export** (`onnx_export.json`): student 3.992 MB, ONNX Runtime max difference 8.7e-6; `igpu` 1.991 MB, 7.7e-6.
+**Section 27: ONNX export** (`onnx_export.json`): student 3.998 MB, ONNX Runtime max difference 7.5e-6; `igpu` 1.997 MB, 5.8e-6.
 
-**Section 28: summary** (`summary.json`, `stage_times.csv`). Stage minutes: manifest 0.05, caches 26.32, batch probe 0.71, teacher 100.57, student 120.31, pair 75.26, ablations 61.01, test suites 1.40, evaluation 5.49. `summary.json` holds the gated plain-video means.
+**Section 28: summary** (`summary.json`, `stage_times.csv`). Stage minutes: manifest 0.23, caches 31.41, batch probe 0.78, teacher 149.25, student 198.47, pair 119.34, ablations 90.23, test suites 2.28, evaluation 8.44. `summary.json` holds the gated plain-video means.
 
 ![FG stage times](neural-frame-generation/outputs/plots/stage_times.png)
 
 _Minutes per stage of the FG run._
 
-**Sections 29 and 30.** Deleted the caches and zipped 130 files (0.23 GB) into `outputs.zip`.
+**Sections 29 and 30.** Deleted the 14.35 GB of caches and zipped the outputs into `outputs.zip`. The file count and size of the zip are `Not measured in the current repository.`
 
 ## Weights and exported models
 
-These are the weights of the runs of 2 to 3 November 2026. They load into the current `nss_models` networks: the FG change since then only sets at run time at what resolution each tier estimates flow (so the old `low` and `igpu` weights, trained with half-resolution flow, now run full-resolution flow below 576 lines and are no better there: 28.13 and 28.45 dB on Middlebury).
+These are the weights of the runs of 3 to 4 November 2026 (TSR) and 8 November 2026 (FG). They load into the current `nss_models` networks, because the notebooks that ran have the same sources as the committed ones.
 
 Each training run saved three PyTorch checkpoints in its notebook's `outputs/weights/`: `<run>_best.pt` (EMA weights of the best validation round, key `ema`), `<run>_last.pt` (model and EMA weights of the last round) and `<run>_fused.pt` (RepConv folded into plain convolutions, FP16). They are research weights trained on research-use data (see [RESEARCH.md](RESEARCH.md) section 16).
 
-| File                                                             | Size (best / last / fused)     | Purpose                                                          |
-| :--------------------------------------------------------------- | :----------------------------- | :--------------------------------------------------------------- |
-| `neural-supersampling/outputs/weights/tsr_low_s3_*.pt`           | 1,457 / 2,911 / 672 KB         | Main 3x TSR student                                              |
-| `neural-supersampling/outputs/weights/tsr_igpu_s3_*.pt`          | 596 / 1,189 / 292 KB           | Integrated-GPU 3x TSR student                                    |
-| `neural-supersampling/outputs/weights/tsr_low_s2_*.pt`           | 1,421 / 2,840 / 658 KB         | 2x TSR student                                                   |
-| `neural-supersampling/outputs/weights/tsr_teacher_s3_*.pt`       | 15,476 / 30,950 / 6,683 KB     | 3x TSR teacher (quality ceiling, no distillation)                |
-| `neural-supersampling/outputs/weights/abl_*`                     | about 1,457 / 2,912 / 674 KB   | Six TSR ablation runs (`abl_no_motion_net` 545 / 1,087 / 208 KB) |
-| `neural-supersampling/outputs/weights/tsr_student_s3_fused.onnx` | 1,440 KB                       | ONNX, one recurrent step of the 3x student                       |
-| `neural-supersampling/outputs/weights/tsr_igpu_s3_fused.onnx`    | 690 KB                         | ONNX, one recurrent step of the `igpu` student                   |
-| `neural-frame-generation/outputs/weights/fg_teacher_*.pt`        | 22,389 / 44,775 / 11,226 KB    | `high` tier: RIFE 4.26 fine-tuned, the best FG model, deployable |
-| `neural-frame-generation/outputs/weights/fg_mid_*.pt`            | 8,988 / 17,973 / 4,518 KB      | `mid` FG tier                                                    |
-| `neural-frame-generation/outputs/weights/fg_low_*.pt`            | 3,766 / 7,529 / 1,902 KB       | Main FG student (does not work on ordinary video, see above)     |
-| `neural-frame-generation/outputs/weights/fg_igpu_*.pt`           | 1,812 / 3,621 / 922 KB         | Integrated-GPU FG tier (same limitation)                         |
-| `neural-frame-generation/outputs/weights/abl_*`                  | about 3,767 / 7,532 / 1,903 KB | Six FG ablation runs                                             |
-| `neural-frame-generation/outputs/weights/fg_student_fused.onnx`  | 3,898 KB                       | ONNX, FG student, 128x128 input                                  |
-| `neural-frame-generation/outputs/weights/fg_igpu_fused.onnx`     | 1,944 KB                       | ONNX, FG `igpu`, 128x128 input                                   |
+| File                                                             | Size (best / last / fused)     | Purpose                                                               |
+| :--------------------------------------------------------------- | :----------------------------- | :-------------------------------------------------------------------- |
+| `neural-supersampling/outputs/weights/tsr_low_s3_*.pt`           | 1,457 / 2,911 / 672 KB         | Main 3x TSR student                                                   |
+| `neural-supersampling/outputs/weights/tsr_igpu_s3_*.pt`          | 596 / 1,189 / 292 KB           | Integrated-GPU 3x TSR student                                         |
+| `neural-supersampling/outputs/weights/tsr_low_s2_*.pt`           | 1,421 / 2,840 / 658 KB         | 2x TSR student                                                        |
+| `neural-supersampling/outputs/weights/tsr_teacher_s3_*.pt`       | 15,476 / 30,950 / 6,683 KB     | 3x TSR teacher (quality ceiling, no distillation)                     |
+| `neural-supersampling/outputs/weights/abl_*`                     | about 1,457 / 2,912 / 673 KB   | Six TSR ablation runs (`abl_no_motion_net` 545 / 1,087 / 208 KB)      |
+| `neural-supersampling/outputs/weights/tsr_student_s3_fused.onnx` | 1,440 KB                       | ONNX, one recurrent step of the 3x student                            |
+| `neural-supersampling/outputs/weights/tsr_igpu_s3_fused.onnx`    | 690 KB                         | ONNX, one recurrent step of the `igpu` student                        |
+| `neural-frame-generation/outputs/weights/fg_teacher_*.pt`        | 22,389 / 44,775 / 11,226 KB    | `high` tier: RIFE 4.26 fine-tuned, the strongest FG model, deployable |
+| `neural-frame-generation/outputs/weights/fg_mid_*.pt`            | 8,988 / 17,973 / 4,518 KB      | `mid` FG tier                                                         |
+| `neural-frame-generation/outputs/weights/fg_low_*.pt`            | 3,766 / 7,529 / 1,902 KB       | Main FG student (trails RIFE 4.26 on ordinary video, see section 21)  |
+| `neural-frame-generation/outputs/weights/fg_igpu_*.pt`           | 1,812 / 3,621 / 922 KB         | Integrated-GPU FG tier (trails RIFE 4.26 on ordinary video)           |
+| `neural-frame-generation/outputs/weights/abl_*`                  | about 3,767 / 7,531 / 1,902 KB | Six FG ablation runs                                                  |
+| `neural-frame-generation/outputs/weights/fg_student_fused.onnx`  | 3,904 KB                       | ONNX, FG student, 128x128 input                                       |
+| `neural-frame-generation/outputs/weights/fg_igpu_fused.onnx`     | 1,951 KB                       | ONNX, FG `igpu`, 128x128 input                                        |
 
 The ONNX files use static shapes; re-export at the target resolution with `nss_models.export_onnx` for deployment.
 
@@ -881,14 +875,13 @@ The ONNX files use static shapes; re-export at the target resolution with `nss_m
 
 A full list with reasons is in [RESEARCH.md](RESEARCH.md) section 15. The most important ones:
 
-- **The changes of 3 November 2026 made after the last runs are unmeasured** (cut detector, per-resolution FG flow, longer budgets, cuDNN timing); every quality expectation for them is a hypothesis until the next Kaggle run. Whether the `low` and `igpu` FG tiers recover with full-resolution flow in training, or are limited by capacity, is the main open question.
-- **The FG students do not work on ordinary video yet.** `low` and `igpu` scored at or below frame averaging on Vimeo-1080p and Middlebury; only `mid` (44 GMAC per 1080p frame) and `high` (77 GMAC) match or beat RIFE 4.26.
-- **Saved FG plain-video means are distorted** by the cut-gate defect; use the ungated tables above, which rest on few samples for Sintel and TartanAir and none for Vid4.
-- **FG is too slow on a T4 in eager PyTorch** (47.5 ms per 1080p frame for the student), so the pacing model shows frame generation lowering the displayed rate; TSR takes 27.6 ms (20.9 ms with engine motion vectors). T4 latencies are eager timings; in-engine latency on target GPUs is `Not measured in the current repository.`
-- **Engine motion vectors add little to FG interpolation**; they help extrapolation, where plain reprojection with exact motion vectors is still best on TartanAir and Sintel.
-- **Each configuration ran once**, so run-to-run variance is `Not measured in the current repository.`; differences of a few tenths of a dB between runs or ablations may be noise.
-- **Real training data is mostly Vimeo-90K** (about 91 percent of real training windows and quads), and only about 2 percent of TSR windows have exact motion.
-- **No comparison with FSR, DLSS or XeSS** yet; it needs engine captures, and DLSS needs RTX hardware.
+- **The small FG tiers are below RIFE 4.26 on ordinary video.** `low` (12.7 GMAC per 1080p frame) is 1.5 to 5.0 dB below RIFE and `igpu` (9.4 GMAC) is near frame averaging on Vimeo-1080p; only `mid` (44 GMAC) and `high` (77 GMAC) match or beat RIFE.
+- **The plain-video cut gate false-alarms**, most on 3x multi-frame samples (30 to 50 percent of real samples). Saved FG plain-video means include those frame repeats; the ungated tables rest on few samples for Sintel (8), TartanAir (9), Vid4 (4) and native 1080p (5).
+- **Every tier is too slow on a T4 in eager PyTorch** (FG `low` 48.1 ms, TSR `low` 27.7 ms per 1080p frame, 21.0 ms with engine motion vectors), so the pacing model shows frame generation lowering the displayed rate from 30 to 24.6 fps. In-engine latency on target GPUs is `Not measured in the current repository.`
+- **FG extrapolation with exact motion vectors** is still below plain reprojection on TartanAir (1.8 dB) and, as saved, on Sintel (0.6 dB, 0.1 dB on the samples the cut gate left alone), and engine motion vectors add little to interpolation.
+- **Longer training no longer improves TSR** at this data size; the two TSR runs of November 2026 agree within 0.3 dB, which is also the only evidence on run-to-run variance (no repeated seeds).
+- **Real training data is mostly Vimeo-90K** (about 91 percent of real TSR windows and FG quads), and only about 2 percent of TSR windows have exact motion.
+- **No comparison with FSR, DLSS or XeSS** yet. It needs engine captures, and DLSS needs RTX hardware.
 
 ## Troubleshooting
 
@@ -910,6 +903,7 @@ The repository has no licence file, so no licence is granted for the code. Datas
 
 ## Documentation
 
-| File                       | Read when                                                                                                                                                                                                                |
-| :------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [RESEARCH.md](RESEARCH.md) | Design rationale, competitive analysis, datasets and licences, measured results of every run, limitations, the redesign of 3 November 2026 (section 21) and the analysis of its runs with the changes since (section 22) |
+| File                               | Read when                                                                                                                                                                                                                                                                                             |
+| :--------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [RESEARCH.md](RESEARCH.md)         | Design rationale, competitive analysis, datasets and licences, measured results of every run, limitations, the redesign of 3 November 2026 (section 21) the analysis of its runs with the changes since (section 22), and the analysis of the November runs with the progress assessment (section 23) |
+| [paper/README.md](paper/README.md) | Building the journal manuscript and its anonymised, title-page and no-references variants, and what to confirm before submission                                                                                                                                                                      |

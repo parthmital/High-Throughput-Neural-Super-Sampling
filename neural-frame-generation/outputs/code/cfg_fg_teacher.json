@@ -28,7 +28,7 @@
 	"w_distill": 0.5,
 	"teacher_ckpt": null,
 	"ui_training": true,
-	"train_seconds": 6000.0,
+	"train_seconds": 8921.250010026353,
 	"val_interval_s": 480,
 	"progress_interval_s": 15,
 	"sync_every": 10,
@@ -38,7 +38,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 6000
+			"count": 5940
 		},
 		"quad": {
 			"arrays": {
@@ -46,7 +46,7 @@
 				"flows": "/tmp/nss_cache/quad_train_flows.npy",
 				"meta": "/tmp/nss_cache/quad_train_meta.npy"
 			},
-			"count": 6000
+			"count": 3805
 		}
 	},
 	"val_caches": {

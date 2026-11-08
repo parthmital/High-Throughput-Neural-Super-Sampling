@@ -1229,11 +1229,14 @@ if len(real):
     fig, axes = plt.subplots(2, 3, figsize=(24, 8.4))
     for ax, (mode, inp) in zip(axes.T.flat, panels):
         sub = real[(real["mode"] == mode) & (real["inputs"] == inp)]
-        if len(sub):
-            sub.groupby(["suite", "method"])["psnr"].mean().unstack().plot.bar(
-                ax=ax, rot=0
-            )
-            ax.legend(fontsize=6)
+        if not len(sub):
+            # 3x multi-frame generation has no engine-data variant: hide the empty panel
+            ax.set_visible(False)
+            continue
+        sub.groupby(["suite", "method"])["psnr"].mean().unstack().plot.bar(
+            ax=ax, rot=20
+        )
+        ax.legend(fontsize=6)
         ax.set_title(f"real suites, {mode}, {inp}: PSNR (dB)")
     RUN.show(fig, "real_results")
 

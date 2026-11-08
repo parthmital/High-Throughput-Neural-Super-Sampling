@@ -2,13 +2,13 @@
 	{
 		"model": "student",
 		"exported": true,
-		"ort_max_abs": 8.702278137207031e-6,
-		"onnx_mb": 3.992
+		"ort_max_abs": 7.539987564086914e-6,
+		"onnx_mb": 3.998
 	},
 	{
 		"model": "igpu",
 		"exported": true,
-		"ort_max_abs": 7.748603820800781e-6,
-		"onnx_mb": 1.991
+		"ort_max_abs": 5.781650543212891e-6,
+		"onnx_mb": 1.997
 	}
 ]

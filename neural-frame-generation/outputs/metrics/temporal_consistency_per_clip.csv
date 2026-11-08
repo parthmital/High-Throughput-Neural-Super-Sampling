@@ -2,238 +2,238 @@ suite,clip,method,tof
 vimeo_triplet,vimeo_triplet/00001/62d614e141,mv_reprojection,0.2736
 vimeo_triplet,vimeo_triplet/00001/62d614e141,average,0.3988
 vimeo_triplet,vimeo_triplet/00001/62d614e141,rife_4.26,0.2235
-vimeo_triplet,vimeo_triplet/00001/62d614e141,student,0.2352
-vimeo_triplet,vimeo_triplet/00001/62d614e141,igpu,0.3199
-vimeo_triplet,vimeo_triplet/00001/62d614e141,mid,0.2287
-vimeo_triplet,vimeo_triplet/00001/62d614e141,high,0.2505
+vimeo_triplet,vimeo_triplet/00001/62d614e141,student,0.2876
+vimeo_triplet,vimeo_triplet/00001/62d614e141,igpu,0.4131
+vimeo_triplet,vimeo_triplet/00001/62d614e141,mid,0.266
+vimeo_triplet,vimeo_triplet/00001/62d614e141,high,0.2699
 vimeo_triplet,vimeo_triplet/00001/21cea579b5,mv_reprojection,0.2099
 vimeo_triplet,vimeo_triplet/00001/21cea579b5,average,0.2974
 vimeo_triplet,vimeo_triplet/00001/21cea579b5,rife_4.26,0.2093
-vimeo_triplet,vimeo_triplet/00001/21cea579b5,student,0.2856
-vimeo_triplet,vimeo_triplet/00001/21cea579b5,igpu,0.2321
-vimeo_triplet,vimeo_triplet/00001/21cea579b5,mid,0.2191
-vimeo_triplet,vimeo_triplet/00001/21cea579b5,high,0.1972
+vimeo_triplet,vimeo_triplet/00001/21cea579b5,student,0.1854
+vimeo_triplet,vimeo_triplet/00001/21cea579b5,igpu,0.2342
+vimeo_triplet,vimeo_triplet/00001/21cea579b5,mid,0.2278
+vimeo_triplet,vimeo_triplet/00001/21cea579b5,high,0.1912
 vimeo_triplet,vimeo_triplet/00001/876359c9be,mv_reprojection,0.1253
 vimeo_triplet,vimeo_triplet/00001/876359c9be,average,0.2036
 vimeo_triplet,vimeo_triplet/00001/876359c9be,rife_4.26,0.1236
-vimeo_triplet,vimeo_triplet/00001/876359c9be,student,0.1942
-vimeo_triplet,vimeo_triplet/00001/876359c9be,igpu,0.1897
-vimeo_triplet,vimeo_triplet/00001/876359c9be,mid,0.1281
-vimeo_triplet,vimeo_triplet/00001/876359c9be,high,0.1068
+vimeo_triplet,vimeo_triplet/00001/876359c9be,student,0.1202
+vimeo_triplet,vimeo_triplet/00001/876359c9be,igpu,0.1588
+vimeo_triplet,vimeo_triplet/00001/876359c9be,mid,0.1179
+vimeo_triplet,vimeo_triplet/00001/876359c9be,high,0.1114
 vimeo_triplet,vimeo_triplet/00001/34c6308f22,mv_reprojection,0.5702
 vimeo_triplet,vimeo_triplet/00001/34c6308f22,average,0.6652
 vimeo_triplet,vimeo_triplet/00001/34c6308f22,rife_4.26,0.5204
-vimeo_triplet,vimeo_triplet/00001/34c6308f22,student,0.8414
-vimeo_triplet,vimeo_triplet/00001/34c6308f22,igpu,0.6892
-vimeo_triplet,vimeo_triplet/00001/34c6308f22,mid,0.5554
-vimeo_triplet,vimeo_triplet/00001/34c6308f22,high,0.5386
+vimeo_triplet,vimeo_triplet/00001/34c6308f22,student,0.6099
+vimeo_triplet,vimeo_triplet/00001/34c6308f22,igpu,0.5532
+vimeo_triplet,vimeo_triplet/00001/34c6308f22,mid,0.5642
+vimeo_triplet,vimeo_triplet/00001/34c6308f22,high,0.5207
 vimeo_triplet,vimeo_triplet/00001/4673293f7c,mv_reprojection,0.2856
 vimeo_triplet,vimeo_triplet/00001/4673293f7c,average,0.3569
 vimeo_triplet,vimeo_triplet/00001/4673293f7c,rife_4.26,0.3121
-vimeo_triplet,vimeo_triplet/00001/4673293f7c,student,0.3207
-vimeo_triplet,vimeo_triplet/00001/4673293f7c,igpu,0.3133
-vimeo_triplet,vimeo_triplet/00001/4673293f7c,mid,0.2896
-vimeo_triplet,vimeo_triplet/00001/4673293f7c,high,0.2091
+vimeo_triplet,vimeo_triplet/00001/4673293f7c,student,0.2542
+vimeo_triplet,vimeo_triplet/00001/4673293f7c,igpu,0.341
+vimeo_triplet,vimeo_triplet/00001/4673293f7c,mid,0.3049
+vimeo_triplet,vimeo_triplet/00001/4673293f7c,high,0.1988
 vimeo_triplet,vimeo_triplet/00001/b0487842d2,mv_reprojection,0.2071
 vimeo_triplet,vimeo_triplet/00001/b0487842d2,average,0.1906
 vimeo_triplet,vimeo_triplet/00001/b0487842d2,rife_4.26,0.22
-vimeo_triplet,vimeo_triplet/00001/b0487842d2,student,0.1897
-vimeo_triplet,vimeo_triplet/00001/b0487842d2,igpu,0.282
-vimeo_triplet,vimeo_triplet/00001/b0487842d2,mid,0.1754
-vimeo_triplet,vimeo_triplet/00001/b0487842d2,high,0.1938
+vimeo_triplet,vimeo_triplet/00001/b0487842d2,student,0.2353
+vimeo_triplet,vimeo_triplet/00001/b0487842d2,igpu,0.3386
+vimeo_triplet,vimeo_triplet/00001/b0487842d2,mid,0.2076
+vimeo_triplet,vimeo_triplet/00001/b0487842d2,high,0.2087
 vimeo_triplet,vimeo_triplet/00001/806b2db46b,mv_reprojection,0.2134
 vimeo_triplet,vimeo_triplet/00001/806b2db46b,average,14.334
 vimeo_triplet,vimeo_triplet/00001/806b2db46b,rife_4.26,0.3235
-vimeo_triplet,vimeo_triplet/00001/806b2db46b,student,11.0856
-vimeo_triplet,vimeo_triplet/00001/806b2db46b,igpu,13.5339
-vimeo_triplet,vimeo_triplet/00001/806b2db46b,mid,0.6662
-vimeo_triplet,vimeo_triplet/00001/806b2db46b,high,0.8808
+vimeo_triplet,vimeo_triplet/00001/806b2db46b,student,9.7462
+vimeo_triplet,vimeo_triplet/00001/806b2db46b,igpu,13.6868
+vimeo_triplet,vimeo_triplet/00001/806b2db46b,mid,0.6667
+vimeo_triplet,vimeo_triplet/00001/806b2db46b,high,0.4916
 vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,mv_reprojection,0.3144
 vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,average,0.9022
 vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,rife_4.26,0.3276
-vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,student,0.6243
-vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,igpu,0.7902
-vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,mid,0.4943
-vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,high,0.426
+vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,student,0.4278
+vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,igpu,0.7191
+vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,mid,0.4763
+vimeo_triplet,vimeo_triplet/00001/307fdc4f2a,high,0.479
 vimeo_triplet,vimeo_triplet/00001/8be93255b7,mv_reprojection,0.741
 vimeo_triplet,vimeo_triplet/00001/8be93255b7,average,1.4877
 vimeo_triplet,vimeo_triplet/00001/8be93255b7,rife_4.26,0.4643
-vimeo_triplet,vimeo_triplet/00001/8be93255b7,student,0.8687
-vimeo_triplet,vimeo_triplet/00001/8be93255b7,igpu,1.5581
-vimeo_triplet,vimeo_triplet/00001/8be93255b7,mid,1.2322
-vimeo_triplet,vimeo_triplet/00001/8be93255b7,high,0.5047
+vimeo_triplet,vimeo_triplet/00001/8be93255b7,student,0.4672
+vimeo_triplet,vimeo_triplet/00001/8be93255b7,igpu,1.5068
+vimeo_triplet,vimeo_triplet/00001/8be93255b7,mid,1.4402
+vimeo_triplet,vimeo_triplet/00001/8be93255b7,high,0.5327
 vimeo_triplet,vimeo_triplet/00002/5adfdd2539,mv_reprojection,0.3793
 vimeo_triplet,vimeo_triplet/00002/5adfdd2539,average,0.9889
 vimeo_triplet,vimeo_triplet/00002/5adfdd2539,rife_4.26,0.3808
-vimeo_triplet,vimeo_triplet/00002/5adfdd2539,student,0.5564
-vimeo_triplet,vimeo_triplet/00002/5adfdd2539,igpu,0.5927
-vimeo_triplet,vimeo_triplet/00002/5adfdd2539,mid,0.3148
-vimeo_triplet,vimeo_triplet/00002/5adfdd2539,high,0.4254
+vimeo_triplet,vimeo_triplet/00002/5adfdd2539,student,0.3393
+vimeo_triplet,vimeo_triplet/00002/5adfdd2539,igpu,0.5374
+vimeo_triplet,vimeo_triplet/00002/5adfdd2539,mid,0.4618
+vimeo_triplet,vimeo_triplet/00002/5adfdd2539,high,0.4452
 vimeo_triplet,vimeo_triplet/00002/c4ae416e49,mv_reprojection,0.1312
 vimeo_triplet,vimeo_triplet/00002/c4ae416e49,average,0.1792
 vimeo_triplet,vimeo_triplet/00002/c4ae416e49,rife_4.26,0.1037
-vimeo_triplet,vimeo_triplet/00002/c4ae416e49,student,0.1729
-vimeo_triplet,vimeo_triplet/00002/c4ae416e49,igpu,0.2096
-vimeo_triplet,vimeo_triplet/00002/c4ae416e49,mid,0.0775
-vimeo_triplet,vimeo_triplet/00002/c4ae416e49,high,0.1064
+vimeo_triplet,vimeo_triplet/00002/c4ae416e49,student,0.1842
+vimeo_triplet,vimeo_triplet/00002/c4ae416e49,igpu,0.2705
+vimeo_triplet,vimeo_triplet/00002/c4ae416e49,mid,0.0698
+vimeo_triplet,vimeo_triplet/00002/c4ae416e49,high,0.0931
 vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,mv_reprojection,0.2176
 vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,average,1.284
 vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,rife_4.26,0.1973
-vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,student,0.6426
-vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,igpu,1.2626
-vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,mid,0.2478
-vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,high,0.233
+vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,student,0.2771
+vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,igpu,1.0802
+vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,mid,0.2262
+vimeo_triplet,vimeo_triplet/00002/8b50d5aea6,high,0.2029
 tartanair,tartanair/japanesealley/5b6b86ab73,mv_reprojection,0.3039
 tartanair,tartanair/japanesealley/5b6b86ab73,average,4.7193
 tartanair,tartanair/japanesealley/5b6b86ab73,rife_4.26,0.3433
-tartanair,tartanair/japanesealley/5b6b86ab73,student,1.8325
-tartanair,tartanair/japanesealley/5b6b86ab73,igpu,4.5544
-tartanair,tartanair/japanesealley/5b6b86ab73,mid,0.637
-tartanair,tartanair/japanesealley/5b6b86ab73,high,0.2777
+tartanair,tartanair/japanesealley/5b6b86ab73,student,1.0186
+tartanair,tartanair/japanesealley/5b6b86ab73,igpu,4.4636
+tartanair,tartanair/japanesealley/5b6b86ab73,mid,0.356
+tartanair,tartanair/japanesealley/5b6b86ab73,high,0.3359
 tartanair,tartanair/japanesealley/35507af348,mv_reprojection,1.0387
 tartanair,tartanair/japanesealley/35507af348,average,18.3405
 tartanair,tartanair/japanesealley/35507af348,rife_4.26,0.8944
-tartanair,tartanair/japanesealley/35507af348,student,17.5687
-tartanair,tartanair/japanesealley/35507af348,igpu,18.0614
-tartanair,tartanair/japanesealley/35507af348,mid,6.4254
-tartanair,tartanair/japanesealley/35507af348,high,0.9863
+tartanair,tartanair/japanesealley/35507af348,student,16.7363
+tartanair,tartanair/japanesealley/35507af348,igpu,18.1197
+tartanair,tartanair/japanesealley/35507af348,mid,7.1944
+tartanair,tartanair/japanesealley/35507af348,high,1.2251
 tartanair,tartanair/japanesealley/e55d8f640f,mv_reprojection,0.5457
 tartanair,tartanair/japanesealley/e55d8f640f,average,5.6533
 tartanair,tartanair/japanesealley/e55d8f640f,rife_4.26,0.5665
-tartanair,tartanair/japanesealley/e55d8f640f,student,3.9906
-tartanair,tartanair/japanesealley/e55d8f640f,igpu,6.0763
-tartanair,tartanair/japanesealley/e55d8f640f,mid,0.9055
-tartanair,tartanair/japanesealley/e55d8f640f,high,0.5486
+tartanair,tartanair/japanesealley/e55d8f640f,student,2.9911
+tartanair,tartanair/japanesealley/e55d8f640f,igpu,5.8283
+tartanair,tartanair/japanesealley/e55d8f640f,mid,0.5723
+tartanair,tartanair/japanesealley/e55d8f640f,high,0.5903
 tartanair,tartanair/japanesealley/770a81a3f6,mv_reprojection,0.9239
 tartanair,tartanair/japanesealley/770a81a3f6,average,16.1118
 tartanair,tartanair/japanesealley/770a81a3f6,rife_4.26,0.9319
-tartanair,tartanair/japanesealley/770a81a3f6,student,14.6376
-tartanair,tartanair/japanesealley/770a81a3f6,igpu,16.381
-tartanair,tartanair/japanesealley/770a81a3f6,mid,6.9759
-tartanair,tartanair/japanesealley/770a81a3f6,high,2.015
+tartanair,tartanair/japanesealley/770a81a3f6,student,13.3337
+tartanair,tartanair/japanesealley/770a81a3f6,igpu,16.3117
+tartanair,tartanair/japanesealley/770a81a3f6,mid,4.8466
+tartanair,tartanair/japanesealley/770a81a3f6,high,2.3571
 tartanair,tartanair/japanesealley/b564a1f955,mv_reprojection,0.6612
 tartanair,tartanair/japanesealley/b564a1f955,average,5.4415
 tartanair,tartanair/japanesealley/b564a1f955,rife_4.26,0.5955
-tartanair,tartanair/japanesealley/b564a1f955,student,4.4172
-tartanair,tartanair/japanesealley/b564a1f955,igpu,5.3135
-tartanair,tartanair/japanesealley/b564a1f955,mid,1.179
-tartanair,tartanair/japanesealley/b564a1f955,high,0.4562
+tartanair,tartanair/japanesealley/b564a1f955,student,2.8646
+tartanair,tartanair/japanesealley/b564a1f955,igpu,5.2875
+tartanair,tartanair/japanesealley/b564a1f955,mid,1.005
+tartanair,tartanair/japanesealley/b564a1f955,high,0.5133
 tartanair,tartanair/seasidetown/dd05f433b6,mv_reprojection,0.3088
 tartanair,tartanair/seasidetown/dd05f433b6,average,4.2146
 tartanair,tartanair/seasidetown/dd05f433b6,rife_4.26,0.3177
-tartanair,tartanair/seasidetown/dd05f433b6,student,3.1895
-tartanair,tartanair/seasidetown/dd05f433b6,igpu,3.9165
-tartanair,tartanair/seasidetown/dd05f433b6,mid,0.2912
-tartanair,tartanair/seasidetown/dd05f433b6,high,0.2544
+tartanair,tartanair/seasidetown/dd05f433b6,student,0.9175
+tartanair,tartanair/seasidetown/dd05f433b6,igpu,3.3496
+tartanair,tartanair/seasidetown/dd05f433b6,mid,0.2605
+tartanair,tartanair/seasidetown/dd05f433b6,high,0.2538
 tartanair,tartanair/seasidetown/bf3ef0fb7c,mv_reprojection,0.7799
 tartanair,tartanair/seasidetown/bf3ef0fb7c,average,7.5401
 tartanair,tartanair/seasidetown/bf3ef0fb7c,rife_4.26,0.4253
-tartanair,tartanair/seasidetown/bf3ef0fb7c,student,3.9996
-tartanair,tartanair/seasidetown/bf3ef0fb7c,igpu,7.1735
-tartanair,tartanair/seasidetown/bf3ef0fb7c,mid,0.668
-tartanair,tartanair/seasidetown/bf3ef0fb7c,high,0.4649
+tartanair,tartanair/seasidetown/bf3ef0fb7c,student,2.5532
+tartanair,tartanair/seasidetown/bf3ef0fb7c,igpu,6.7639
+tartanair,tartanair/seasidetown/bf3ef0fb7c,mid,0.602
+tartanair,tartanair/seasidetown/bf3ef0fb7c,high,0.5748
 tartanair,tartanair/seasidetown/94dffbebef,mv_reprojection,1.427
 tartanair,tartanair/seasidetown/94dffbebef,average,14.1281
 tartanair,tartanair/seasidetown/94dffbebef,rife_4.26,1.1213
-tartanair,tartanair/seasidetown/94dffbebef,student,11.4932
-tartanair,tartanair/seasidetown/94dffbebef,igpu,13.2483
-tartanair,tartanair/seasidetown/94dffbebef,mid,2.1034
-tartanair,tartanair/seasidetown/94dffbebef,high,0.8749
+tartanair,tartanair/seasidetown/94dffbebef,student,10.6572
+tartanair,tartanair/seasidetown/94dffbebef,igpu,13.4066
+tartanair,tartanair/seasidetown/94dffbebef,mid,1.537
+tartanair,tartanair/seasidetown/94dffbebef,high,0.936
 tartanair,tartanair/seasidetown/12f1cf927a,mv_reprojection,0.5892
 tartanair,tartanair/seasidetown/12f1cf927a,average,4.3337
 tartanair,tartanair/seasidetown/12f1cf927a,rife_4.26,0.6993
-tartanair,tartanair/seasidetown/12f1cf927a,student,3.4596
-tartanair,tartanair/seasidetown/12f1cf927a,igpu,3.8086
-tartanair,tartanair/seasidetown/12f1cf927a,mid,0.7568
-tartanair,tartanair/seasidetown/12f1cf927a,high,0.7142
+tartanair,tartanair/seasidetown/12f1cf927a,student,1.168
+tartanair,tartanair/seasidetown/12f1cf927a,igpu,2.7338
+tartanair,tartanair/seasidetown/12f1cf927a,mid,0.8559
+tartanair,tartanair/seasidetown/12f1cf927a,high,0.7572
 tartanair,tartanair/seasidetown/59eb2dd509,mv_reprojection,0.9186
 tartanair,tartanair/seasidetown/59eb2dd509,average,2.3404
 tartanair,tartanair/seasidetown/59eb2dd509,rife_4.26,0.8268
-tartanair,tartanair/seasidetown/59eb2dd509,student,1.3031
-tartanair,tartanair/seasidetown/59eb2dd509,igpu,2.4245
-tartanair,tartanair/seasidetown/59eb2dd509,mid,0.8207
-tartanair,tartanair/seasidetown/59eb2dd509,high,0.8414
+tartanair,tartanair/seasidetown/59eb2dd509,student,1.2526
+tartanair,tartanair/seasidetown/59eb2dd509,igpu,1.7153
+tartanair,tartanair/seasidetown/59eb2dd509,mid,0.8286
+tartanair,tartanair/seasidetown/59eb2dd509,high,0.8004
 vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,mv_reprojection,8.6614
 vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,average,8.2263
 vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,rife_4.26,8.2568
-vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,student,8.2526
-vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,igpu,8.2409
-vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,mid,9.0665
-vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,high,9.3945
+vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,student,8.3901
+vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,igpu,8.3308
+vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,mid,8.8239
+vimeo1080p,vimeo1080p/Soft Fangs - ＂Inside Joke＂_005/a55694ba31,high,12.1776
 vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,mv_reprojection,1.2694
 vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,average,0.8402
 vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,rife_4.26,1.1875
-vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,student,0.9589
-vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,igpu,0.8314
-vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,mid,0.9959
-vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,high,1.2532
+vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,student,0.7031
+vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,igpu,0.8743
+vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,mid,1.0666
+vimeo1080p,vimeo1080p/Panasonic Lumix GH4 sample movie： handheld ⧸ 1080p ⧸ 59.97fps ⧸ 200Mbit_005/2394b35931,high,1.1826
 vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,mv_reprojection,3.3488
 vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,average,7.6577
 vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,rife_4.26,3.0054
-vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,student,6.9822
-vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,igpu,7.6668
-vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,mid,3.1442
-vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,high,3.1283
+vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,student,4.12
+vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,igpu,6.1509
+vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,mid,3.2262
+vimeo1080p,vimeo1080p/DJI Ronin Test2 - different movement and different focal lengths_005/0f88cf6782,high,3.0925
 vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,mv_reprojection,0.149
 vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,average,0.147
 vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,rife_4.26,0.1522
-vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,student,0.1807
-vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,igpu,0.2586
-vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,mid,0.174
-vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,high,0.1515
+vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,student,0.1384
+vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,igpu,0.1408
+vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,mid,0.1485
+vimeo1080p,vimeo1080p/TV3 90 sec promo 26-04-14 ProRes 921 MB(1)_001/d2388902a0,high,0.1608
 vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,mv_reprojection,0.3871
 vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,average,0.3886
 vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,rife_4.26,0.3681
-vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,student,0.3944
-vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,igpu,0.4792
-vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,mid,0.4097
-vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,high,0.3976
+vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,student,0.4077
+vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,igpu,0.4431
+vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,mid,0.4081
+vimeo1080p,vimeo1080p/Sony A7s low light shots - 3200-6400 iso - Cine1 & 4 - Graded VistaLUT709_001/153b828cb4,high,0.3958
 vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,mv_reprojection,0.0735
 vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,average,0.1955
 vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,rife_4.26,0.1471
-vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,student,0.2411
-vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,igpu,0.8562
-vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,mid,0.1115
-vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,high,0.0809
+vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,student,0.4748
+vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,igpu,0.3962
+vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,mid,0.1099
+vimeo1080p,vimeo1080p/2015 SMH Half Marathon_005/38de95a59b,high,0.1041
 vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,mv_reprojection,0.332
 vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,average,0.3307
 vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,rife_4.26,0.3715
-vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,student,0.5246
-vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,igpu,0.4502
-vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,mid,0.3597
-vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,high,0.3453
+vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,student,0.2915
+vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,igpu,0.3195
+vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,mid,0.3648
+vimeo1080p,vimeo1080p/5168 Garrett Ct._001/a51e74545e,high,0.3165
 vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,mv_reprojection,0.0917
 vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,average,0.0914
 vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,rife_4.26,0.0942
-vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,student,0.1855
-vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,igpu,0.2901
-vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,mid,0.0953
-vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,high,0.119
+vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,student,0.1079
+vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,igpu,0.0914
+vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,mid,0.0972
+vimeo1080p,vimeo1080p/A Year's Work_002/ee5342fb15,high,0.1027
 vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,mv_reprojection,123.1194
 vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,average,58.1957
 vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,rife_4.26,90.9246
-vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,student,103.5013
-vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,igpu,105.1063
-vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,mid,100.7402
-vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,high,103.9113
+vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,student,105.8782
+vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,igpu,92.4587
+vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,mid,104.4606
+vimeo1080p,vimeo1080p/Cleveland： A Million Stories_004/72877a9872,high,102.5805
 vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,mv_reprojection,0.0253
 vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,average,0.0323
 vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,rife_4.26,0.0208
-vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,student,0.3261
-vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,igpu,0.148
-vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,mid,0.0325
-vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,high,0.0312
+vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,student,0.1047
+vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,igpu,0.0497
+vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,mid,0.0373
+vimeo1080p,vimeo1080p/GO Costa Rica 2015 Trip Video_001/484ae34a71,high,0.0285
 vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,mv_reprojection,0.1224
 vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,average,0.1232
 vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,rife_4.26,0.1314
-vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,student,0.4124
-vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,igpu,0.1876
-vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,mid,0.1658
-vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,high,0.1249
+vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,student,0.1216
+vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,igpu,0.1302
+vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,mid,0.1399
+vimeo1080p,vimeo1080p/Sony EVF Recoil Rig For Sony F5 and F55_001/9864296746,high,0.1107
 vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,mv_reprojection,0.1402
 vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,average,0.2019
 vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,rife_4.26,0.2022
-vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,student,0.9843
-vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,igpu,0.4891
-vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,mid,0.1407
-vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,high,0.19
+vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,student,0.2077
+vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,igpu,0.2782
+vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,mid,0.1523
+vimeo1080p,vimeo1080p/101 Ocean Ave. - Santa Monica (updated 2)_005/82990546d1,high,0.1696

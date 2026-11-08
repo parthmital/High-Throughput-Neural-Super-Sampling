@@ -31,8 +31,8 @@
 	"w_distill": 0.0,
 	"teacher_ckpt": null,
 	"teacher_tier": "teacher",
-	"train_seconds": 1200.0,
-	"val_interval_s": 200.0,
+	"train_seconds": 1800.0,
+	"val_interval_s": 300.0,
 	"progress_interval_s": 15,
 	"sync_every": 10,
 	"select_metric": "psnr_y",
@@ -41,7 +41,7 @@
 			"arrays": {
 				"rgb": "/tmp/nss_cache/still_train.npy"
 			},
-			"count": 6191
+			"count": 6500
 		},
 		"seq": {
 			"arrays": {

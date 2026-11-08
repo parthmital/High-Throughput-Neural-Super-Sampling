@@ -6,3 +6,13 @@ __pycache__/
 *.env
 *.zip
 __notebook__.ipynb
+
+# Paper build output and local Tectonic
+paper/tectonic.exe
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
+paper/*.toc
+paper/*.synctex.gz

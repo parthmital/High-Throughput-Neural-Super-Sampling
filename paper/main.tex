@@ -1,0 +1,365 @@
+%% NeuralSS manuscript for the Journal of Real-Time Image Processing (Springer).
+%% Template: Springer Nature LaTeX template v3.1 (December 2024), two-column option [iicol] as the journal recommends.
+%% Variants: main-anonymised.tex (\Anonymised), main-title-page.tex (\TitlePage), main-no-references.tex (\NoReferences).
+%% Build: npm-free, run tectonic in this folder (see paper/README.md).
+\documentclass[pdflatex,sn-mathphys-num,iicol]{sn-jnl}
+
+\usepackage{graphicx}%
+\usepackage{multirow}%
+\usepackage{amsmath,amssymb,amsfonts}%
+\usepackage{xcolor}%
+\usepackage{textcomp}%
+\usepackage{booktabs}%
+\usepackage{tikz}%
+\usetikzlibrary{positioning,arrows.meta,fit}%
+\usepackage[capitalise,nameinlink]{cleveref}%
+\hypersetup{bookmarksnumbered=true}
+\usepackage{xurl}% break long URLs in the reference list
+\newcommand{\burl}[1]{\url{#1}}% sn-mathphys-num prints URL fields in sans serif without a link
+
+\newcommand{\Sys}{NeuralSS}
+\newcommand{\tier}[1]{\texttt{#1}}
+\newcommand{\RepoURL}{\url{https://github.com/parthmital/High-Throughput-Neural-Super-Sampling}}
+
+\ifdefined\NoReferences
+\makeatletter
+\renewenvironment{thebibliography}[1]{\setbox0=\vbox\bgroup\list{}{\usecounter{enumiv}}}{\endlist\egroup}
+\makeatother
+\fi
+
+\raggedbottom
+
+\begin{document}
+
+\title[Vendor-neutral neural super-resolution and frame generation]{One network for renders and video: vendor-neutral neural temporal super-resolution and low-latency frame generation trained on commodity cloud GPUs}
+
+\ifdefined\Anonymised
+\author*{\fnm{Anonymous} \sur{Author}}\email{anonymous@example.org}
+\affil*{\orgname{Anonymous institution}}
+\else
+\author*{\fnm{Parth} \sur{Mital}}\email{parth.mital2023@vitstudent.ac.in}
+\affil*{\orgdiv{School of Computer Science and Engineering}, \orgname{Vellore Institute of Technology}, \orgaddress{\city{Vellore}, \postcode{632014}, \state{Tamil Nadu}, \country{India}}}
+\fi
+
+\abstract{Neural upscaling and frame generation now set image quality in many games, but the strongest commercial systems need one vendor's recent GPUs, and research systems need engine data that ordinary video lacks. We present \Sys{}, an open system that serves both cases with one model per task. Its temporal super-resolution network is a recurrent, re-parameterisable convolutional network with a built-in motion estimator that runs only when the engine supplies no motion vectors. Its frame-generation network fine-tunes the open RIFE 4.26 interpolation network, adds engine hints through zero-initialised channels, extrapolates with a late-latched camera prior and copies user-interface pixels from the newest real frame. Both are trained in about ten hours each on two NVIDIA T4 GPUs from public datasets, after copy detection that left no duplicate across splits, and both export to ONNX. On five test suites the 3x super-resolution student (16.1 GMAC per 1080p frame) beats bicubic upscaling on ordinary video by 1.2 to 2.2 dB PSNR-Y and an analytic temporal anti-aliasing upscaler by 2.8 to 4.9 dB with engine data, with lower temporal error. The largest frame-generation tier beats unchanged RIFE 4.26 on the Middlebury interpolation set (34.23 against 33.34 dB) and frame repetition in extrapolation by 1.9 to 5.6 dB, but the 12.7-GMAC tier is still 1.8 dB below RIFE, the cut detector false-alarms on multi-frame gaps, and eager PyTorch on a T4 needs 27.7 and 48.1 ms per 1080p frame, above real-time budgets. We report these limits with the gains.}
+
+\keywords{Temporal super-resolution, Frame generation, Video frame interpolation, Real-time rendering, Latency, Efficient neural networks}
+
+\pdfbookmark[1]{Title}{title}
+\maketitle
+
+\ifdefined\TitlePage
+\section*{Corresponding author}
+\pdfbookmark[1]{Corresponding author}{corresponding}
+\noindent Parth Mital\\
+School of Computer Science and Engineering, Vellore Institute of Technology\\
+Vellore 632014, Tamil Nadu, India\\
+E-mail: \href{mailto:parth.mital2023@vitstudent.ac.in}{\nolinkurl{parth.mital2023@vitstudent.ac.in}}
+\expandafter\endinput\fi
+
+\section{Introduction}\label{sec:intro}
+
+Games increasingly render fewer pixels than they display. A temporal upscaler reconstructs each output frame from a jittered low-resolution render and the history of earlier frames, and a frame generator inserts synthetic frames between rendered ones. Neural versions of both now ship in vendor SDKs, but the strongest paths need recent hardware of one vendor: DLSS 4 multi-frame generation relies on RTX 50 Series GPUs\footnote{\url{https://research.nvidia.com/labs/adlr/DLSS4}, accessed 8 November 2026.}, and AMD's machine-learning upscaling and frame generation require RDNA 4 GPUs, with analytical fallbacks on older ones\footnote{\url{https://gpuopen.com/learn/amd-fsr-redstone-developers-neural-rendering/}, accessed 8 November 2026.}. Intel's XeSS super-resolution runs on any GPU with Shader Model 6.4\footnote{\url{https://github.com/intel/xess}, accessed 8 November 2026.}. Research systems are open but assume a full set of engine buffers \cite{xiao2020nsrr,zhong2023fusesr,guo2021extranet}, so they cannot serve captured or streamed video, where only colour exists. Video frame interpolation networks such as RIFE \cite{huang2022rife} work from colour alone but ignore the motion vectors, depth and user-interface (UI) layers that an engine can provide, and they do not extrapolate.
+
+This paper asks whether one compact model per task can serve both inputs, engine renders with motion vectors and plain video without them, at a cost that fits integrated and entry-level GPUs, when trained with free cloud compute and public data only. The real-time constraints shape every design choice. Each network has tiers sized in multiply-accumulates (MAC) per 1080p output frame. Frame generation is designed around input latency rather than frame rate, so it supports extrapolation, which holds no rendered frame back. Both networks reduce to convolutions, pixel shuffles and bilinear warps that export to ONNX for vendor-neutral runtimes.
+
+The contributions are:
+\begin{enumerate}
+\item A recurrent temporal super-resolution (TSR) network with a built-in motion estimator, trained on mixed render-like and plain-video degradations so that one model serves both, with tiers from 6.2 to 156 GMAC per 1080p frame at 3x (\cref{sec:tsr}).
+\item A frame-generation (FG) network that fine-tunes RIFE 4.26 and adds engine hints through zero-initialised channels, so that a fresh model reproduces RIFE exactly, plus a UI mask, a late-latched camera prior for extrapolation, and a scene-cut gate (\cref{sec:fg}).
+\item A leakage-audited data pipeline over 12,300 public items and an evaluation protocol that tests every suite in an engine mode and a plain-video mode, with temporal, UI, cut and latency measures (\cref{sec:data,sec:setup}).
+\item Measurements on two Kaggle T4 GPUs that include the failures: the small FG tiers stay below RIFE, the plain-video cut gate false-alarms, and eager latency exceeds the tier budgets (\cref{sec:results,sec:discussion}).
+\end{enumerate}
+\Cref{fig:overview} summarises both networks.
+
+\begin{figure*}[!t]
+\centering
+\begin{tikzpicture}[font=\footnotesize, node distance=4mm and 5mm,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=8mm, inner sep=3pt},
+  opt/.style={box, dashed},
+  arr/.style={-{Stealth[length=2mm]}}]
+\node[box] (lr) {Jittered LR colour\\(or plain video)};
+\node[opt, below=of lr] (eng) {Depth, motion vectors,\\reactive mask (optional)};
+\node[box, right=of lr] (est) {Motion estimator\\(only without MVs)};
+\node[box, right=of est, minimum height=18mm] (trunk) {Re-param.\ trunk\\$a_t$, $r_t$, hidden};
+\node[box, right=of trunk] (acc) {Eq.~(1): warp history,\\blend, pixel shuffle};
+\node[box, right=of acc] (hr) {HR frame\\$\hat{y}_t$};
+\node[box, below=of acc] (hist) {History $\hat{y}_{t-1}$};
+\draw[arr] (lr) -- (est); \draw[arr] (est) -- (trunk); \draw[arr] (eng.east) -| (trunk.south);
+\draw[arr] (trunk) -- (acc); \draw[arr] (acc) -- (hr); \draw[arr] (hist) -- (acc);
+\draw[arr] (hr.south) |- (hist.east);
+\node[box, below=10mm of eng] (pair) {Real frames\\$I_0$, $I_1$};
+\node[opt, right=of pair] (hint) {Engine hints: $\tau M_1$,\\camera flow, depth};
+\node[box, right=of hint] (ifn) {IFNet (RIFE 4.26)\\flows, blend $m$};
+\node[box, right=of ifn] (head) {Head: residual $r$,\\UI mask $u$, Eq.~(2)};
+\node[box, right=of head] (out) {Generated\\$\hat{I}_\tau$};
+\node[box, below=of ifn] (cut) {Cut gate: repeat $I_1$ instead};
+\draw[arr] (pair) -- (hint); \draw[arr] (hint) -- (ifn); \draw[arr] (ifn) -- (head); \draw[arr] (head) -- (out);
+\draw[arr] (pair.south) |- (cut.west); \draw[arr] (cut.east) -| (out.south);
+\node[anchor=west, font=\footnotesize\bfseries] at ([yshift=4mm]lr.north west) {Temporal super-resolution};
+\node[anchor=west, font=\footnotesize\bfseries] at ([yshift=4mm]pair.north west) {Frame generation};
+\end{tikzpicture}
+\caption{Overview of the two networks. Dashed boxes are engine inputs that are used when present and dropped at random in training. Both networks reduce to convolutions, pixel shuffles and bilinear warps for ONNX export}\label{fig:overview}
+\end{figure*}
+Code, notebooks, metrics and weights are public (\cref{sec:declarations}).
+
+\section{Related work}\label{sec:related}
+
+\emph{Temporal anti-aliasing and upscaling.} Temporal anti-aliasing reprojects an accumulated history with motion vectors and rectifies it against the current frame's neighbourhood to suppress ghosting, and temporal upsampling extends the same idea to lower render resolutions \cite{yang2020taasurvey}. Our analytic baseline follows this recipe.
+
+\emph{Neural supersampling for rendering.} NSRR reconstructs high-resolution frames from the colour, depth and dense motion vectors of the current and previous frames \cite{xiao2020nsrr}. Later work combines denoising and supersampling in a temporally stable network \cite{thomas2022denoise}, reduces cost on a new gaming dataset \cite{mercier2023qrisp}, fuses high-resolution G-buffers with low-resolution colour \cite{zhong2023fusesr}, demodulates lighting from materials \cite{li2024demodulation} and decouples G-buffer guidance \cite{zheng2025rdg}. All assume engine buffers at inference. Our TSR network uses them when present and estimates motion itself when they are absent.
+
+\emph{Frame generation for rendering.} Interpolation for rendered content can use auxiliary buffers \cite{briedis2021rendered}, but it holds a rendered frame back. Extrapolation avoids that latency: ExtraNet uses G-buffers of the new frame and in-paints disocclusions \cite{guo2021extranet}, ExtraSS joins extrapolation with supersampling \cite{wu2023extrass}, space-time supersampling treats both in one network \cite{he2024stss}, GFFE removes the need for the new frame's G-buffers \cite{wu2024gffe}, and Mob-FGSR targets mobile GPUs \cite{yang2024mobfgsr}.
+
+\emph{Video frame interpolation.} RIFE estimates intermediate flows coarse to fine with an IFNet at an arbitrary time step and runs in real time \cite{huang2022rife}. IFRNet \cite{kong2022ifrnet}, FILM \cite{reda2022film} and EMA-VFI \cite{zhang2023emavfi} trade more computation for accuracy or large motion. Logos, UI and subtitles break interpolation, and a discontinuity map with figure-text mixing copies such regions from the previous frame instead of interpolating them \cite{lee2023discontinuity}. We build on RIFE 4.26 because its weights are open and it is cheap enough to tier.
+
+\emph{Efficient networks and temporal metrics.} Structural re-parameterisation trains multi-branch blocks and deploys one $3\times3$ convolution \cite{ding2021repvgg,zhang2021ecbsr}, and sub-pixel convolution upsamples cheaply \cite{shi2016espcn}. Recurrent video super-resolution propagates features across frames \cite{chan2022basicvsrpp}. TecoGAN defines the tOF and tLP temporal metrics we report \cite{chu2020tecogan}.
+
+\section{Data and leakage control}\label{sec:data}
+
+Training and test data come only from public sources: DIV2K \cite{agustsson2017div2k} and other high-resolution stills, 1080p game frames, REDS \cite{nah2019reds}, Vimeo-90K septuplets and triplets \cite{xue2019vimeo}, MPI Sintel with exact flow and occlusion \cite{butler2012sintel}, TartanAir with exact flow and depth from Unreal Engine environments \cite{wang2020tartanair}, CARLA \cite{dosovitskiy2017carla} renders from GameIR with native 720p and 1440p frames \cite{zhou2024gameir}, the Vid4 sequences (calendar, city, foliage and walk) evaluated by Liu and Sun \cite{liu2014vid4}, and 1080p Vimeo videos. Low-resolution inputs are generated from high-resolution frames, so every sample has ground truth.
+
+Copy detection runs in two stages, because global similarity alone cannot tell the same picture from a similar one. Candidates are the 16 nearest neighbours of each keyframe by self-supervised DINOv2-small embeddings outside its leakage group plus perceptual-hash pairs, and a candidate becomes a duplicate edge when SIFT matches \cite{lowe2004sift} with the ratio test and one RANSAC affine fit \cite{fischler1981ransac} cover at least 10 cells of an $8\times8$ grid, or when its embedding or hash similarity passes a stricter threshold. Thresholds are calibrated on 1,500 synthetic copies against 2,930 random and 998 hard negatives (recall 0.967 at precision 0.999). Leakage groups (a video, a Sintel scene family, a TartanAir environment, a CARLA town) are the unit of the split, and any training item linked to a test item by a duplicate edge is dropped. An audit then compares every validation and test keyframe with its nearest training keyframes. On 12,300 items the split is 8,874 training, 1,087 validation and 1,432 test items, with 756 dropped and 151 filtered for quality. The first audit round found 24 duplicates that the search missed and the second found none.
+
+A GPU renderer adds synthetic game-like sequences with exact ground truth. A background and a foreground layer with procedural alpha (blobs, wires one or two texels wide, fences) move on their own affine paths at four speed classes (static, slow, medium, fast) with optional reversal. Particles write no motion vectors and set a reactive mask, as in real engines. Low-resolution frames take one jittered sample per pixel at Halton (2, 3) offsets without mip filtering, so thin geometry aliases, and targets use four samples per pixel. For FG the renderer adds HUD tiles, subtitle changes, menus and scene cuts.
+
+\section{Temporal super-resolution}\label{sec:tsr}
+
+\emph{Inputs.} At render resolution $h\times w$ the network receives the jittered colour, depth and normals derived from it, motion vectors to the previous frame, a depth-based disocclusion cue, the reactive mask, exposure and jitter offsets, flags for depth availability and motion quality (1 exact, 0.5 estimated, 0 none), an input-kind flag (render or video), the previous output warped by the motion vectors and folded to render resolution by space-to-depth, and a warped recurrent hidden state.
+
+\emph{Motion without engine data.} Every tier contains a three-level IFNet motion estimator \cite{huang2022rife} that computes motion vectors from the previous and current colour frames whenever a sample has none. Its output enters the trunk with motion quality 0.25. It is supervised by exact or RAFT \cite{teed2020raft} motion, and during the first quarter of training samples without motion vectors warp the history with the label motion at a falling probability (teacher forcing), so that the trunk does not learn to distrust history while the estimator is poor. With engine motion vectors the estimator is skipped.
+
+\emph{Trunk and output.} The trunk is a chain of re-parameterisable blocks (a $3\times3$, a $1\times1$, an identity and fixed Sobel and Laplacian filters with learned projections) folded into one $3\times3$ kernel \cite{zhang2021ecbsr}, with an optional half-resolution U-Net level. The side branches start at zero, which kept activations bounded in FP16. The network predicts a per-pixel history weight $a_t$ and a residual $r_t$ at render resolution, unfolds them by pixel shuffle \cite{shi2016espcn}, and forms
+\begin{equation}
+\hat{y}_t = a_t \odot \mathcal{W}(\hat{y}_{t-1}, \mathbf{m}_t) + (1-a_t) \odot \mathcal{U}(x_t) + r_t ,\label{eq:tsr}
+\end{equation}
+where $\mathcal{W}$ warps by the upsampled motion $\mathbf{m}_t$ and $\mathcal{U}$ is a jitter-aware bilinear upsampling of the colour $x_t$. A zero-initialised two-layer refinement at output resolution follows in all tiers but the smallest. \Cref{eq:tsr} is a learned form of temporal accumulation with rectification: $a_t$ should approach 0 at disocclusions and particles and 1 on static content. After a reset $a_t=0$.
+
+\emph{Training.} Each batch mixes about 60 percent synthetic and 40 percent real windows. Thirty percent of synthetic and 60 percent of real samples become plain video: anti-aliased bicubic (cubic convolution \cite{keys1981bicubic}), bilinear or area downscaling, blur, noise and 8-bit quantisation, without jitter, depth or motion vectors. Render samples lose their motion vectors with probability 0.25 and depth with 0.3. Six-frame unrolls on $192\times192$ output patches are the default, and every fourth step is a 16-frame synthetic unroll at $96\times96$ so that static scenes keep converging. The per-frame loss is a Charbonnier penalty plus 0.1 times a gradient loss, 0.05 times an L1 loss on Fourier magnitudes, 0.05 times LPIPS \cite{zhang2018lpips} on the last frame, and 0.5 times a temporal-change loss $\lVert(\hat{y}_t-\mathcal{W}\hat{y}_{t-1})-(y_t-\mathcal{W}y_{t-1})\rVert_1$ over pixels visible in both frames, plus 0.1 times the motion loss. Training uses AdamW \cite{loshchilov2019adamw}, FP16 autocast with loss scaling \cite{micikevicius2018mixed}, a cosine schedule over a wall-clock budget, and an exponential moving average of the weights. Distillation from the teacher gave no measurable gain in two earlier runs and is off.
+
+\Cref{tab:tiers} lists the tiers. The teacher is the same architecture at 64 channels and serves as the quality ceiling.
+
+\begin{table}[!t]
+\caption{Network tiers: fused parameters, multiply-accumulates per 1080p output frame (GMAC, warps excluded) and measured T4 latency (fused FP16, eager PyTorch, cuDNN autotuning). TSR figures are for 3x and include the motion estimator, which runs only without engine motion vectors (latency with engine vectors in brackets). Tiers without latency were not trained}\label{tab:tiers}
+\begin{tabular*}{\columnwidth}{@{\extracolsep\fill}llrrr}
+\toprule
+Task & Tier & Params & GMAC & T4 ms \\
+\midrule
+TSR & \tier{igpu} & 138K & 6.2 & 16.3 (10.0) \\
+ & \tier{low} & 328K & 16.1 & 27.7 (21.0) \\
+ & \tier{mid} & 653K & 28.1 & -- \\
+ & \tier{high} & 1.41M & 69.0 & -- \\
+ & teacher & 3.40M & 156.1 & 58.7 (50.1) \\
+\midrule
+FG & \tier{igpu} & 0.45M & 9.4 & 46.8 \\
+ & \tier{low} & 0.95M & 12.7 & 48.1 \\
+ & \tier{mid} & 2.29M & 44.3 & 106.6 \\
+ & \tier{high} & 5.71M & 76.7 & 120.4 \\
+\botrule
+\end{tabular*}
+\end{table}
+
+\section{Frame generation}\label{sec:fg}
+
+\emph{Motion from colour.} Given real frames $I_0$ and $I_1$ and a target time $\tau$ ($0<\tau<1$ interpolates, $\tau=1.5$ extrapolates), an IFNet with RIFE 4.26's design estimates the flows $F_{\tau\to0}$ and $F_{\tau\to1}$, a blend logit and features over five blocks from 1/16 to full resolution. The \tier{high} tier is RIFE 4.26's network and loads its weights, smaller tiers are narrower and inherit leading channel slices. Each tier estimates flow on at most 576 (\tier{igpu}, \tier{low}) or 1152 (\tier{mid}, \tier{high}) image lines, halving taller frames, so training crops always use full-resolution flow.
+
+\emph{Engine hints.} When an engine supplies the motion vector $M_1$ of $I_1$ (displacement to $I_0$), linear-motion priors $\tau M_1$ and $(\tau-1) M_1$, a camera-only flow sampled from the latest camera input, the depth of $I_1$ and availability flags enter every flow block as extra channels whose weights start at zero. A fresh \tier{high} model therefore reproduces RIFE 4.26 (maximum difference $3\times10^{-6}$ against RIFE's own code), and fine-tuning learns how far to trust each hint. Training drops the hints at random so that one model serves engines and video.
+
+\emph{Output and UI.} A half-resolution head on the warped frames predicts a residual $r$ and a UI logit $u$, and
+\begin{align}
+\hat{I}_\tau ={}& u \odot I_1 + (1-u)\odot\big(m\odot\mathcal{W}(I_0,F_{\tau\to0}) \nonumber\\
+&+ (1-m)\odot\mathcal{W}(I_1,F_{\tau\to1}) + r\big),\label{eq:fg}
+\end{align}
+where $m$ is the blend weight. Pixels classified as UI are copied from the newest real frame instead of being interpolated. If the engine provides HUD-less frames and a UI layer, the layer is composited on every displayed frame instead. The feature encoder depends on one frame only, so a running pipeline computes it once per real frame.
+
+\emph{Cuts.} A cut gate repeats the newest real frame instead of generating. With motion vectors its score is the luma-histogram distance plus a motion-compensated difference, without them the histogram distance alone. Each score has a threshold calibrated for 1 percent false alarms on continuous synthetic pairs.
+
+\emph{Training.} Synthetic samples provide exact intermediate flows, disocclusions, HUD tiles with subtitle changes, menus, cuts and camera reversals. Real samples are four-frame quads with RAFT flows, half of them without motion vectors, and a quarter of real interpolation samples are 3x multi-frame generation (targets at $\tau=1/3$ and $2/3$). The loss is a Charbonnier penalty plus 0.5 times a census loss \cite{meister2018unflow}, 0.1 times LPIPS, 0.01 times a flow L1 loss, 0.2 times a binary cross-entropy on the UI mask and 0.5 times distillation. The \tier{high} tier is fine-tuned from RIFE 4.26 first (learning rate $10^{-4}$) and then distils its flows and outputs into the smaller tiers ($4\times10^{-4}$).
+
+
+
+\begin{table*}[!t]
+\caption{TSR at 3x, PSNR-Y (dB) per suite. Plain mode: bicubic downscale, no jitter or engine data. Engine mode: jittered render with motion vectors (exact for synthetic, TartanAir and Sintel, RAFT for video) and depth where available. Bold marks the best deployable tier per row (teacher excluded)}\label{tab:tsr}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrrr}
+\toprule
+ & \multicolumn{4}{c}{Plain video} & \multicolumn{4}{c}{Engine data} \\
+\cmidrule{2-5}\cmidrule{6-9}
+Suite & Bicubic & \tier{igpu} & \tier{low} & Teacher & TAA & \tier{igpu} & \tier{low} & Teacher \\
+\midrule
+Synthetic game & 31.23 & 32.65 & \textbf{33.42} & 34.17 & 29.35 & 32.72 & \textbf{34.27} & 35.55 \\
+TartanAir & 32.34 & 33.55 & \textbf{34.03} & 34.34 & 30.64 & 33.00 & \textbf{33.43} & 33.81 \\
+Sintel & 33.38 & 34.23 & \textbf{34.64} & 34.99 & 31.07 & 33.70 & \textbf{34.48} & 35.08 \\
+Vid4 & 25.24 & 26.52 & \textbf{27.00} & 27.48 & 23.96 & 26.75 & \textbf{27.32} & 28.20 \\
+Vimeo-1080p & 35.77 & 36.50 & \textbf{36.96} & 37.33 & 33.43 & 36.88 & \textbf{37.77} & 38.57 \\
+\botrule
+\end{tabular*}
+\end{table*}
+
+\section{Experimental setup}\label{sec:setup}
+
+\emph{Hardware and budgets.} Each notebook ran once on Kaggle with two NVIDIA T4 GPUs (about 15 GB each), four CPU cores and PyTorch 2.11 with CUDA 13.0, under a 10.8-hour ceiling within the 12-hour session. TSR trained the teacher for 170 minutes, the \tier{low} 3x student for 190 and the \tier{igpu} 3x and \tier{low} 2x students in parallel for 110 (10.13 hours in total). FG trained \tier{high} for 150 minutes, \tier{low} for 200 and \tier{igpu} and \tier{mid} in parallel for 120 (10.07 hours). Ablations ran for 30 minutes each, two at a time. Checkpoints were chosen by validation PSNR averaged over inputs with and without engine data.
+
+\emph{Test suites and modes.} TSR is tested at 3x and 2x on synthetic scenes from held-out textures, held-out TartanAir environments, held-out Sintel scene families, Vid4 and 1080p Vimeo validation videos, plus native CARLA renders at 2x. Every suite runs in two modes. In engine mode the input is a jittered single-sample render with exact motion vectors where they exist (synthetic, TartanAir, Sintel) or RAFT motion otherwise. In plain mode the input is a bicubic downscale with no jitter, depth or motion vectors. FG is tested on Vimeo-90K triplets, TartanAir, Sintel, Vid4, Vimeo-1080p clips at 544 lines and at native 1072 lines, synthetic suites for UI, menus, cuts and camera reversal, and, after the run, the 12 Middlebury sequences with ground-truth middle frames \cite{baker2011middlebury}. FG modes are interpolation, extrapolation ($\tau=1.5$) and 3x multi-frame generation, each with and without engine hints.
+
+\emph{Baselines and metrics.} TSR baselines are jitter-aware bilinear and bicubic upsampling and an analytic TAA upscaler (history reprojection, a $3\times3$ YCoCg neighbourhood clamp and a 10 percent blend). FG baselines are frame repetition, frame averaging, motion-vector reprojection and RIFE 4.26 unchanged. We report PSNR and SSIM \cite{wang2004ssim} on luma (PSNR-Y) for TSR and PSNR on RGB for FG, LPIPS, FLIP \cite{andersson2020flip} for static convergence, a temporal-change error (the loss above as a metric), tOF \cite{chu2020tecogan}, a UI ghosting rate (share of UI pixels off by more than 10 percent) and the gated share of the cut gate. Latency is the mean of timed fused FP16 forward passes on one T4. A pacing model simulates a GPU-bound loop with just-in-time CPU scheduling on a variable-refresh display and reports displayed frame rate, game latency (input to a real frame that reflects it) and camera latency (input to any frame whose camera reflects it).
+
+\emph{Gated samples.} The test clips contain no cuts, so every real sample that the gate replaces by a repeated frame is a false alarm. FG tables therefore report samples the gate left alone (``not gated''), and the gate is evaluated separately.
+
+\emph{Use of AI tools.} A large language model assistant (Anthropic Claude) was used to help write the code, analyse the result files and draft this manuscript. Every number in the paper is taken from the result files of the runs, which are public with the code.
+
+\section{Results}\label{sec:results}
+
+\subsection{Temporal super-resolution}\label{sec:res-tsr}
+
+\begin{table}[!t]
+\caption{TSR ablations at 3x: PSNR-Y difference (dB) to a reference trained with the same 30-minute budget. P plain mode, E engine mode}\label{tab:tsr-abl}
+\begin{tabular*}{\columnwidth}{@{\extracolsep\fill}lrrr}
+\toprule
+Removed & Synthetic & TartanAir & Vid4 \\
+\midrule
+History, E & $-1.94$ & $-0.71$ & $-2.04$ \\
+G-buffers, E & $-1.75$ & $-0.72$ & $-1.06$ \\
+Video training, P & $-1.58$ & $-1.18$ & $-1.26$ \\
+Video training, E & $+0.45$ & $+0.17$ & $+0.29$ \\
+Motion net, P & $-0.16$ & $-0.21$ & $-0.46$ \\
+16-frame unrolls, P & $-0.56$ & $-0.23$ & $-0.44$ \\
+16-frame unrolls, E & $-0.18$ & $-0.02$ & $-0.08$ \\
+\botrule
+\end{tabular*}
+\end{table}
+
+\begin{table*}[!t]
+\caption{FG interpolation on plain video (no engine hints), PSNR (dB). Video suites use samples the cut gate left alone (count in brackets). Middlebury was measured after the run on CPU with the downloaded weights}\label{tab:fg-interp}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrr}
+\toprule
+Suite & Average & RIFE 4.26 & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Middlebury (12) & 28.02 & 33.34 & 30.30 & 31.56 & 33.83 & \textbf{34.23} \\
+Vimeo-90K triplet (45) & 26.36 & 34.87 & 29.69 & 32.94 & 34.38 & \textbf{35.33} \\
+Vimeo-1080p, 544 lines (9) & 32.47 & 36.93 & 32.89 & 34.93 & 36.52 & \textbf{37.14} \\
+Vimeo-1080p, native 1072 lines (5) & 29.37 & 33.00 & 29.58 & 31.21 & 33.01 & \textbf{33.24} \\
+Vid4 (4) & 24.09 & 28.21 & 26.23 & 26.72 & 28.66 & \textbf{29.05} \\
+TartanAir (9) & 21.29 & \textbf{30.18} & 22.08 & 25.23 & 28.64 & 30.11 \\
+Sintel (8) & 23.60 & \textbf{26.88} & 23.75 & 24.48 & 25.97 & 26.38 \\
+\botrule
+\end{tabular*}
+\end{table*}
+
+
+\Cref{tab:tsr} gives the 3x results. On plain video the \tier{low} student beats bicubic upscaling on every suite by 1.19 to 2.19 dB PSNR-Y, lowers LPIPS from 0.205 to 0.400 to 0.075 to 0.147, and wins 27 of 28 real clips (the exception is a Vimeo clip where bicubic already reaches 52.8 dB). With engine data it beats the analytic TAA upscaler by 2.79 to 4.92 dB, on all 28 real clips, and with lower temporal-change error on all five suites (for example 0.0229 against 0.0236 on Vid4 and 0.0109 against 0.0110 on synthetic scenes). In plain mode its temporal-change error is lower than bicubic's on three suites and higher on Sintel (0.0090 against 0.0081) and Vimeo-1080p (0.0060 against 0.0059). The teacher, at ten times the cost, adds 0.4 to 1.3 dB in engine mode and 0.3 to 0.8 dB in plain mode. The 6.2-GMAC \tier{igpu} student keeps most of the gain. At 2x the student leads bicubic by 1.6 to 2.7 dB in plain mode, and on native CARLA renders it scores 32.60 dB against 32.33 for bicubic and 30.83 for TAA.
+
+
+\emph{Static convergence.} With a static camera and sub-pixel jitter a temporal upscaler should approach the native image. After 16 frames the student reaches 35.75 dB (FLIP 0.025), the teacher 38.26 dB (0.020), TAA 28.42 dB and the single-frame ablation 28.08 dB (\cref{fig:static}). Without the 16-frame unrolls the model peaks near frame 6 and falls to 29.96 dB. In plain mode there is no jitter to accumulate and the student leads bicubic on static scenes by only 0.73 dB.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig-tsr-static.png}
+\caption{Static camera with sub-pixel jitter on the synthetic suite: PSNR-Y against frame index for the baselines, the trained tiers and three 30-minute ablations (\texttt{abl\_reference} is the ablation baseline)}\label{fig:static}
+\end{figure}
+
+\emph{Ablations.} \Cref{tab:tsr-abl} isolates the components with 30-minute runs of the \tier{low} recipe. History and G-buffers are the largest engine-mode effects (0.7 to 2.0 dB). Plain-video training is worth 1.2 to 1.6 dB on plain video and costs nothing measurable on render input (the model without it is 0.2 to 0.5 dB better there). The motion estimator adds 0.2 to 0.5 dB on plain video. A repeat of the whole configuration a day earlier with shorter budgets (teacher 140, student 120 minutes) gave test means within 0.3 dB of these, so effects below a few tenths of a dB should be read as noise. \Cref{fig:vid4} shows Vid4 in plain mode.
+
+
+
+\begin{figure}[!t]
+\centering
+\setlength{\tabcolsep}{1pt}
+\begin{tabular}{cc}
+\includegraphics[width=0.48\columnwidth]{fig-tsr-vid4-bicubic.png} & \includegraphics[width=0.48\columnwidth]{fig-tsr-vid4-student.png} \\
+\footnotesize (a) Bicubic & \footnotesize (b) \tier{low} student \\
+\includegraphics[width=0.48\columnwidth]{fig-tsr-vid4-teacher.png} & \includegraphics[width=0.48\columnwidth]{fig-tsr-vid4-ground-truth.png} \\
+\footnotesize (c) Teacher & \footnotesize (d) Ground truth \\
+\end{tabular}
+\caption{Vid4 calendar at 3x in plain mode (bicubic downscale, no motion vectors). The student sharpens the sign lettering, awning stripes and calendar digits that bicubic upscaling blurs, but adds a fine grid texture on the cobblestones, and the teacher recovers more detail}\label{fig:vid4}
+\end{figure}
+
+\begin{figure*}[!t]
+\centering
+\setlength{\tabcolsep}{1pt}
+\begin{tabular}{cccccc}
+\includegraphics[width=0.16\textwidth]{fig-fg-ui-target.png} &
+\includegraphics[width=0.16\textwidth]{fig-fg-ui-average.png} &
+\includegraphics[width=0.16\textwidth]{fig-fg-ui-rife.png} &
+\includegraphics[width=0.16\textwidth]{fig-fg-ui-student.png} &
+\includegraphics[width=0.16\textwidth]{fig-fg-ui-student-ui-layer.png} &
+\includegraphics[width=0.16\textwidth]{fig-fg-ui-mask.png} \\
+\footnotesize (a) Target & \footnotesize (b) Average & \footnotesize (c) RIFE 4.26 & \footnotesize (d) \tier{low} & \footnotesize (e) \tier{low} + UI layer & \footnotesize (f) Predicted UI mask \\
+\end{tabular}
+\caption{Interpolation of a synthetic scene with HUD bars, a crosshair and a changing subtitle. Averaging and RIFE blend the old and new subtitle text, the \tier{low} tier copies the UI region from the newest real frame using its predicted mask (f)}\label{fig:ui}
+\end{figure*}
+
+\subsection{Frame generation}\label{sec:res-fg}
+
+\emph{Interpolation.} \Cref{tab:fg-interp} compares the tiers with RIFE 4.26 on plain video. The fine-tuned \tier{high} tier beats RIFE on Middlebury (34.23 against 33.34 dB) and on four of the six video suites by 0.21 to 0.84 dB, ties on TartanAir and loses 0.50 dB on the eight Sintel samples. The \tier{mid} tier (44.3 GMAC) is within 0.5 dB of RIFE on five of the seven suites. The \tier{low} tier beats frame averaging everywhere but trails RIFE by 1.5 to 5.0 dB, and \tier{igpu} is barely above averaging on the 1080p suites. With engine hints \tier{high} is within $-0.6$ to $+0.7$ dB of RIFE without them, so motion vectors add little to interpolation. Motion-vector reprojection is 0.6 to 3.0 dB below RIFE on the real suites. In 3x multi-frame generation \tier{high} matches or beats RIFE on four of five suites (Vimeo-1080p 37.07 against 37.01 dB, native 1080p 35.20 against 34.76).
+
+
+\emph{Extrapolation.} \Cref{tab:fg-extrap} shows the mode that adds no held frame. RIFE is not built for $\tau>1$ and stays within 0.6 dB of frame repetition or below it. On plain video \tier{high} beats repetition by 1.9 to 5.6 dB and \tier{low} by 0.2 to 2.9 dB. With engine motion vectors plain reprojection remains better on TartanAir (1.8 dB, exact motion) and ties on Sintel and Vid4.
+
+\begin{table}[!t]
+\caption{FG extrapolation ($\tau=1.5$), PSNR (dB), samples the cut gate left alone. Plain: no engine hints. Engine: with motion vectors, depth and camera prior, against motion-vector reprojection (MV)}\label{tab:fg-extrap}
+\begin{tabular*}{\columnwidth}{@{\extracolsep\fill}lrrrr}
+\toprule
+Plain & Repeat & RIFE & \tier{low} & \tier{high} \\
+\midrule
+Vimeo-1080p & 30.15 & 27.27 & 31.31 & \textbf{33.38} \\
+Native 1080p & 28.79 & 27.01 & 28.94 & \textbf{30.65} \\
+Vid4 & 21.41 & 21.95 & 23.93 & \textbf{25.67} \\
+TartanAir & 19.37 & 19.51 & 22.28 & \textbf{24.94} \\
+Sintel & 21.90 & 21.97 & 22.94 & \textbf{24.02} \\
+\midrule
+Engine & MV & & \tier{low} & \tier{high} \\
+\midrule
+Vimeo-1080p & 32.03 & & 32.11 & \textbf{32.82} \\
+Native 1080p & 29.86 & & 29.86 & \textbf{30.63} \\
+Vid4 & 25.89 & & 24.99 & \textbf{25.92} \\
+TartanAir & \textbf{26.91} & & 24.77 & 25.12 \\
+Sintel & \textbf{24.20} & & 24.08 & 24.14 \\
+Synthetic & 32.88 & & 33.56 & \textbf{34.38} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+\emph{UI, camera reversal and cuts.} On synthetic HUD and subtitle scenes (interpolation with engine hints) the UI ghosting rate is 0.047 for \tier{low} and 0.049 for \tier{high}, against 0.228 for RIFE and 0.302 for reprojection, and 0.010 when the engine supplies a UI layer (\cref{fig:ui}). Removing UI training raises it to 0.362. On rapid camera reversals in extrapolation the late-latched camera prior raises \tier{low} from 25.30 to 28.01 dB and \tier{high} from 26.30 to 27.07 dB, while repetition scores 25.91 dB. The gate detected all 48 synthetic cuts in both input modes. With motion vectors it false-alarmed on 0 to 8 percent of real samples (20 percent of the ten Sintel samples). Without them it false-alarmed on 0 to 25 percent of two-frame real samples, on 30 to 50 percent of 3x multi-frame samples, whose real frames are three apart, and on 9 percent of continuous synthetic pairs against its 1 percent calibration target. A threshold calibrated on adjacent synthetic pairs does not transfer to real content or wider gaps.
+
+
+\emph{Ablations.} Thirty-minute runs of the \tier{low} recipe show that the RIFE weights matter most on plain video: without inheritance Vimeo-90K interpolation drops from 28.01 to 25.47 dB. Without engine hints in training, extrapolation with exact motion on TartanAir falls from 24.24 to 19.04 dB, but plain-video interpolation rises from 28.01 to 29.19 dB, so the hints cost plain-video quality at this budget. Distillation adds 0.2 to 1.3 dB. A model trained only for extrapolation fails at interpolation (21.29 against 32.73 dB with engine hints).
+
+\subsection{Real-time cost}\label{sec:res-time}
+
+\Cref{tab:tiers} gives the measured T4 times. They are far above the arithmetic cost: the 12.7-GMAC FG \tier{low} tier takes 48.1 ms and the 6.2-GMAC TSR \tier{igpu} tier 16.3 ms, and cuDNN autotuning changed neither compared with the previous run (47.5 and 17.0 ms). The \tier{mid} and \tier{high} FG tiers are faster at 1440p (85.7 and 91.2 ms) than at 1080p (106.6 and 120.4 ms) because their flow is halved above 1152 lines, so full-resolution flow, not the head, dominates their time. With 48.1 ms per generated frame the pacing model at a 30 fps render rate drops the displayed rate to 24.6 fps in every FG mode. Interpolation raises game latency from 38.3 to 127.1 ms, while extrapolation keeps it at 38.3 ms and late latching brings camera latency to 43.7 ms. The fused networks export to ONNX with a maximum ONNX Runtime difference of $2.8\times10^{-5}$ (TSR) and $7.5\times10^{-6}$ (FG).
+
+\section{Discussion}\label{sec:discussion}
+
+\emph{What one model per task achieves.} A single TSR network handles jittered renders with engine data and plain video without it. Training on both degradations is what makes plain video work, and it costs the render path nothing measurable (\cref{tab:tsr-abl}). Longer budgets no longer help: the student trained 58 percent longer than in the previous run and moved by at most 0.3 dB, so the next TSR gains need more exact-motion data rather than more time. For FG, fine-tuning an open interpolation network with zero-initialised hint channels keeps its quality and adds what video interpolation lacks for games: extrapolation, UI handling and a camera prior.
+
+\emph{Where it falls short.} The tiers that fit integrated and entry GPUs do not reach RIFE 4.26's quality in FG. Moving their flow to full resolution in training raised \tier{low} by 3.4 dB on Middlebury, yet it stays 1.8 dB below RIFE at half of RIFE's channel widths and a sixth of its cost, so capacity now limits it. Extrapolation with exact motion vectors does not beat plain reprojection on TartanAir. The histogram cut gate is not deployable. Most importantly for real-time use, every measured tier exceeds a 16.7 ms frame budget in eager PyTorch on a T4 except the TSR \tier{igpu} tier, which takes 16.3 ms (10.0 ms with engine motion vectors), nearly the whole budget. The TSR \tier{low} tier's 27.7 ms is 3.4 times its arithmetic estimate for a 4-TFLOPS integrated GPU, which points to per-kernel overhead and memory traffic. We infer this from the timings and have not profiled it.
+
+\emph{Threats to validity.} Each configuration ran once, and only the TSR configuration was repeated with other budgets. Several ungated FG means rest on few samples (four Vid4 and five native 1080p samples). Real training windows are about 91 percent Vimeo-90K and only 2 percent of TSR windows have exact motion. Low-resolution inputs are simulated from finished frames, so level-of-detail and shading-rate effects of real renders are missing, and lighting effects such as specular aliasing and reflections are absent from the synthetic data. The plain-video protocol uses clean bicubic downscaling, while real video adds codec artefacts. We did not compare with commercial upscalers or frame generators, which needs engine captures, and latency was measured on a data-centre GPU, not on target hardware.
+
+\section{Conclusion}\label{sec:conclusion}
+
+\Sys{} shows that one compact recurrent network can upscale both engine renders and plain video, beating bicubic and analytic TAA upscaling on five suites, and that fine-tuning RIFE 4.26 with zero-initialised engine hints yields a frame generator that beats RIFE at its own width while adding extrapolation, UI masking and a camera prior. Everything was trained on free cloud GPUs from public data with audited splits. The results also mark what remains: frame-generation tiers small enough for integrated GPUs are 1.5 to 5 dB below RIFE, cut detection without motion vectors false-alarms, and in eager execution only the smallest super-resolution tier fits a 60 fps frame budget, with almost no margin. Next steps are wider half-resolution-flow FG tiers, cut thresholds calibrated on real clips per frame gap, fused compute-shader or TensorRT and DirectML runtimes timed on integrated GPUs, repeated seeds, and engine captures for a comparison with commercial systems.
+
+\backmatter
+
+\section*{Statements and Declarations}\label{sec:declarations}
+\pdfbookmark[1]{Statements and Declarations}{declarations}
+
+\bmhead{Funding} No funding was received for this work.
+
+\bmhead{Competing interests} The author has no competing interests to declare.
+
+\bmhead{Data availability} All datasets are public: DIV2K, Flickr2K, REDS, Vimeo-90K, Vid4 and MPI Sintel on Kaggle, and TartanAir, the CARLA-based GameIR renders, 1080p game frames and Vimeo-1080p on Hugging Face. The dataset identifiers, the split manifest, every metric file, plot and log of the runs reported here\ifdefined\Anonymised{} are available from the corresponding author and will be released with the code on acceptance.\else{} are in the project repository, \RepoURL.\fi
+
+\bmhead{Code availability} \ifdefined\Anonymised The code, notebooks and trained weights will be released on acceptance.\else The code, the three Kaggle notebooks with their executed outputs and the trained weights are in the same repository.\fi
+
+\bmhead{Ethics approval and consent} Not applicable.
+
+\bmhead{Author contributions} \ifdefined\Anonymised Withheld for review.\else Parth Mital designed the system, ran the experiments, analysed the results and wrote the manuscript.\fi
+
+\ifdefined\NoReferences\else
+\pdfbookmark[1]{References}{references}
+\fi
+\bibliography{references}
+
+\end{document}

@@ -18,7 +18,7 @@
 	],
 	"cpu_count": 4,
 	"ram_total_gb": 31.3,
-	"ram_available_gb": 29.6,
+	"ram_available_gb": 29.5,
 	"disk_free_gb_working": 19.5,
 	"disk_free_gb_tmp": 966.8,
 	"python": "3.13.16",

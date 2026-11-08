@@ -1,33 +1,37 @@
-20:42:22 | start: manifest
-20:42:25 | done: manifest in 0.1 min (run total 0.01 h)
-20:42:25 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
-20:42:26 | start: caches
-20:42:57 | still_val.npy: 256 crops (0 decode failures)
-20:49:17 | still_train.npy: 6000 crops (2 decode failures)
-20:50:11 | quad_val: 256 windows (0 failures)
-21:06:47 | quad_train: 6000 windows (0 failures)
-21:08:44 | done: caches in 26.3 min (run total 0.45 h)
-21:08:53 | RIFE 4.26 into the high tier: {'exact': 153, 'sliced': 5, 'missing': 0}
-21:08:56 | start: batch_probe
-21:09:39 | done: batch_probe in 0.7 min (run total 0.46 h)
-21:09:39 | start: train_teacher
-22:50:14 | done: train_teacher in 100.6 min (run total 2.14 h)
-22:50:14 | start: train_student
-00:50:32 | done: train_student in 120.3 min (run total 4.14 h)
-00:50:32 | start: train_pair
-02:05:48 | done: train_pair in 75.3 min (run total 5.40 h)
-02:05:48 | start: ablations
-03:06:49 | done: ablations in 61.0 min (run total 6.41 h)
-03:06:55 | start: test_suites
-03:08:08 | vimeo1080p vimeo1080p/SK_000/c5b4b1f0c0: skipped (blank, cut, frozen)
-03:08:10 | vimeo1080p vimeo1080p/723 Palisades Beach Rd. - Santa Monica_000/b013664eae: skipped (blank, frozen)
-03:08:11 | vimeo1080p vimeo1080p/SK+II_002/d70fb70ef1: skipped (frozen)
-03:08:14 | vimeo1080p vimeo1080p/His Will, Not Mine： Gary's Story_000/e58987a0e2: skipped (blank, frozen)
-03:08:19 | done: test_suites in 1.4 min (run total 6.44 h)
-03:08:19 | start: evaluation
-03:10:19 | vimeo_triplet done
-03:10:58 | tartanair done
-03:11:53 | sintel done
-03:13:27 | vimeo1080p done
-03:13:49 | vid4 done
-03:13:49 | done: evaluation in 5.5 min (run total 6.53 h)
+02:30:26 | start: manifest
+02:30:40 | done: manifest in 0.2 min (run total 0.01 h)
+02:30:40 | data root: /kaggle/input/notebooks/parthmital/neural-data-pipeline/nss_data
+02:30:40 | start: caches
+02:31:16 | still_val.npy: 256 crops (0 decode failures)
+02:38:13 | still_train.npy: 5940 crops (2 decode failures)
+02:39:52 | quad_val: 256 windows (0 failures)
+03:00:47 | quad_train: 3805 windows (0 failures)
+03:02:05 | done: caches in 31.4 min (run total 0.53 h)
+03:02:12 | RIFE 4.26 into the high tier: {'exact': 153, 'sliced': 5, 'missing': 0}
+03:02:15 | start: batch_probe
+03:03:02 | done: batch_probe in 0.8 min (run total 0.55 h)
+03:03:02 | start: train_teacher
+05:32:17 | done: train_teacher in 149.2 min (run total 3.04 h)
+05:32:17 | start: train_student
+08:50:45 | done: train_student in 198.5 min (run total 6.34 h)
+08:50:45 | start: train_pair
+10:50:06 | done: train_pair in 119.3 min (run total 8.33 h)
+10:50:06 | start: ablations
+12:20:20 | done: ablations in 90.2 min (run total 9.84 h)
+12:20:27 | start: test_suites
+12:22:21 | vimeo1080p vimeo1080p/SK_000/c5b4b1f0c0: skipped (blank, cut, frozen)
+12:22:24 | vimeo1080p vimeo1080p/723 Palisades Beach Rd. - Santa Monica_000/b013664eae: skipped (blank, frozen)
+12:22:24 | vimeo1080p vimeo1080p/SK+II_002/d70fb70ef1: skipped (frozen)
+12:22:28 | vimeo1080p vimeo1080p/His Will, Not Mine： Gary's Story_000/e58987a0e2: skipped (blank, frozen)
+12:22:41 | vimeo1080p vimeo1080p/SK_000/c5b4b1f0c0: skipped (blank, cut, frozen)
+12:22:42 | vimeo1080p vimeo1080p/723 Palisades Beach Rd. - Santa Monica_000/b013664eae: skipped (blank, frozen)
+12:22:42 | vimeo1080p vimeo1080p/SK+II_002/d70fb70ef1: skipped (frozen)
+12:22:43 | done: test_suites in 2.3 min (run total 9.88 h)
+12:22:44 | start: evaluation
+12:25:07 | vimeo_triplet done
+12:25:49 | tartanair done
+12:26:50 | sintel done
+12:28:33 | vimeo1080p done
+12:28:56 | vid4 done
+12:31:10 | vimeo1080p_native done
+12:31:10 | done: evaluation in 8.4 min (run total 10.02 h)
