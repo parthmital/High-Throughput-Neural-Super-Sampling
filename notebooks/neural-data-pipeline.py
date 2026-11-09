@@ -7,7 +7,7 @@
 # **Steps.**
 #
 # 1. Discover attached Kaggle datasets (capped, randomised directory walk; official test lists read directly) and drop degraded copies (LR, bicubic, blurred, `x2`/`x3`/`x4`) and non-colour passes.
-# 2. Materialise selected Hugging Face subsets into `/kaggle/working/nss_data` with keep-alive range requests and single-stream reads (no full archive downloads): game frames, TartanAir sequences with depth, exact optical flow and occlusion masks, GameIR native 720p / 1440p game renders with depth, and 1080p Vimeo videos.
+# 2. Materialise selected Hugging Face subsets into `/kaggle/working/nss_data` with keep-alive range requests and single-stream reads (Vimeo-1080p downloads each parquet shard it reads in full): game frames, TartanAir sequences with depth, exact optical flow and occlusion masks, GameIR native 720p / 1440p game renders with depth, and 1080p Vimeo videos.
 # 3. Group frames into sequences; every item gets a leakage group (sequence, video, scene family, environment or town).
 # 4. Decode keyframes into thumbnails and compute quality statistics; filter too-small, flat, letterboxed and blurry items.
 # 5. Copy detection across the whole combined dataset in two stages. Candidates: DINOv2-small nearest neighbours (exhaustive GPU search) and pHash pairs. Verification: SIFT matches that agree on one RANSAC affine map, scored by the image area they cover. Thresholds are calibrated on synthetic copies against random and hard negatives (nearest neighbours between items known to be distinct).
@@ -270,7 +270,7 @@ print(f"keyframes: {len(KF)}, decode failures: {int((~KF['ok']).sum())}")
 # %% [markdown]
 # ## 9. Filtering unsuitable data
 #
-# Rejects items whose keyframes fail to decode or are smaller than 256 px, flat (grey standard deviation below 8), heavily letterboxed (more than 35 percent black rows) or blurry (Laplacian variance below 20 for stills, 5 for video). Sequences are judged on the median of their keyframes, so one dark shot or a fade does not reject a whole video. Rejected items stay in the manifest with split `filtered` and are left out of duplicate search, so the decision is auditable. Expected output: rejection counts by reason and source, distributions with thresholds, and examples of rejected keyframes from every source and reason.
+# Rejects items whose keyframes fail to decode or are smaller than 256 px, flat (grey standard deviation below 8), heavily letterboxed (more than 35 percent black rows) or blurry (Laplacian variance below 20 for stills, 5 for video). Sequences are judged on the median of their keyframes, so one dark shot or a fade does not reject a whole video. Rejected items stay in the manifest with split `filtered` and are left out of duplicate search, so the decision is auditable. Expected output: rejection counts by reason and source, distributions with thresholds, and a grid of up to 16 rejected keyframes (the first two per source and reason, in dataset order, cut to the first 16), so a source or reason missing from the grid is not shown there.
 
 # %%
 with RUN.stage("filters"):

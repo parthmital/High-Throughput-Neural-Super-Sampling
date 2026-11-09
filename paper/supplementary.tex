@@ -1,0 +1,78 @@
+%% NeuralSS supplementary material (Online Resource 1) for the Journal of Real-Time Image Processing manuscript main.tex.
+%% Same Springer Nature template (sn-jnl.cls v3.1, December 2024), single column, no page limit.
+%% Variant: supplementary-anonymised.tex (\Anonymised). Labels of main.tex are referenced with the M- prefix.
+%% Each section lives in its own supp-*.tex file. Numbers come from results-values.tex via \Res{key}.
+%% Build: python tools/build_paper.py from the repository root (see paper/README.md).
+\RequirePackage{xr-hyper}
+\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}
+
+\input{paper-preamble}
+\externaldocument[M-]{main\Variant}
+\usepackage{longtable}%
+\usepackage{float}%
+\usepackage{subcaption}%
+\usepackage{placeins}% \FloatBarrier after a float that must not drift behind earlier floats
+
+%% S-numbering, so that the manuscript can cite Section S3, Fig. S2, Table S4, Eq. (S5)
+\renewcommand{\thesection}{S\arabic{section}}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\renewcommand{\thetable}{S\arabic{table}}
+\renewcommand{\theequation}{S\arabic{equation}}
+\renewcommand{\theHsection}{S\arabic{section}}
+\renewcommand{\theHfigure}{S\arabic{figure}}
+\renewcommand{\theHtable}{S\arabic{table}}
+\renewcommand{\theHequation}{S\arabic{equation}}
+
+%% Paths of the notebooks' saved outputs, so figures always show the latest run without copies
+\newcommand{\DataOut}{../neural-data-pipeline/outputs}
+\newcommand{\TsrOut}{../neural-supersampling/outputs}
+\newcommand{\FgOut}{../neural-frame-generation/outputs}
+
+\raggedbottom
+%% Float placement: let floats share text pages sooner so that a float lands on or just after its first mention
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.8}
+
+\begin{document}
+
+\title[Supplementary material: vendor-neutral neural super-resolution and frame generation]{Supplementary material (Online Resource 1) for: One network for renders and video: vendor-neutral neural temporal super-resolution and low-latency frame generation trained on commodity cloud GPUs}
+
+\ifdefined\Anonymised
+\author*{\fnm{Anonymous} \sur{Author}}\email{anonymous@example.org}
+\affil*{\orgname{Anonymous institution}}
+\else
+\author*{\fnm{Parth} \sur{Mital}}\email{parth.mital2023@vitstudent.ac.in}
+\affil*{\orgdiv{School of Computer Science and Engineering}, \orgname{Vellore Institute of Technology}, \orgaddress{\city{Vellore}, \postcode{632014}, \state{Tamil Nadu}, \country{India}}}
+\fi
+
+\abstract{\textbf{Journal:} \emph{Journal of Real-Time Image Processing}. \textbf{Article:} One network for renders and video: vendor-neutral neural temporal super-resolution and low-latency frame generation trained on commodity cloud GPUs. \textbf{Corresponding author:} \ifdefined\Anonymised withheld for review.\else Parth Mital, School of Computer Science and Engineering, Vellore Institute of Technology, Vellore 632014, Tamil Nadu, India, \href{mailto:parth.mital2023@vitstudent.ac.in}{\nolinkurl{parth.mital2023@vitstudent.ac.in}}.\fi\par
+This document is Online Resource 1 of the article. The article is limited to twelve pages, so it states the design and the main results only. This supplement explains every part of \Sys{} from first principles: the sampling, motion and image-quality concepts it relies on, the data pipeline and copy detection, the synthetic renderer, the temporal super-resolution and frame-generation networks with every equation and training objective, the evaluation protocol, and every table, plot and prediction that the three Kaggle notebooks saved, each with its interpretation. Every number is generated from the notebooks' metric files, and every finding carries a status label (confirmed, preliminary, observation or under revision), because the pipeline is an intermediate checkpoint that will be revised.}
+
+\keywords{Temporal super-resolution, Frame generation, Video frame interpolation, Real-time rendering, Latency, Efficient neural networks}
+
+\pdfbookmark[1]{Title}{title}
+\maketitle
+
+%% Test builds of one section: a git-ignored paper/test-<name>.tex containing
+%% \def\SuppOnly{supp-<name>}\input{supplementary} (its own job name, so parallel builds do not collide)
+\ifdefined\SuppOnly
+\input{\SuppOnly}
+\else
+\input{supp-overview}
+\input{supp-background}
+\input{supp-data}
+\input{supp-tsr-method}
+\input{supp-tsr-results}
+\input{supp-fg-method}
+\input{supp-fg-results}
+\input{supp-status}
+\input{supp-appendix}
+\fi
+
+\backmatter
+
+\pdfbookmark[1]{References}{references}
+\bibliography{references,references-supplementary}
+
+\end{document}

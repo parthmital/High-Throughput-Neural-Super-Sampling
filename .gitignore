@@ -16,3 +16,6 @@ paper/*.bbl
 paper/*.blg
 paper/*.toc
 paper/*.synctex.gz
+
+# Single-section test builds of the supplementary material
+paper/test-*

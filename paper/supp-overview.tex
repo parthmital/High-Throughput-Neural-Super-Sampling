@@ -1,0 +1,55 @@
+%% Section S1: scope, reading guide, status labels and provenance of the results.
+\section{About this supplement}\label{sec:overview}
+
+\subsection{Purpose and relation to the article}\label{sec:overview-purpose}
+
+The article (\cref{M-sec:intro}) presents \Sys{}, a vendor-neutral system with one temporal super-resolution (TSR) network and one frame-generation (FG) network, each serving both game-engine renders with motion vectors and plain video without them. Its twelve-page limit allows only the design and the headline results. This supplement is the complete account. It assumes basic linear algebra, calculus and programming, and nothing about rendering, super-resolution or frame interpolation. It defines every concept before it is used, gives every equation with all symbols defined, lists every input, hyperparameter and loss weight of the code, and presents every table, plot and prediction that the three Kaggle notebooks saved, each with an interpretation.
+
+\Cref{tab:overview-map} maps the article's sections to the sections of this supplement.
+
+\begin{table}[!htbp]
+\caption{Where each part of the article is explained in full}\label{tab:overview-map}
+\begin{tabular}{@{}p{0.42\textwidth}p{0.54\textwidth}@{}}
+\toprule
+Article & Supplement \\
+\midrule
+Concepts assumed by the article & \cref{sec:bg} \\
+\Cref{M-sec:data} Data and leakage control & \cref{sec:data} \\
+\Cref{M-sec:tsr} Temporal super-resolution & \cref{sec:tsrm} (method), \cref{sec:tsrr} (results) \\
+\Cref{M-sec:fg} Frame generation & \cref{sec:fgm} (method), \cref{sec:fgr} (results) \\
+\Cref{M-sec:setup} Experimental setup & \cref{sec:tsrm,sec:fgm} (protocols), \cref{sec:app} (configuration and runs) \\
+\Cref{M-sec:results} Results & \cref{sec:tsrr,sec:fgr} \\
+\Cref{M-sec:discussion} Discussion and threats to validity & \cref{sec:status} \\
+\botrule
+\end{tabular}
+\end{table}
+
+\subsection{An intermediate checkpoint}\label{sec:overview-checkpoint}
+
+The three notebooks are not the final pipeline. They are a checkpoint of a project whose data, networks, training budgets and evaluation protocol will be revised, and this supplement will be revised with them. Two mechanisms keep it consistent with the latest runs.
+
+\begin{enumerate}
+\item \emph{Generated numbers.} No number taken from a run is typed by hand. The script \texttt{tools/build\_paper\_results.py} reads the metric files that the notebooks saved and writes one named value per metric. The text, tables and the article refer to those names, so a new run updates every number in both documents, and the script lists the sentences whose numbers changed so that their interpretation can be checked.
+\item \emph{Saved outputs, not copies.} Figures are read directly from the notebooks' output folders, so a new run replaces them.
+\end{enumerate}
+
+\subsection{Runs reported in this version}\label{sec:overview-runs}
+
+This version reports the data-pipeline run of \Res{run.neural-data-pipeline.start}, the TSR run of \Res{run.neural-supersampling.start} to \Res{run.neural-supersampling.end}, the FG run of \Res{run.neural-frame-generation.start}, and a Middlebury interpolation comparison computed afterwards on a CPU from the FG run's saved weights. Each notebook ran once on Kaggle with two NVIDIA T4 GPUs. \Cref{sec:app} gives the hardware, software, budgets and configuration of each run and the procedure that regenerates every number from its saved outputs. Checking this supplement against the code found defects in the code of these runs, and \cref{sec:status-defects} lists them with the results they affect.
+
+\subsection{Status of findings}\label{sec:status-legend}
+
+Every statement about a result carries one of four labels, so that a reader can tell settled results from provisional ones.
+
+\begin{description}
+\item[\Confirmed] The finding holds in every run available to us and its size is well above the run-to-run variation, which an earlier repeat of the whole TSR configuration put at about 0.3\,dB of PSNR. It is not expected to change with the planned revisions.
+\item[\Preliminary] The finding comes from one run (one random seed, one training budget), or its margin is small, or it rests on few test samples. It is a measured result, but further runs may change it.
+\item[\Observation] The finding is qualitative: it comes from looking at predicted images or plots, or from a handful of samples, rather than from a test statistic.
+\item[\UnderRevision] The finding concerns a component or a protocol that the next version of the pipeline is expected to change, for example a threshold known not to transfer, or timings measured in eager PyTorch rather than a deployment runtime.
+\end{description}
+
+\noindent \Cref{sec:status} collects all findings with their labels, the known limitations and the planned revisions.
+
+\subsection{Conventions}\label{sec:overview-conventions}
+
+Tiers are written in typewriter type (\tier{igpu}, \tier{low}, \tier{mid}, \tier{high}). ``Engine mode'' means the input carries engine data (motion vectors and, where available, depth), ``plain mode'' or ``plain video'' means colour only. PSNR values are in decibels (dB), and higher is better for PSNR and SSIM, lower is better for LPIPS, FLIP, the temporal errors and latencies. Cost is given in multiply-accumulate operations (MAC, \cref{sec:bg-cnn}) per output frame of $1920\times1080$ pixels. Figures, tables, sections and equations of this supplement are numbered with the prefix S, and those of the article without it.

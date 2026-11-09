@@ -95,8 +95,9 @@ class Sequence(torch.nn.Module):
 
 
 def withhold_engine_data(b, g, p_mv, p_depth):
-    """Render-kind samples lose their motion vectors (share p_mv: the estimator runs on the jittered frames, as
-    for colour-only captures) or depth (share p_depth)."""
+    """Every sample of the batch (render and video kinds alike) loses its motion vectors (share p_mv: the estimator
+    runs on the jittered frames, as for colour-only captures) or its depth (share p_depth). Video samples have no
+    depth already, and those that keep motion vectors can lose them here too."""
     n, dev = b["lr"].shape[0], b["lr"].device
     b = dict(b)
     drop_mv = torch.rand(n, device=dev, generator=g) < p_mv

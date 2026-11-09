@@ -1,0 +1,58 @@
+%% Shared preamble of the manuscript (main.tex) and the supplementary material (supplementary.tex).
+%% Loaded after \documentclass. Both files load xr-hyper with \RequirePackage before \documentclass,
+%% because sn-jnl.cls loads hyperref itself.
+
+\usepackage{graphicx}%
+\usepackage{multirow}%
+\usepackage{amsmath,amssymb,amsfonts}%
+\usepackage{xcolor}%
+\usepackage{textcomp}%
+\usepackage{booktabs}%
+\usepackage{tikz}%
+\usetikzlibrary{positioning,arrows.meta,fit}%
+\usepackage[capitalise,nameinlink]{cleveref}%
+\hypersetup{bookmarksnumbered=true}
+\usepackage{xurl}% break long URLs in the reference list
+\newcommand{\burl}[1]{\url{#1}}% sn-mathphys-num prints URL fields in sans serif without a link
+
+%% Variant suffix used to pair each document with its counterpart (main / supplementary)
+\ifdefined\Anonymised \def\Variant{-anonymised}\else \def\Variant{}\fi
+
+\newcommand{\Sys}{NeuralSS}
+\newcommand{\tier}[1]{\texttt{#1}}
+\newcommand{\RepoURL}{\url{https://github.com/parthmital/High-Throughput-Neural-Super-Sampling}}
+
+%% Results. Every number taken from a run is a key in results-values.tex, which
+%% tools/build_paper_results.py generates from the notebooks' metric files. Never type such a number.
+%%   \Res{key}          the value of key
+%%   \ResDiff{a}{b}     signed difference a - b (computed by the generator, which scans the .tex files)
+%%   \ResAbsDiff{a}{b}  unsigned difference |a - b|
+%%   \ResRatio{a}{b}    ratio a / b
+%% A missing key prints a red ??key in the PDF (check_paper.py fails on ??) and a LaTeX warning.
+\makeatletter
+\newcommand{\SetResult}[2]{\expandafter\def\csname nss@res@#1\endcsname{#2}}
+\newcommand{\Res}[1]{%
+  \ifcsname nss@res@#1\endcsname\csname nss@res@#1\endcsname
+  \else\textbf{\textcolor{red}{??\detokenize{#1}}}\PackageWarning{neuralss}{Missing result key #1}\fi}
+\newcommand{\ResDiff}[2]{\Res{diff:#1:#2}}
+\newcommand{\ResAbsDiff}[2]{\Res{absdiff:#1:#2}}
+\newcommand{\ResRatio}[2]{\Res{ratio:#1:#2}}
+\makeatother
+\InputIfFileExists{results-values}{}{\PackageWarning{neuralss}{results-values.tex missing, run tools/build_paper_results.py}}
+
+%% Status of a finding (used in the supplementary material, defined in its Section S1):
+%%   \Confirmed     holds in every available run and is not sensitive to the details expected to change
+%%   \Preliminary   measured in one run (one seed, one budget), may change with further runs
+%%   \Observation   qualitative or from few samples, from inspection of outputs rather than a test statistic
+%%   \UnderRevision describes a component or protocol that the next pipeline version is expected to change
+\definecolor{nssConfirmed}{RGB}{0,110,60}
+\definecolor{nssPreliminary}{RGB}{170,100,0}
+\definecolor{nssObservation}{RGB}{40,80,170}
+\definecolor{nssRevision}{RGB}{170,30,30}
+\newcommand{\nssTag}[2]{\textsf{\footnotesize\textbf{\textcolor{#1}{[#2]}}}}
+\newcommand{\Confirmed}{\nssTag{nssConfirmed}{Confirmed}}
+\newcommand{\Preliminary}{\nssTag{nssPreliminary}{Preliminary}}
+\newcommand{\Observation}{\nssTag{nssObservation}{Observation}}
+\newcommand{\UnderRevision}{\nssTag{nssRevision}{Under revision}}
+%% A place that still needs a verified citation. Prints a red marker, so it cannot survive a final build.
+\newcommand{\NeedsCite}[1]{\textbf{\textcolor{red}{[??citation: #1]}}\PackageWarning{neuralss}{Citation needed: #1}}

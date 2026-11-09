@@ -365,6 +365,14 @@ def run_taau(net, b, scale):
     return torch.stack(outs, 1)
 
 
+def masked_psnr(a, b, mask, min_pixels=50):
+    """Masked PSNR of each sample; NaN for a sample whose mask holds at most min_pixels pixels, so an empty
+    region of one sample cannot score the 100 dB cap, and the NaN is skipped by the means downstream.
+    """
+    p = M.psnr(a, b, mask=mask)
+    return p.masked_fill(mask.flatten(1).sum(1) <= min_pixels, float("nan"))
+
+
 def hf_mask(hr, frac=0.15):
     """Fine-detail mask: pixels in the top frac of ground-truth gradient magnitude."""
     y = M.rgb_to_y(hr)
@@ -400,9 +408,9 @@ def sr_frame_metrics(
             F.interpolate(b["reactive_lr"][:, t], scale_factor=scale, mode="nearest")
             > 0.1
         )
-        p_dis = M.psnr(yo, yg, mask=disocc) if disocc.sum() > 50 else None
+        p_dis = masked_psnr(yo, yg, disocc)
         p_hf = M.psnr(yo, yg, mask=hfm)
-        p_rea = M.psnr(yo, yg, mask=rea.float()) if rea.sum() > 50 else None
+        p_rea = masked_psnr(yo, yg, rea.float())
         lp = lpips_fn(o, g) if (lpips_fn is not None and t % lpips_every == 0) else None
         # actual motion magnitude, output pixels per frame
         mv_px = b["mv_hr"][:, t].norm(dim=1).mean(dim=(1, 2))
@@ -423,9 +431,9 @@ def sr_frame_metrics(
                     "frame": t,
                     "psnr_y": p[i].item(),
                     "ssim_y": sm[i].item(),
-                    "psnr_disocc": None if p_dis is None else p_dis[i].item(),
+                    "psnr_disocc": p_dis[i].item(),
                     "psnr_detail": p_hf[i].item(),
-                    "psnr_particles": None if p_rea is None else p_rea[i].item(),
+                    "psnr_particles": p_rea[i].item(),
                     "lpips": None if lp is None else lp[i].item(),
                     "warp_err": None if (we is None or not exact[i]) else we[i].item(),
                     "temporal_err": (

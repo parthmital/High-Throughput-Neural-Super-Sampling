@@ -530,10 +530,14 @@ class TSRNet(nn.Module):
         """f: dict with color (N,3,h,w), depth (N,1,h,w), mv (N,2,h,w), reactive (N,1,h,w), exposure (N,),
         jitter (N,2), has_depth (N,), mv_quality (N,), kind (N,; optional, default 1). Training only:
         mv_label (N,2,h,w) and mv_force (N,) bool, which warps history of forced samples with the label motion
-        instead of the estimate while the estimator is still poor (teacher forcing). Returns (output (N,3,H,W),
-        new state); the state holds the estimated motion ("mv_est", None without an estimate).
+        instead of the estimate while the estimator is still poor (teacher forcing). reset (N,1,1,1 or scalar;
+        optional, deployment only): 1 makes the sample start afresh, exactly as the first frame of a sequence does
+        (no warped history, hidden state or previous depth, input motion and quality, history weight 0), whatever
+        the state holds. Returns (output (N,3,H,W), new state); the state holds the estimated motion ("mv_est",
+        None without an estimate).
         """
         color, depth, mv, jitter = f["color"], f["depth"], f["mv"], f["jitter"]
+        reset = f.get("reset")
         n, _, h, w = color.shape
         s = self.scale
         kind = f.get("kind")
@@ -541,6 +545,7 @@ class TSRNet(nn.Module):
         quality = f["mv_quality"].float()
         base = self.base_upsample(color, jitter)
         mv_est = None
+        fresh = None  # reset samples (deployment), set on the recurrent path below
         if state is None or not use_history:
             hist, hidden, d_prev, first = (
                 base,
@@ -549,6 +554,7 @@ class TSRNet(nn.Module):
                 True,
             )
         else:
+            mv_in, quality_in = mv, quality
             # training estimates motion for every sample (all feed the motion loss); inference only when a
             # sample has no motion vectors
             if self.motion is not None and (
@@ -570,6 +576,20 @@ class TSRNet(nn.Module):
             hist = backward_warp(state["out"], mv_hr)
             hidden = backward_warp(state["hidden"], mv)
             d_prev, first = backward_warp(state["depth"], mv), False
+            if (
+                reset is not None
+            ):  # a reset sample takes the first-frame values of every input of the trunk
+                fresh = reset.view(-1, 1, 1, 1) > 0
+                hist = torch.where(fresh, base, hist)
+                hidden = torch.where(fresh, torch.zeros_like(hidden), hidden)
+                d_prev = torch.where(fresh, depth, d_prev)
+                mv = torch.where(fresh, mv_in, mv)
+                quality = torch.where(fresh.view(-1), quality_in, quality)
+        keep = (
+            0.0 if first else 1.0
+        )  # gate of the history features (zero on a first frame)
+        if fresh is not None:
+            keep = 1.0 - fresh.to(color.dtype)
         has_d = f["has_depth"].view(n, 1, 1, 1).to(color.dtype)
         disocc = ((depth - d_prev).abs() / (depth.abs() + 1e-3)).clamp(0, 1) * has_d
         hist_lr = F.avg_pool2d(hist, s)
@@ -585,8 +605,8 @@ class TSRNet(nn.Module):
             has_d.expand(n, 1, h, w),
             quality.view(n, 1, 1, 1).expand(n, 1, h, w).to(color.dtype),
             kind.view(n, 1, 1, 1).expand(n, 1, h, w).to(color.dtype),
-            F.pixel_unshuffle(hist.to(color.dtype), s) * (0.0 if first else 1.0),
-            (hist_lr.to(color.dtype) - color).abs() * (0.0 if first else 1.0),
+            F.pixel_unshuffle(hist.to(color.dtype), s) * keep,
+            (hist_lr.to(color.dtype) - color).abs() * keep,
             hidden.to(color.dtype),
         ]
         x, (h0, w0) = pad_to(torch.cat(feats, 1), 2)
@@ -597,6 +617,8 @@ class TSRNet(nn.Module):
         residual, a = o[:, :3], torch.sigmoid(o[:, 3:4] + 2.0)
         if first:
             a = torch.zeros_like(a)
+        if fresh is not None:
+            a = torch.where(fresh, torch.zeros_like(a), a)
         out = a * hist + (1 - a) * base + residual
         if self.refine is not None:
             out = out + self.refine(torch.cat([out, base], 1).to(color.dtype)).float()
@@ -687,8 +709,9 @@ FG_HINT = FG_HINT_FLOW + 4  # + mv_avail, depth, depth_avail, cam_avail
 
 class FGRefine(nn.Module):
     """Half-resolution head on the warped frames, blend weight and IFNet features: a colour residual and the
-    UI / static-overlay logit. The last layer starts at zero (UI logit at -4), so a fresh model outputs RIFE's
-    blend."""
+    UI / static-overlay logit. The last layer starts at zero except the UI logit bias of -4, so a fresh model
+    outputs RIFE's blend mixed with I1 at weight sigmoid(-4), about 0.018, not RIFE's output exactly.
+    """
 
     def __init__(self, c):
         super().__init__()
@@ -819,9 +842,11 @@ def fg_inputs(n, h, w, dev="cpu", tau=1.5):
 
 class TSRExport(nn.Module):
     """ONNX wrapper of one fused TSR step with explicit recurrent state tensors. flags: has_depth, mv_quality
-    (0 = no motion vectors: the built-in estimator runs), kind (1 = jittered render, 0 = video). Returns the
-    output and the new hidden state; the caller keeps this frame's colour, depth and jitter as the next
-    frame's prev_* inputs (pass-through outputs would rename the graph inputs)."""
+    (0 = no motion vectors: the built-in estimator runs), kind (1 = jittered render, 0 = video). reset (N,1,1,1 or
+    a scalar): 1 makes the step exactly the first frame of a sequence (TSRNet.forward without a state), whatever the
+    prev_* inputs hold; 0 is the recurrent step. Returns the output and the new hidden state; the caller keeps this
+    frame's colour, depth and jitter as the next frame's prev_* inputs (pass-through outputs would rename the graph
+    inputs)."""
 
     def __init__(self, net):
         super().__init__()
@@ -841,6 +866,7 @@ class TSRExport(nn.Module):
         prev_depth,
         prev_color,
         prev_jitter,
+        reset,
     ):
         f = {
             "color": color,
@@ -852,6 +878,7 @@ class TSRExport(nn.Module):
             "has_depth": flags[:, 0],
             "mv_quality": flags[:, 1],
             "kind": flags[:, 2],
+            "reset": reset,
         }
         out, st = self.net(
             f,

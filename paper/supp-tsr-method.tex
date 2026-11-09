@@ -1,0 +1,482 @@
+\section{Temporal super-resolution: method}\label{sec:tsrm}
+
+This section specifies the temporal super-resolution (TSR) network completely: its inputs and their encodings, the built-in motion estimator, the recurrent state, the reconstruction trunk and output rule, the model tiers, the training samples and losses, the optimisation and checkpoint selection, the ablation configurations, the export path and the test protocol. The results are in \cref{sec:tsrr}. The design summary is in \cref{M-sec:tsr} and the measured tier costs are in \cref{M-tab:tiers}. Warping, bilinear sampling, pixel shuffle, temporal anti-aliasing and the image metrics are explained in \cref{sec:bg}, and the synthetic renderer and the real frame windows are described in \cref{sec:data}. Every number in this section is either a value set in the code or the training configuration of the run, or a count computed from the code, and each one names its source.
+
+\subsection{Problem and notation}\label{sec:tsrm-problem}
+
+TSR turns a stream of low-resolution (LR) frames into a stream of high-resolution (HR) frames, one output for each input, and each output may use the earlier outputs. The LR resolution is $h\times w$ and the output resolution is $H\times W$, with $H=sh$ and $W=sw$ for an integer scale $s$. The primary model uses $s=3$ (360p to 1080p), and a second student uses $s=2$ (540p to 1080p).
+
+At frame $t$ the network receives the colour frame $\mathbf{x}_t\in[0,1]^{3\times h\times w}$ in sRGB, the sub-pixel jitter $\mathbf{j}_t$ of its samples, and whatever side information the caller supplies. It returns $\hat{\mathbf{y}}_t\in[0,1]^{3\times H\times W}$, an estimate of the HR target $\mathbf{y}_t$. For synthetic sequences the target is the four-sample anti-aliased render at output resolution (\cref{sec:data-synth}), and for real windows it is the cached HR frame (\cref{sec:data}). A pixel is written $\mathbf{p}=(X,Y)$, with $X$ along the width and $Y$ along the height. A discrete image is read at continuous positions by bilinear interpolation. Sample $i$ of a row sits at continuous coordinate $i+\tfrac12$, so pixel $i$ covers the interval $[i,i+1)$.
+
+The problem has two regimes. In \emph{engine mode} the caller is a renderer that also supplies motion vectors, depth, a reactive mask and exposure, and its input samples are jittered. In \emph{plain mode} the caller is ordinary video, which is an anti-aliased bicubic downscale without jitter and without side information. One set of weights serves both regimes. The network uses the side information when it is present, estimates the motion when it is absent, and is told which regime applies through the input-kind and availability flags of \cref{sec:tsrm-inputs}.
+
+The symbols are listed in \cref{tab:tsrm-symbols}. Two conventions matter throughout. A motion field $\mathbf{m}$ gives, for every pixel of frame $t$, the displacement to the same surface point in frame $t-1$, so the history at pixel $\mathbf{p}$ is read at $\mathbf{p}+\mathbf{m}(\mathbf{p})$. Motion is stored in LR pixels at render resolution, and an upsampled copy is stored in HR pixels.
+
+\begin{table}[!htbp]
+\caption{Symbols of the TSR method. Shapes give the channels, then the height and width, for one frame of one sample}\label{tab:tsrm-symbols}
+\footnotesize
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}p{0.09\textwidth}p{0.31\textwidth}p{0.14\textwidth}p{0.31\textwidth}}
+\toprule
+Symbol & Meaning & Symbol & Meaning \\
+\midrule
+$s$ & integer scale, $H=sh$, $W=sw$ & $\mathbf{m}_t$ & motion used by the network, $2\times h\times w$, LR pixels, frame $t$ to $t-1$ \\
+$t$ & frame index, $t=0$ is the first frame and resets the state & $\mathbf{m}_t^{\uparrow}$ & the same motion in HR pixels (\cref{eq:tsrm-up-motion}) \\
+$\mathbf{x}_t$ & colour input, $3\times h\times w$, sRGB in $[0,1]$ & $\hat{\mathbf{m}}_t$ & motion of the built-in estimator (\cref{eq:tsrm-est}) \\
+$\mathbf{j}_t$ & jitter of the input samples, in LR pixels, $[-\tfrac12,\tfrac12)$ & $q_t$, $\kappa_t$, $\eta_t$ & motion-quality flag, input kind, depth availability (\cref{tab:tsrm-inputs}) \\
+$\mathbf{d}_t$ & normalised depth, $1\times h\times w$ (\cref{eq:tsrm-depth}) & $\bar{\mathbf{m}}_t$, $\bar{\mathbf{M}}_t$ & label motion at LR and HR, used for supervision and metrics only \\
+$\mathbf{u}_t$, $e_t$ & reactive mask, $1\times h\times w$, and exposure as $\log_2$ gain & $\bar{\mathbf{v}}_t$, $\bar{\mathbf{V}}_t$, $\lambda_t$ & label validity at LR and HR, and label quality ($1$ exact, $\tfrac12$ RAFT, $0$ none) \\
+$\mathcal{W}(I,\mathbf{m})$ & backward warp of $I$ by $\mathbf{m}$ (\cref{eq:tsrm-warp}) & $\mathcal{U}(\mathbf{x})$ & jitter-aware bilinear upsampling (\cref{eq:tsrm-up}) \\
+$\mathbf{h}_t$ & hidden state, $C_h\times h\times w$ & $a_t$ & history weight, $1\times H\times W$, in $(0,1)$ \\
+$\mathbf{r}_t$ & output residual, $3\times H\times W$ & $\hat{\mathbf{y}}_t$, $\mathbf{y}_t$ & output and target, $3\times H\times W$ \\
+$C$, $B$, $U$, $R$ & trunk width, trunk blocks, U-Net blocks, refinement width (\cref{tab:tsrm-tiers}) & $C_h$ & width of the hidden state \\
+\botrule
+\end{tabular*}
+\end{table}
+
+\FloatBarrier
+
+{\footnotesize\raggedright\setlength{\tabcolsep}{3pt}\begin{longtable}{@{}p{0.15\textwidth}p{0.09\textwidth}p{0.30\textwidth}p{0.22\textwidth}p{0.16\textwidth}@{}}
+\caption{Channels of the TSR input stack with their resolution, where LR is the render resolution and scalar is one value per sample, broadcast over the LR grid. Engine mode is the jittered render with its side information, and plain mode is ordinary video. Normalisation is applied before the stack is built}\label{tab:tsrm-inputs}\\
+\toprule
+Input & Ch., size & Engine mode & Plain mode & Encoding \\
+\midrule
+\endfirsthead
+\toprule
+Input & Ch., size & Engine mode & Plain mode & Encoding \\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{\footnotesize continued on next page}\\
+\endfoot
+\botrule
+\endlastfoot
+Colour $\mathbf{x}_t$ & 3, LR & One jittered sample per LR pixel, read from the render (synthetic) or the cached HR frame (real windows) at $\mathbf{p}+\tfrac12+\mathbf{j}_t$ & Anti-aliased bicubic downscale of the target without jitter (test). Training uses one of three filters with blur and noise (\cref{sec:tsrm-data}) & sRGB in $[0,1]$, unchanged \\
+Depth $\mathbf{d}_t$ & 1, LR & Renderer depth (synthetic), decoded depth (TartanAir, GameIR), or zero when the source has none & Zero & $1/(1+d/\operatorname{med}(d))$, \cref{eq:tsrm-depth}, where $1$ is near \\
+Normals $\mathbf{n}_t$ & 3, LR & Central differences of $\mathbf{d}_t$ & Zero & \cref{eq:tsrm-normal}, times $\eta_t$ \\
+Motion $\mathbf{m}_t$ & 2, LR & Engine motion (exact, RAFT, or zero when withheld), or the estimate $\hat{\mathbf{m}}_t$ & Estimate $\hat{\mathbf{m}}_t$ & Multiplied by $1/8$ after the selection, so $8$ LR pixels give $1$ \\
+Disocclusion cue $\delta_t$ & 1, LR & From depth and the warped previous depth, \cref{eq:tsrm-disocc} & Zero & In $[0,1]$ \\
+Reactive mask $\mathbf{u}_t$ & 1, LR & Particle coverage $1-\prod_k(1-g_k)$ for synthetic samples, zero for real windows and test clips & Zero & In $[0,1)$ \\
+Exposure $e_t$ & 1, scalar & $\log_2$ of the gain (synthetic scene gain, or real-window gain) & Unchanged & Not scaled, range $[-0.8,0.8]$ in training \\
+Jitter $\mathbf{j}_t$ & 2, scalar & Sub-pixel offset of the samples & Zero & In $[-\tfrac12,\tfrac12)$ \\
+Depth availability $\eta_t$ & 1, scalar & $1$ when the sample has depth & Zero & Flag \\
+Motion quality $q_t$ & 1, scalar & $1$ exact, $\tfrac12$ RAFT or capped video motion, $\tfrac14$ estimate (zero is replaced by $\tfrac14$ when the estimator runs) & $\tfrac14$ estimate & Flag \\
+Input kind $\kappa_t$ & 1, scalar & $1$ & $0$ & Flag \\
+Folded history $\downarrow_s\mathbf{H}_t$ & $3s^2$, LR & Previous output warped by $\mathbf{m}_t^{\uparrow}$, pixel unshuffled & Same & Zero at reset \\
+History disagreement $\mathbf{g}_t$ & 3, LR & $\lvert\bar{\mathbf{H}}_t-\mathbf{x}_t\rvert$, where $\bar{\mathbf{H}}_t$ is the $s\times s$ block mean of $\mathbf{H}_t$ & Same & Zero at reset \\
+Hidden state, warped by the motion & $C_h$, LR & Previous hidden state $\mathbf{h}_{t-1}$ warped at LR by $\mathbf{m}_t$ & Same & In $(-1,1)$ from the $\tanh$ output \\
+\end{longtable}}
+
+\begin{table}[!htbp]
+\caption{TSR tiers at scale 3, with the 2x cost of each tier. Parameters are fused counts and costs are in GMAC per 1080p output frame, counted in the notebook's model tiers step. Estimator widths are per level, and $n$ is the number of residual blocks. Only \tier{teacher}, \tier{igpu} at 3x and \tier{low} at 3x and 2x were trained in the TSR run (\cref{sec:tsrm-tiers})}\label{tab:tsrm-tiers}
+{\scriptsize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrlrrrrr}
+\toprule
+Tier & $C$ & $B$ & $U$ & $C_h$ & \shortstack{Estimator\\widths, $n$} & $R$ & \shortstack{Fused\\params} & \shortstack{Estimator\\params} & \shortstack{GMAC\\3x} & \shortstack{GMAC\\2x} \\
+\midrule
+\tier{igpu} & 16 & 3 & 0 & 8 & (32, 24, 16), 2 & -- & \Res{tsr.model_tiers.igpu.3.fused_params.raw} & 116,504 & \Res{tsr.model_tiers.igpu.3.gmac_per_frame_1080p} & \Res{tsr.model_tiers.igpu.2.gmac_per_frame_1080p} \\
+\tier{low} & 24 & 4 & 2 & 8 & (48, 32, 24), 3 & 8 & \Res{tsr.model_tiers.low.3.fused_params.raw} & 228,256 & \Res{tsr.model_tiers.low.3.gmac_per_frame_1080p} & \Res{tsr.model_tiers.low.2.gmac_per_frame_1080p} \\
+\tier{mid} & 32 & 4 & 3 & 16 & (64, 48, 32), 4 & 8 & \Res{tsr.model_tiers.mid.3.fused_params.raw} & 444,464 & \Res{tsr.model_tiers.mid.3.gmac_per_frame_1080p} & \Res{tsr.model_tiers.mid.2.gmac_per_frame_1080p} \\
+\tier{high} & 48 & 6 & 4 & 16 & (96, 64, 48), 4 & 12 & \Res{tsr.model_tiers.high.3.fused_params.raw} & 837,152 & \Res{tsr.model_tiers.high.3.gmac_per_frame_1080p} & \Res{tsr.model_tiers.high.2.gmac_per_frame_1080p} \\
+\tier{teacher} & 64 & 8 & 6 & 32 & (128, 96, 64), 6 & 16 & \Res{tsr.model_tiers.teacher.3.fused_params.raw} & 2,019,680 & \Res{tsr.model_tiers.teacher.3.gmac_per_frame_1080p} & \Res{tsr.model_tiers.teacher.2.gmac_per_frame_1080p} \\
+\botrule
+\end{tabular*}}
+\end{table}
+
+\subsection{Architecture overview}\label{sec:tsrm-overview}
+
+One frame passes through the stages of \cref{fig:tsrm-arch}. The estimator supplies motion when a sample has none, the previous output and the hidden state are warped and folded, the inputs are stacked, a re-parameterisable trunk maps the stack to $C$ channels, two heads predict a history weight and a residual, and \cref{eq:tsrm-acc} with a refinement gives the output. The coarser view of the article is \cref{M-fig:overview}.
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}[font=\scriptsize, node distance=0pt,
+  box/.style={draw, rounded corners=1.5pt, align=center, text width=2.6cm, inner sep=2.5pt},
+  opt/.style={box, dashed},
+  arr/.style={-{Stealth[length=1.8mm]}},
+  rec/.style={-{Stealth[length=1.8mm]}, dashed}]
+\node[box] (in) at (0,6.0) {Inputs: $\mathbf{x}_t$, $\mathbf{j}_t$\\(colour, jitter)};
+\node[opt] (est) at (3.3,6.0) {Motion estimator\\IFNet, scales $4,2,1$,\\gives $\hat{\mathbf{m}}_t$};
+\node[box] (sel) at (6.6,6.0) {Motion select:\\$\mathbf{m}_t\leftarrow\hat{\mathbf{m}}_t$ if $q_t\le 0$};
+\node[box] (warp) at (9.9,6.0) {Warp and fold:\\$\mathcal{W}(\hat{\mathbf{y}}_{t-1},\mathbf{m}_t^{\uparrow})$, $\downarrow_s$,\\$\mathcal{W}(\mathbf{h}_{t-1},\mathbf{m}_t)$};
+\node[opt, above=0.45cm of sel] (eng) {Engine data (optional):\\$\mathbf{m}_t$, $\mathbf{d}_t$, $\mathbf{u}_t$,\\$e_t$, $\eta_t$, $\kappa_t$, $q_t$};
+\node[box] (stack) at (9.9,3.9) {Feature stack\\$20+3s^2+C_h$ channels};
+\node[box] (trunk) at (6.6,3.9) {Trunk: RepConv head,\\$\lfloor B/2\rfloor$ blocks,\\U-Net level, rest};
+\node[box] (heads) at (3.3,3.9) {Heads: $\mathbf{r}_t$, $\ell_t$,\\$a_t=\sigma(\ell_t+2)$,\\hidden $\mathbf{h}_t$};
+\node[box] (acc) at (0,3.9) {Accumulate:\\$a_t\mathcal{W}(\hat{\mathbf{y}}_{t-1})$\\$+(1-a_t)\mathcal{U}(\mathbf{x}_t)$\\$+\mathbf{r}_t$};
+\node[box] (refine) at (0,1.8) {Refinement (zero init):\\$\hat{\mathbf{y}}_t=\hat{\mathbf{y}}'_t+\Delta_t$, where\\$\Delta_t$ is a two-layer convolution\\of $[\hat{\mathbf{y}}'_t,\mathcal{U}(\mathbf{x}_t)]$};
+\node[box] (out) at (3.3,1.8) {Output $\hat{\mathbf{y}}_t$\\(HR frame)};
+\node[opt] (state) at (6.6,1.8) {State for $t+1$:\\$\hat{\mathbf{y}}_t$, $\mathbf{h}_t$,\\$\mathbf{d}_t$, $\mathbf{x}_t$, $\mathbf{j}_t$};
+\draw[arr] (in) -- (est);
+\draw[arr] (est) -- (sel);
+\draw[arr] (sel) -- (warp);
+\draw[arr] (eng) -- (sel);
+\draw[arr] (warp) -- (stack);
+\draw[arr] (stack) -- (trunk);
+\draw[arr] (trunk) -- (heads);
+\draw[arr] (heads) -- (acc);
+\draw[arr] (acc) -- (refine);
+\draw[arr] (refine) -- (out);
+\draw[rec] (out) -- (state);
+\end{tikzpicture}
+\caption{Data flow of one TSR time step at scale $s$. Dashed boxes are optional: the engine data are used when the caller supplies them, and the estimator runs in training for every frame and at inference only when a sample has no motion. The state of frame $t$ holds the history, hidden state, depth, colour and jitter that the warp and disocclusion cue of frame $t+1$ read (\cref{sec:tsrm-state})}\label{fig:tsrm-arch}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Inputs}\label{sec:tsrm-inputs}
+
+The trunk receives a stack of channels at render resolution. \Cref{tab:tsrm-inputs} lists them in the order of the code. Seventeen channels come from the frame and its side information, $3s^2$ from the folded history, three from the history disagreement and $C_h$ from the hidden state, so the stack has $20+3s^2+C_h$ channels. For $s=3$ and $C_h=8$ this is $55$, which the code confirms for the \tier{low} tier. The table gives the value that the network sees in each mode. Two replacements happen before the stack is built. A sample without motion receives the estimate $\hat{\mathbf{m}}_t$ and the flag $0.25$ (\cref{sec:tsrm-motion}). A sample with withheld depth receives zero depth and $\eta_t=0$.
+
+The engine motion of the table is the motion in the input, which is exact (synthetic, TartanAir and Sintel), RAFT (real video and GameIR), or absent. The value $\tfrac12$ marks RAFT motion and video samples that keep their motion labels, which are capped at $\tfrac12$ by the degradation of \cref{sec:tsrm-data}.
+
+The depth normalisation of \cref{tab:tsrm-inputs} is
+\begin{equation}\label{eq:tsrm-depth}
+\mathbf{d}_t=\frac{1}{1+\mathbf{d}^{\mathrm{raw}}_t/\operatorname{med}(\mathbf{d}^{\mathrm{raw}})},
+\end{equation}
+where $\mathbf{d}^{\mathrm{raw}}$ is the depth in the unit of its source, and $\operatorname{med}$ is the median over the whole sequence for synthetic samples, and over one frame for real windows and test clips. Non-positive and non-finite depth values are set to infinity before the normalisation, so they map to values near zero.
+
+The normals are derived from the normalised depth with edge replication at the border, using the central differences $g^x_t(X,Y)=8\,[\mathbf{d}_t(X+1,Y)-\mathbf{d}_t(X-1,Y)]$ and $g^y_t$ defined in the same way along $Y$:
+\begin{equation}\label{eq:tsrm-normal}
+\mathbf{n}_t=\eta_t\,\frac{(-g^x_t,\,-g^y_t,\,1)}{\sqrt{(g^x_t)^2+(g^y_t)^2+1}}.
+\end{equation}
+The factor $8$ is a fixed constant of the code that scales the depth gradient, and the vector is normalised to unit length.
+
+The disocclusion cue compares the current depth with the depth of the previous frame warped to the current frame, using the motion of the network:
+\begin{equation}\label{eq:tsrm-disocc}
+\delta_t=\eta_t\,\min\Big\{1,\ \frac{\lvert\mathbf{d}_t-\mathcal{W}(\mathbf{d}_{t-1},\mathbf{m}_t)\rvert}{\lvert\mathbf{d}_t\rvert+10^{-3}}\Big\}.
+\end{equation}
+A large value marks a depth that differs from the warped previous depth, which is typical of a disocclusion. It is a heuristic that the trunk refines, not a visibility test.
+
+\subsection{Motion estimator}\label{sec:tsrm-motion}
+
+The estimator is the IFNet of RIFE 4.26 \cite{huang2022rife} in a narrower form, a coarse-to-fine chain of flow blocks. It is built by \texttt{IFNet(widths, n\_res, n\_hint=3)} in \texttt{nss\_models.py}. Its widths and residual counts are set per tier in the constant \texttt{TSR\_TIERS}: $(32,24,16)$ with two residual blocks for \tier{igpu}, $(48,32,24)$ with three for \tier{low}, $(64,48,32)$ with four for \tier{mid}, $(96,64,48)$ with four for \tier{high}, and $(128,96,64)$ with six for \tier{teacher}. The three levels run at scales $\sigma_1=4$, $\sigma_2=2$ and $\sigma_3=1$ relative to the LR frame, so the coarsest block sees a frame of a quarter of the LR size in each direction.
+
+The estimator takes the previous colour frame $\mathbf{x}_{t-1}$ and the current frame $\mathbf{x}_t$, both padded at the right and bottom by edge replication to multiples of $16$. Its timestep is the constant $1$, so its target frame is the current frame and its reference is the previous one. Its final flow, the first two of its four channels, is the motion of \cref{sec:tsrm-problem}:
+\begin{equation}\label{eq:tsrm-est}
+\hat{\mathbf{m}}_t=\mathbf{F}^{(3)}_{0},\qquad \mathbf{F}^{(1)}=\Delta^{(1)},\qquad \mathbf{F}^{(k)}=\mathbf{F}^{(k-1)}+\Delta^{(k)}\ \ (k=2,3),
+\end{equation}
+where $\Delta^{(k)}$ is the four-channel flow update of block $k$ and $\mathbf{F}^{(k)}=(\mathbf{F}^{(k)}_0,\mathbf{F}^{(k)}_1)$ holds the flows from the target to the previous and to the current frame. The flow outputs are multiplied by the block scale, so the flows stay in LR pixels.
+
+The first block receives $\mathbf{x}_{t-1}$, $\mathbf{x}_t$, the per-frame features of both frames and the constant timestep, which is $15$ channels. Each later block receives the colour of both frames warped by the current flow, the features of both frames warped by the current flow, the timestep, the blend mask and the features of the previous block, and the current flow itself, which is $28$ channels. Three hint channels follow for the TSR estimator: the jitter difference $\mathbf{j}_t-\mathbf{j}_{t-1}$ (two channels) and the input kind $\kappa_t$ (one channel). The per-frame feature encoder has a stride-two $3\times3$ convolution and two $3\times3$ convolutions, each followed by LeakyReLU, and a transposed convolution that returns to full resolution with four channels. Inside each block, two stride-two $3\times3$ convolutions reduce the resolution by four, a set of residual $3\times3$ convolutions with a learned per-channel scale follows, and a transposed convolution with pixel shuffle returns to the block resolution with $4$ flow channels, one mask logit and $8$ features.
+
+The estimator is initialised from the RIFE 4.26 weights wherever the names match, and its narrower layers take the leading channel slices of the RIFE tensors. The weight loader \texttt{load\_ifnet\_weights} copies the matching tensors whole and the narrower ones as slices, and the hint channels keep their zero weights. The training log of the \tier{low} run records the result as 11 whole tensors and 42 sliced tensors with no missing tensor. Without the RIFE weights, the code falls back to random initialisation and logs the fact.
+
+The estimate replaces the motion only where the caller gave none. The rule is the one line of \texttt{TSRNet.forward}:
+\begin{equation}\label{eq:tsrm-select}
+\mathbf{m}_t=\begin{cases}\bar{\mathbf{m}}_t\ \text{(teacher-forced label)} & \text{if } q_t\le 0 \text{ and the sample is forced},\\ \hat{\mathbf{m}}_t & \text{if } q_t\le 0 \text{ otherwise},\\ \text{given motion} & \text{if } q_t>0,\end{cases}
+\end{equation}
+and the quality flag of every sample with $q_t\le 0$ becomes $\tfrac14$ (the constant \texttt{EST\_MV\_QUALITY}). The flag is therefore the same for estimated and forced samples, and the network cannot tell them apart. At inference the estimator runs only when some sample of the batch has $q_t\le 0$. In training it runs for every frame of every sample, because the motion loss of \cref{sec:tsrm-loss} supervises every sample that has a label, including those with engine motion.
+
+Teacher forcing protects the trunk while the estimator is still poor. A sample without motion is forced to warp its history with the label motion $\bar{\mathbf{m}}_t$ with probability $\pi(\tau)$, drawn once per sample and used for all its frames, where $\tau$ is the elapsed training time and $T_b$ the training budget in seconds:
+\begin{equation}\label{eq:tsrm-teacher}
+\pi(\tau)=\max\Big(0,\ 1-\frac{\tau}{\rho\,T_b}\Big),\qquad \rho=\Res{tsr.config.cfg.mv_warmup_frac}.
+\end{equation}
+The forcing applies only to samples that have a label, so $\lambda>0$. Its probability falls linearly from one to zero over the first quarter of the budget, after which no forced mask is drawn. The clock is the wall-clock time of each process from its first step, so the two DDP ranks draw their masks on their own clocks. Teacher forcing is the name for feeding a recurrent predictor a target in place of its own output during training. Here it is this code's schedule, which replaces the estimate by the label for part of the early training only.
+
+\subsection{Warping, folding and the recurrent state}\label{sec:tsrm-state}
+
+The state carried from frame $t-1$ to frame $t$ is
+\begin{equation}\label{eq:tsrm-state}
+\mathcal{S}_{t-1}=\big(\hat{\mathbf{y}}_{t-1},\ \mathbf{h}_{t-1},\ \mathbf{d}_{t-1},\ \mathbf{x}_{t-1},\ \mathbf{j}_{t-1}\big).
+\end{equation}
+The depth, colour and jitter are kept for the disocclusion cue and for the estimator of frame $t$. The ONNX export passes them as explicit inputs (\cref{sec:tsrm-deploy}).
+
+The previous output is warped to the HR grid with the upsampled motion. The LR motion is interpolated bilinearly to HR and multiplied by the scale, because a displacement of $d$ LR pixels is $sd$ HR pixels:
+\begin{equation}\label{eq:tsrm-up-motion}
+\mathbf{m}_t^{\uparrow}=s\cdot\mathrm{Bil}^{\times s}[\mathbf{m}_t],\qquad \mathbf{H}_t=\mathcal{W}\big(\hat{\mathbf{y}}_{t-1},\mathbf{m}_t^{\uparrow}\big),
+\end{equation}
+where $\mathrm{Bil}^{\times s}$ is bilinear upsampling by $s$ with align-corners set to false. The folded history is $\downarrow_s\mathbf{H}_t\in\mathbb{R}^{3s^2\times h\times w}$, the space-to-depth rearrangement of PyTorch's pixel unshuffle, which places every $s\times s$ block of HR pixels in the channels of one LR pixel. The history disagreement uses the mean of each block, $\bar{\mathbf{H}}_t=\operatorname{avgpool}_s(\mathbf{H}_t)$, and its absolute difference to the LR colour, $\mathbf{g}_t=\lvert\bar{\mathbf{H}}_t-\mathbf{x}_t\rvert$.
+
+The hidden state and the depth are warped at LR with the LR motion $\mathbf{m}_t$, which is the motion of the network. The hidden state after frame $t$ is produced by the trunk, as \cref{sec:tsrm-output} gives. Warping uses the backward warp of \cref{eq:tsrm-warp}:
+\begin{equation}\label{eq:tsrm-warp}
+\mathcal{W}(I,\mathbf{m})(\mathbf{p})=I\big(\mathbf{p}+\mathbf{m}(\mathbf{p})\big),
+\end{equation}
+where $I$ is read bilinearly and clamped to its border. The implementation uses grid sampling with align-corners set to true, the convention of RIFE, so that the pixel centres of the first and last rows and columns lie on the image border.
+
+On the first frame of a sequence, or in every frame of the no-history ablation, the state is empty. The history $\mathbf{H}_t$, the folded history, the history disagreement and the warped hidden state are all multiplied by zero, the disocclusion cue is computed against the current depth so that it is zero, and the history weight is set to zero exactly, not learned, by the rule
+\begin{equation}\label{eq:tsrm-reset}
+a_t=0\quad\text{when the state is empty.}
+\end{equation}
+The network has no other reset. It has no scene-cut detector, so the history weight must reject a cut by itself. The synthetic renderer produces no cuts, and the cache builders contain no cut filter, so a real window may contain a cut, and the training does not measure how often that happens.
+
+\subsection{Reconstruction trunk}\label{sec:tsrm-trunk}
+
+The trunk is a chain of re-parameterisable blocks, called RepConv here, in the sense of RepVGG \cite{ding2021repvgg} and ECBSR \cite{zhang2021ecbsr}. A RepConv block is trained as a sum of linear branches and deployed as one $3\times3$ convolution. A training forward pass folds the branches into one kernel on every call, so each block costs one convolution in training and one in deployment. The folded kernel for an output channel $o$ and an input channel $i$ is
+\begin{equation}\label{eq:tsrm-fold}
+\mathbf{W}_{oi}=\mathbf{W}^{(3)}_{oi}+\operatorname{pad}_{3\times3}\big(\mathbf{W}^{(1)}_{oi}\big)+\sum_{k=1}^{3}\mathbf{P}_{o,i,k}\,\mathbf{E}_k+\delta_{oi}\,\mathbf{C},
+\end{equation}
+with the bias $b_o=b^{(3)}_o+b^{(1)}_o+b^{(e)}_o$. The symbols are as follows. $\mathbf{W}^{(3)}$ is a learned $3\times3$ kernel and $\mathbf{W}^{(1)}$ a learned $1\times1$ kernel, padded with zeros to $3\times3$. The matrices $\mathbf{E}_1$, $\mathbf{E}_2$ and $\mathbf{E}_3$ are the fixed Sobel-x, Sobel-y and Laplacian kernels, $[[-1,0,1],[-2,0,2],[-1,0,1]]$, $[[-1,-2,-1],[0,0,0],[1,2,1]]$ and $[[0,1,0],[1,-4,1],[0,1,0]]$. The coefficients $\mathbf{P}_{o,i,k}$ form a learned $1\times1$ convolution from $3C_i$ inputs to $C_o$ outputs, reshaped so that each input channel $i$ has its three edge responses $k$. The matrix $\mathbf{C}$ has a one at its centre and zeros elsewhere, and the term with $\delta_{oi}$ is present only when $C_i=C_o$. Because the folding is linear, the folded convolution computes exactly the same function as the training branches.
+
+Each RepConv is followed by a PReLU with one learned slope per output channel, initialised to PyTorch's default of $0.25$. The side branches start at zero, in the following sense. The weights of the $1\times1$ branch and of the edge branch are set to zero, so the block starts as a $3\times3$ convolution plus identity. Their biases keep PyTorch's default uniform initialisation, so the side branches do not start exactly at zero. The code records that default initialisation grew the activations by about $1.9$ times per block and gave a non-finite teacher loss from step $10$ in an earlier run \Observation.
+
+The trunk of \cref{eq:tsrm-trunk-def} is built from the stack $\mathbf{z}_t$, which has $20+3s^2+C_h$ channels. Let $\mathrm{RC}_{\mathrm{head}}$ denote the head RepConv block, $\mathcal{A}$ the first $\lfloor B/2\rfloor$ blocks, $\mathcal{B}$ the remaining $B-\lfloor B/2\rfloor$ blocks, and $\mathcal{V}$ the U-Net level, which exists when $U>0$:
+\begin{align}
+\mathbf{z}_0&=\mathrm{RC}_{\mathrm{head}}(\mathbf{z}_t) \label{eq:tsrm-trunk-def}\\
+\mathbf{z}_1&=\mathcal{A}(\mathbf{z}_0)\nonumber\\
+\mathbf{z}_2&=\mathbf{z}_1+\mathcal{V}(\mathbf{z}_1)\nonumber\\
+\mathbf{y}_t&=\mathcal{B}(\mathbf{z}_2).\nonumber
+\end{align}
+The head is one RepConv from $20+3s^2+C_h$ channels to $C$ channels. The U-Net level, when present, is a $3\times3$ convolution with stride two from $C$ to $2C$ channels followed by PReLU, then $U$ RepConv blocks at $2C$ channels, then a $1\times1$ convolution from $2C$ to $4C$ channels and a pixel shuffle with factor two, which returns $C$ channels at LR resolution. The U-Net level therefore works at half the LR resolution and is added to the trunk as a residual. The LR input is padded to an even size by edge replication before the trunk, which the stride-two convolution needs. The numbers of blocks per tier are in \cref{tab:tsrm-tiers}.
+
+\subsection{Output head and accumulation}\label{sec:tsrm-output}
+
+The output head is one $3\times3$ convolution from $C$ to $4s^2$ channels, with zero weights and zero bias, applied to $\mathbf{y}_t$. A pixel shuffle with factor $s$ \cite{shi2016espcn} then gives four channels at HR. The first three are the residual $\mathbf{r}_t$ and the fourth is a logit $\ell_t$, and the history weight is
+\begin{equation}\label{eq:tsrm-alpha}
+a_t=\sigma(\ell_t+2),\qquad \sigma(z)=\frac{1}{1+e^{-z}}.
+\end{equation}
+At initialisation the zero weights give $\ell_t=0$, so $a_t=\sigma(2)\approx0.881$ and $\mathbf{r}_t=0$, and the network starts as a blend of the warped history and the upsampled colour. The hidden state is produced by a $3\times3$ convolution from $C$ to $C_h$ channels followed by $\tanh$, $\mathbf{h}_t=\tanh(\mathrm{Conv}_{3\times3}(\mathbf{y}_t))$, and it is warped at the next frame by \cref{eq:tsrm-warp}.
+
+The output is the accumulation rule
+\begin{equation}\label{eq:tsrm-acc}
+\hat{\mathbf{y}}'_t=a_t\odot\mathcal{W}\big(\hat{\mathbf{y}}_{t-1},\mathbf{m}_t^{\uparrow}\big)+(1-a_t)\odot\mathcal{U}(\mathbf{x}_t)+\mathbf{r}_t,
+\end{equation}
+where $\odot$ is the element-wise product, $\mathcal{U}$ is the jitter-aware bilinear upsampling
+\begin{equation}\label{eq:tsrm-up}
+\mathcal{U}(\mathbf{x}_t)(X,Y)=\operatorname{Bil}[\mathbf{x}_t]\Big(\frac{X+\tfrac12}{s}-\mathbf{j}_t\Big),
+\end{equation}
+and $\operatorname{Bil}[\mathbf{x}]$ is the bilinear interpolant of the LR samples, sample $i$ at coordinate $i+\tfrac12$, with clamped borders. The term $\frac{X+1/2}{s}$ is the continuous LR coordinate of output pixel $(X,Y)$, and subtracting $\mathbf{j}_t$ reads each LR sample at its jittered position. The output is then refined as \cref{sec:tsrm-refine} gives. On the first frame, $a_t=0$ by \cref{eq:tsrm-reset}, so $\hat{\mathbf{y}}_0=\mathcal{U}(\mathbf{x}_0)+\mathbf{r}_0$.
+
+\paragraph{Why this is a learned temporal accumulation.} Ignore the residual and the motion for a moment, and let $a_t=a$ be constant, with $\mathbf{m}_t=0$ on a static scene. Then \cref{eq:tsrm-acc} unrolls to
+\begin{equation}\label{eq:tsrm-unroll}
+\hat{\mathbf{y}}_t=a^{t}\,\mathcal{U}(\mathbf{x}_0)+\sum_{k=1}^{t}(1-a)\,a^{t-k}\,\mathcal{U}(\mathbf{x}_k).
+\end{equation}
+The weights add to one, because $a^t+(1-a)\sum_{j=0}^{t-1}a^j=a^t+(1-a^t)=1$. The sample $k$ frames old has weight $(1-a)a^{k}$, which is an exponential moving average over the frames of the sequence, with mean age $a/(1-a)$ frames. Each $\mathcal{U}(\mathbf{x}_k)$ reads the colour at a different sub-pixel jitter, so the average gathers the samples of several sub-pixel positions. This is the principle of temporal accumulation for supersampling \cite{yang2020taasurvey} (\cref{sec:bg-taa}). At the initial history weight $\sigma(2)$ the mean age is about $7.4$ frames.
+
+Classical TAA has the same update with a fixed or heuristic blend weight, and it rectifies the reprojected history by clamping it to the colour neighbourhood of the current frame. \Cref{eq:tsrm-acc} keeps the update and changes the rectification. The weight $a_t$ is a learned per-pixel gate, and the network has the disagreement $\mathbf{g}_t$ as input and a receptive field of several convolutions, so the gate can learn to go to zero where the history is invalid, which happens at disocclusions and at particle effects. The residual $\mathbf{r}_t$ corrects the result additively. There is no explicit clamp anywhere in the TSR network, so the residual can move a pixel outside the neighbourhood of the current frame. The analytic baseline of \cref{sec:tsrm-test} does clamp, and the two rectifications are different.
+
+\subsection{Refinement and the reset rule}\label{sec:tsrm-refine}
+
+Every tier except \tier{igpu} refines the accumulated output at HR resolution. The refinement is
+\begin{equation}\label{eq:tsrm-refine}
+\hat{\mathbf{y}}_t=\hat{\mathbf{y}}'_t+\mathrm{Conv}_{3\times3}\Big(\mathrm{PReLU}\big(\mathrm{Conv}_{3\times3}([\hat{\mathbf{y}}'_t,\mathcal{U}(\mathbf{x}_t)])\big)\Big),
+\end{equation}
+where $[\cdot,\cdot]$ concatenates six channels. The first convolution has $R$ output channels and the second has three. The second convolution has zero weights and zero bias, so the refinement starts at the identity. Its purpose is to remove the pixel-shuffle pattern of the LR head, as the code comment states. The width $R$ is $8$ for \tier{low} and \tier{mid}, $12$ for \tier{high} and $16$ for the teacher, and the \tier{igpu} tier has no refinement.
+
+The reset rule is \cref{eq:tsrm-reset}. It applies to the first frame of each training window and each test clip, and in every frame of the no-history ablation (\cref{sec:tsrm-abl}). The ONNX step of \cref{sec:tsrm-deploy} has no reset input.
+
+\subsection{Model tiers}\label{sec:tsrm-tiers}
+
+The tiers are the entries of \texttt{TSR\_TIERS} in \texttt{nss\_models.py}. \Cref{tab:tsrm-tiers} gives their widths, block counts, U-Net blocks, hidden widths, estimator, refinement width, parameter counts and costs. The parameter counts are those of the fused network, with the estimator included, and the estimator parameters are the difference from the same network built without the estimator. The costs count multiply-accumulates of every convolution, including the estimator, for one steady-state frame with history, per 1080p output frame, and exclude the warps and the pixel shuffles, which have no multiply-accumulates. The counting is done with forward hooks on the fused network in \texttt{tsr\_macs\_per\_lr\_pixel}, and the notebook scales it by the LR pixel count.
+
+The fused parameter counts and the 3x and 2x costs are the values that \texttt{model\_tiers.csv} records for the run. They were also recomputed from \texttt{src/neuralss/nss\_models.py} on the current code, and both agree. The estimator column is the difference between the training parameter count with and without the estimator, which is also computed from the code. The \tier{mid} and \tier{high} tiers are defined and costed, but the TSR notebook never trains them. Its runs use the teacher at 3x, \tier{low} at 3x and 2x, \tier{igpu} at 3x, and the six ablation runs at 3x, which all use \tier{low}. The tier table of the article (\cref{M-tab:tiers}) therefore gives no latency for these two tiers.
+
+The estimator holds a large share of the training parameters of every tier. It is about $81$ percent for \tier{igpu}, $63$ percent for \tier{low} and $51$ percent for the teacher, and it runs on every frame without engine motion.
+
+\subsection{Training samples and degradations}\label{sec:tsrm-data}
+
+Each training step draws from two streams, and both produce sequences of $T$ frames with HR targets, LR inputs, motion labels and validity masks. The synthetic stream renders layered game-like scenes from cached texture crops with the renderer of \cref{sec:data-synth}. Its scene parameters, which are used here, are a background layer and a foreground layer with procedural alpha (a superellipse, four thin wires each present with probability $0.6$, and a fence present with probability $0.35$), moving on continuous affine paths. The foreground texture is flat with probability $0.25$ and is otherwise the still of the neighbouring sample in the batch, the foreground layer is present with probability $0.85$, world-space text tiles are stamped into the background with probability $0.3$, and six particles are drawn, each active with probability $0.5$. The motion class is static, slow, medium or fast with probabilities $0.15$, $0.45$, $0.25$ and $0.15$, which give speeds of $0$, $0.3$ to $3$, $3$ to $10$ and $10$ to $28$ output pixels per frame. Each sample has an exposure $2^{u}$ with $u$ uniform on $[-0.8,0.8]$, and a sub-pixel jitter phase drawn uniformly from the sixteen Halton offsets. The LR frames are single-sample jittered reads of the renderer, and the HR targets are four-sample renders.
+
+The real stream reads cached windows of $T$ frames at $P=192$ output pixels from the sequence sources of \cref{sec:data}. The window is drawn from a source-specific downscale range before cropping. A real window is flipped horizontally with probability $\tfrac12$ and vertically with probability $\tfrac12$, and its motion vectors are negated in the flipped components. It is scaled in linear light by an exposure gain $2^{u}$ with $u$ uniform on $[-0.8,0.8]$. Its LR frames are jittered bilinear reads of the HR frame, so they are aliased like a render. The labels are the cached motion and validity, with the label quality of the window. Exact motion, from TartanAir and Sintel, has label quality $1$. Other windows get RAFT motion when RAFT is available, with label quality $\tfrac12$, and otherwise zero motion with label quality $0$. \Cref{tab:tsrm-mix} lists the probabilities that the TSR configuration or the degradation functions set.
+
+\begin{table}[!htbp]
+\caption{Probabilities of the TSR training data that are set by the TSR configuration or by the degradation functions. The renderer's own probabilities are given in \cref{sec:tsrm-data} and \cref{sec:data-synth}}\label{tab:tsrm-mix}
+{\scriptsize\raggedright\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}p{0.44\textwidth}p{0.16\textwidth}p{0.32\textwidth}}
+\toprule
+Quantity & Value & Code location \\
+\midrule
+Real windows per batch & $\Res{tsr.config.cfg.p_real}$, so $19$ of $48$ & \texttt{p\_real}, \texttt{make\_loader} \\
+Synthetic samples turned into plain video & $\Res{tsr.config.cfg.p_video_synth}$ & \texttt{p\_video\_synth}, \texttt{video\_degrade} \\
+Real samples turned into plain video & $\Res{tsr.config.cfg.p_video_real}$ & \texttt{p\_video\_real}, \texttt{video\_degrade} \\
+Plain-video samples that keep their motion labels & $\Res{tsr.config.cfg.p_video_mv}$ & \texttt{p\_video\_mv}, \texttt{video\_degrade} \\
+Samples that lose their motion vectors (all samples of the batch) & $\Res{tsr.config.cfg.p_drop_mv}$ & \texttt{p\_drop\_mv}, \texttt{withhold\_engine\_data} \\
+Samples that lose their depth (all samples of the batch) & $\Res{tsr.config.cfg.p_drop_depth}$ & \texttt{p\_drop\_depth}, \texttt{withhold\_engine\_data} \\
+Long steps, every fourth step from step $0$ & $1/\Res{tsr.config.cfg.long_every}$ & \texttt{long\_every} $=\Res{tsr.config.cfg.long_every}$, \texttt{train\_tsr.step\_fn} \\
+Teacher forcing of motion & $\pi(\tau)$ in \cref{eq:tsrm-teacher} & \texttt{mv\_warmup\_frac} $=\Res{tsr.config.cfg.mv_warmup_frac}$ \\
+Horizontal and vertical flip of real windows & $1/2$ each & \texttt{sr\_batch\_from\_frames} \\
+Gain of real windows and scene exposure & $2^{u}$, $u\sim U[-0.8,0.8]$ & \texttt{sr\_batch\_from\_frames}, \texttt{Scene} \\
+Downscale filter of plain video (bicubic, bilinear, box) & $1/3$ each & \texttt{video\_lr} \\
+Blur $\sigma$ of plain video & $U[0,0.6]$ output pixels & \texttt{video\_lr} \\
+Noise $\sigma$ of plain video & $U[0,2/255]$ & \texttt{video\_lr} \\
+\botrule
+\end{tabular*}}
+\end{table}
+
+The plain-video degradation turns a sample into ordinary video. A plain-video LR frame is the target frame $\mathbf{y}$ after a Gaussian blur, an anti-aliased downscale, additive noise and 8-bit quantisation. The blur is a five-tap separable Gaussian on the output grid with $\sigma$ uniform on $[0,0.6]$. The downscale $D$ is bicubic (cubic convolution \cite{keys1981bicubic}), bilinear or box averaging, each chosen with probability $1/3$. The noise is added after the downscale, with $\sigma_n$ uniform on $[0,2/255]$, and the frame is clamped and rounded to multiples of $1/255$:
+\begin{equation}\label{eq:tsrm-video}
+\mathbf{x}^{\mathrm{vid}}_t=\mathrm{round}_{1/255}\Big(\mathrm{clip}_{[0,1]}\big(D\big(G_\sigma\ast\mathbf{y}_t\big)+\mathbf{n}\big)\Big),\qquad \mathbf{n}\sim\mathcal{N}(0,\sigma_n^2 I).
+\end{equation}
+A plain-video sample loses its jitter, its depth, its reactive mask and its depth availability, and its input kind becomes $\kappa_t=0$. Its motion is removed, except for the share $p_\mathrm{mv}=0.15$ that keeps the label motion with flag $\min(q,\tfrac12)$. The label motion of a plain-video sample is the block mean of the HR motion, divided by $s$, and its validity is one only where all $s\times s$ HR pixels are valid. The labels keep their label quality, so a plain-video sample still supervises the estimator.
+
+The withholding rule is applied to the whole batch after both streams are built. Its two masks are drawn once per sample and apply to every sample, including the plain-video samples that kept their motion. A sample loses its motion with probability $0.25$, and it loses its depth with probability $0.3$. A plain-video sample that kept its motion therefore loses it with probability $0.25$.
+
+Most real windows come from Vimeo-90K \cite{xue2019vimeo}, and only a small share has exact motion, as \cref{M-sec:discussion} reports \UnderRevision. The configuration gives the cache capacities of \Res{tsr.config.cfg.cache.still_train} still crops and \Res{tsr.config.cfg.cache.win_train} windows.
+
+\subsection{Unroll lengths and patch sizes}\label{sec:tsrm-unroll}
+
+Each training window has $T=\Res{tsr.config.cfg.seq_len}$ frames of $P=\Res{tsr.config.cfg.patch}$ output pixels, which is $64$ LR pixels at $s=3$ and $96$ at $s=2$. The network runs through the frames of a window in order, the state starts empty, and the loss of every frame is summed before one backward pass. The gradient flows through every frame of the window, and it stops at the window boundary, which is truncated back-propagation through time \cite{williams1990efficient}. The notebook gives six frames per window, as truncated back-propagation through the recurrence, and 192-pixel patches as its defaults. It sets $\Res{tsr.config.cfg.still_size}$-pixel texture crops so that fast camera paths have room inside the texture.
+
+Every fourth step is a long step with $T=\Res{tsr.config.cfg.long_t}$ frames of $P=\Res{tsr.config.cfg.long_patch}$ pixels, which is $16\times96^2=147{,}456$ output pixels per window, two thirds of the $6\times192^2=221{,}184$ of a normal window. The notebook gives the reason for the long steps as the decline of the earlier students on static scenes after frames $6$ to $10$, which the notebook measured in one earlier run \Preliminary. The long steps use only synthetic windows, so each GPU has $48-19=29$ of them in a long step, against $48$ windows in a normal step.
+
+The batch is $48$ windows per GPU for the teacher and for the students. The batch probe of the notebook tried sizes $4$, $8$, $12$, $16$, $24$, $32$ and $48$, and it kept the largest size that stayed below $75$ percent of GPU memory. Both models passed at $48$ with memory use well below that limit, so the list, not the memory, set the batch. The main stages run on both GPUs with distributed data parallel, which gives $96$ windows per step, and the paired runs and ablations run on one GPU each, with $48$ windows per step.
+
+\subsection{Loss}\label{sec:tsrm-loss}
+
+The loss is computed for every window and then averaged over the batch. For the frames $t=0,\dots,T-1$ of a window, let $\hat{\mathbf{y}}_t$ be the output and $\mathbf{y}_t$ the target. The pixel term is a Charbonnier penalty, with $\varepsilon=10^{-3}$, averaged over the frames with weight $\tfrac14$ on the first frame, which has no history:
+\begin{equation}\label{eq:tsrm-lpix}
+\mathcal{L}_\mathrm{pix}=\frac{\sum_{t}\omega_t\,\mathbb{E}\sqrt{(\hat{\mathbf{y}}_t-\mathbf{y}_t)^2+\varepsilon^2}}{\sum_t\omega_t},\qquad \omega_0=\tfrac14,\ \ \omega_t=1\ \ (t\ge1).
+\end{equation}
+The expectation $\mathbb{E}$ is the mean over the channels and pixels of the batch. The Charbonnier penalty \cite{charbonnier1997deterministic} is a smooth edge-preserving potential that approximates the absolute difference.
+
+The gradient term compares the finite differences of the output and the target over a distance of two pixels in each direction. With $D_x\mathbf{z}(X,Y)=\mathbf{z}(X+2,Y)-\mathbf{z}(X,Y)$ and $D_y$ defined in the same way along $Y$,
+\begin{equation}\label{eq:tsrm-lgrad}
+\mathcal{L}_\mathrm{grad}=\mathbb{E}_t\big|D_x\hat{\mathbf{y}}_t-D_x\mathbf{y}_t\big|+\mathbb{E}_t\big|D_y\hat{\mathbf{y}}_t-D_y\mathbf{y}_t\big|,
+\end{equation}
+where $\mathbb{E}_t$ is the mean over all frames of the window, the channels and the pixels.
+
+The Fourier term compares the magnitudes of the two-dimensional spectra of the frames, computed with the orthonormal real FFT, so that texture energy at every frequency counts:
+\begin{equation}\label{eq:tsrm-lfft}
+\mathcal{L}_\mathrm{fft}=\mathbb{E}_t\Big|\,\big|\mathcal{F}\hat{\mathbf{y}}_t\big|-\big|\mathcal{F}\mathbf{y}_t\big|\,\Big|,
+\end{equation}
+where $\mathcal{F}$ is the orthonormal real two-dimensional FFT of each channel and $|\cdot|$ is the complex magnitude.
+
+The temporal term matches the change of the output to the change of the target along the label motion, at HR, over the pixels that are visible in both frames:
+\begin{multline}\label{eq:tsrm-ltmp}
+\mathcal{L}_\mathrm{tmp}=\frac{1}{T-1}\sum_{t=1}^{T-1}\frac{\sum_{\mathbf{p}}\bar{\mathbf{V}}_t(\mathbf{p})\,\lambda_t\sum_{c}\big|\Delta^{\mathrm{out}}_{t,c}(\mathbf{p})-\Delta^{\mathrm{gt}}_{t,c}(\mathbf{p})\big|}{3\sum_{\mathbf{p}}\bar{\mathbf{V}}_t(\mathbf{p})\,\lambda_t+10^{-6}},
+\end{multline}
+where $\Delta^{\mathrm{out}}_t=\hat{\mathbf{y}}_t-\mathcal{W}(\hat{\mathbf{y}}_{t-1},\bar{\mathbf{M}}_t)$ and $\Delta^{\mathrm{gt}}_t=\mathbf{y}_t-\mathcal{W}(\mathbf{y}_{t-1},\bar{\mathbf{M}}_t)$ are the temporal changes of the output and of the target along the label motion, $\bar{\mathbf{M}}_t$ is the HR label motion, $\bar{\mathbf{V}}_t$ its validity and $\lambda_t$ its label quality. The term is zero for windows without labels.
+
+The motion term supervises the estimator on every frame after the first, with the LR label motion $\bar{\mathbf{m}}_t$ and its validity $\bar{\mathbf{v}}_t$:
+\begin{equation}\label{eq:tsrm-lflow}
+\mathcal{L}_\mathrm{flow}=\frac{\sum_{t=1}^{T-1}\sum_{\mathbf{p}}\lambda_t\,\bar{\mathbf{v}}_t(\mathbf{p})\,\big\lVert\hat{\mathbf{m}}_t(\mathbf{p})-\bar{\mathbf{m}}_t(\mathbf{p})\big\rVert_1}{\sum_{t=1}^{T-1}\sum_{\mathbf{p}}\lambda_t\,\bar{\mathbf{v}}_t(\mathbf{p})+1},
+\end{equation}
+where $\lVert\cdot\rVert_1$ sums the absolute differences of the two components, so the error is measured in LR pixels. The $+1$ in the denominator avoids a division by zero when no window has a valid label.
+
+The perceptual term is LPIPS \cite{zhang2018lpips} with its AlexNet backbone on the last frame of the window, computed on the output clamped to $[0,1]$:
+\begin{equation}\label{eq:tsrm-llp}
+\mathcal{L}_\mathrm{lp}=\mathbb{E}_{\mathrm{batch}}\,\mathrm{LPIPS}\big(\mathrm{clip}_{[0,1]}(\hat{\mathbf{y}}_{T-1}),\mathbf{y}_{T-1}\big).
+\end{equation}
+The distillation term $\mathcal{L}_\mathrm{kd}$ is the mean absolute difference between the output and the output of a frozen teacher on the same inputs. It is inactive (\cref{sec:tsrm-distill}). The total loss is
+\begin{equation}\label{eq:tsrm-loss}
+\mathcal{L}=\mathcal{L}_\mathrm{pix}+\Res{tsr.config.cfg.w_grad}\,\mathcal{L}_\mathrm{grad}+\Res{tsr.config.cfg.w_fft}\,\mathcal{L}_\mathrm{fft}+\Res{tsr.config.cfg.w_temporal}\,\mathcal{L}_\mathrm{tmp}+\Res{tsr.config.cfg.w_flow}\,\mathcal{L}_\mathrm{flow}+\Res{tsr.config.cfg.w_lpips}\,\mathcal{L}_\mathrm{lp}+\Res{tsr.config.cfg.w_distill}\cdot\mathcal{L}_\mathrm{kd}.
+\end{equation}
+The weights are the configuration values \texttt{w\_grad}, \texttt{w\_fft}, \texttt{w\_temporal}, \texttt{w\_flow}, \texttt{w\_lpips} and \texttt{w\_distill} of the run. The frames that each term uses are stated with its equation, and the validation metric is not part of the loss.
+
+\subsection{Optimisation, schedule, precision, moving average and checkpoints}\label{sec:tsrm-optim}
+
+The optimiser is AdamW \cite{loshchilov2019adamw} with betas $(0.9,\,0.99)$, PyTorch's default $\epsilon=10^{-8}$ and weight decay $\Res{tsr.config.cfg.weight_decay}$, applied to every parameter. The peak learning rate is $\Res{tsr.config.cfg.lr}$ for the students and $\Res{tsr.config.cfg.lr_teacher}$ for the teacher. The learning rate follows the wall-clock budget. Let $\varrho=\tau/T_b$ be the fraction of the budget used, with $\varrho_w=\Res{tsr.config.cfg.warmup_frac}$, $\alpha_0$ the peak learning rate and $\alpha_\mathrm{min}=\Res{tsr.config.cfg.min_lr}$:
+\begin{equation}\label{eq:tsrm-lr}
+\alpha(\varrho)=\begin{cases}\alpha_0\,\max\big(\varrho/\varrho_w,\ 0.01\big), & \varrho<\varrho_w,\\[2pt] \alpha_\mathrm{min}+\tfrac12(\alpha_0-\alpha_\mathrm{min})\Big(1+\cos\Big(\pi\,\dfrac{\varrho-\varrho_w}{1-\varrho_w}\Big)\Big), & \varrho\ge\varrho_w.\end{cases}
+\end{equation}
+The first $3$ percent of the budget is a linear warm-up from $0.01\,\alpha_0$, and the rest is a single cosine decay without restarts, the decay used within each cycle of SGDR \cite{loshchilov2017sgdr}. The rate is updated every $10$ steps, together with the decision to stop and the validation check, because the processes agree on the elapsed time only at those points.
+
+The gradients are unscaled and their global $L_2$ norm is clipped to $1$ before the optimiser step. The forward pass of the network and of the teacher, when there is one, runs under FP16 autocast, and the losses are computed in FP32 \cite{micikevicius2018mixed}. A dynamic gradient scaler with PyTorch's default initial scale multiplies the loss before the backward pass, and it skips the step when a gradient is non-finite. A run whose loss stays non-finite for $200$ steps stops with an error, so that a diverged run does not use its whole budget.
+
+The moving average of the weights is the recursion below, which is this work's choice.
+\begin{equation}\label{eq:tsrm-ema}
+\theta^{\mathrm{EMA}}_k=d_k\,\theta^{\mathrm{EMA}}_{k-1}+(1-d_k)\,\theta_k,\qquad d_k=\min\Big(\Res{tsr.config.cfg.ema_decay},\ \frac{1+k}{10+k}\Big),
+\end{equation}
+where $k\ge1$ counts the updates of the average on rank $0$. The warm-up rule $\min\big((1+k)/(10+k),\ \mathrm{decay}\big)$ is this code's choice, and it makes the averaging window $1/(1-d_k)=(10+k)/9$ updates at update $k$, until the cap $\Res{tsr.config.cfg.ema_decay}$ is reached at $k\approx8{,}990$ updates. The average is therefore short for most of a run and reaches its full window only late in the run, and the validation and the checkpoints of \cref{sec:tsrm-test} use the averaged weights.
+
+Validation runs every $\min(\Res{tsr.config.cfg.val_interval_min}\text{ min},\ \max(T_b/6,\ 60\text{ s}))$ and once more at the end of the budget. It uses a fixed validation set: the first $32$ still crops and the first $32$ windows of the validation caches, in \Res{tsr.config.cfg.val_batches} batches of $\Res{tsr.config.cfg.val_bs}$ still crops and $\Res{tsr.config.cfg.val_bs}$ windows, each evaluated twice. The render copy keeps the engine data, and the plain-video copy degrades every sample with the probability $1$ of \cref{sec:tsrm-data}. The score is the PSNR on luma (\cref{eq:tsrm-psnr}) over the frames $1$ to $T-1$ of each window, with the $s$-pixel border removed, averaged over the windows of each copy, and the selection score is the mean of the two copies.
+
+Each validation round saves the raw and the averaged weights. The averaged weights of the first round with the highest score are kept separately, and evaluation loads them.
+
+The stage budgets are $\Res{tsr.config.cfg.minutes.teacher}$ minutes for the teacher, $\Res{tsr.config.cfg.minutes.student}$ minutes for the \tier{low} student at $3\times$, $\Res{tsr.config.cfg.minutes.pair}$ minutes for each of the paired \tier{igpu} at $3\times$ and \tier{low} at $2\times$ runs, and $\Res{tsr.config.cfg.minutes.ablation}$ minutes for each ablation. The seeds are the configuration seed $\Res{tsr.config.cfg.seed}$ plus the rank for the model, and $100\times\Res{tsr.config.cfg.seed}$ plus the rank for the generator of the synthetic renderer, which keeps every rank's random streams apart. The data loader draws its windows from memory-mapped caches without replacement inside a batch, and each batch index selects its own random generator seed.
+
+\subsection{Per-frame training loop}\label{sec:tsrm-loop}
+
+The training loop of \texttt{train\_loop} and \texttt{train\_tsr.step\_fn} runs the following steps for every iteration on each rank.
+
+\begin{enumerate}
+\item Draw one batch from the memory-mapped caches: $19$ real windows and $29$ synthetic still crops on each GPU in a normal step. The indices are sorted and drawn without replacement within the batch.
+\item Decide the step type. A step whose index is a multiple of four is a long step, with $29$ synthetic windows of $16$ frames at $96$ pixels, and the teacher is not run. Otherwise the batch is $6$-frame windows, with the real windows in the batch.
+\item Build the synthetic windows with the renderer (\texttt{sr\_batch}): motion class, jitter phase, exposure, particles, text, the LR jittered samples, the HR four-sample targets, the exact motion and validity at LR and HR, depth, and the reactive masks.
+\item Build the real windows (\texttt{sr\_batch\_from\_frames}): random flips with the motion components negated, the exposure gain in linear light, jittered bilinear reads of the HR frames, and the cached motion, validity and depth.
+\item Degrade the plain-video shares: a synthetic window with probability $0.3$, a real window with probability $0.6$, with the filter, blur and noise of \cref{eq:tsrm-video}. The degraded samples keep their motion labels with probability $0.15$.
+\item Withhold the engine data of the batch: motion with probability $0.25$ and depth with probability $0.3$, drawn once per sample.
+\item Compute the teacher-forcing probability $\pi(\tau)$ of \cref{eq:tsrm-teacher} from the elapsed time, draw the forced mask for the samples with no motion and a label, and add it to the batch when $\pi>0$.
+\item Run the recurrent unroll under FP16 autocast. For each frame $t$ in order: form the inputs of \cref{tab:tsrm-inputs}, run the estimator for every frame in training, select the motion of \cref{eq:tsrm-select}, warp and fold the state, run the trunk and the heads, accumulate with \cref{eq:tsrm-acc}, refine with \cref{eq:tsrm-refine}, and keep the state for the next frame. The first frame starts from the reset state.
+\item Compute the losses of \cref{eq:tsrm-lpix,eq:tsrm-lgrad,eq:tsrm-lfft,eq:tsrm-ltmp,eq:tsrm-lflow,eq:tsrm-llp} in FP32 and their weighted sum \cref{eq:tsrm-loss}.
+\item Scale the loss, run the backward pass through the whole unroll, unscale the gradients, clip their global norm to $1$, and take one AdamW step. A non-finite gradient skips the step.
+\item Update the moving average of the weights on rank $0$ with \cref{eq:tsrm-ema}.
+\item Every $10$ steps, all-reduce the elapsed time, the stop flag and the memory counters. Set the learning rate by \cref{eq:tsrm-lr}, count the consecutive non-finite checks, and run the validation of \cref{sec:tsrm-optim} when the interval has passed or the budget has ended. Save the checkpoints and, when the validation score is a new best, the best averaged weights.
+\item Stop when the budget is used, write the history of the rounds, and report the best round.
+\end{enumerate}
+
+\subsection{Distillation}\label{sec:tsrm-distill}
+
+The training code contains a distillation path. A frozen teacher is unrolled on the same inputs without gradients, and its output enters the loss through \cref{eq:tsrm-loss} with weight $w_\mathrm{distill}$. No TSR run used it, because each run sets the teacher checkpoint to none and the weight to zero. The teacher of the article is therefore trained directly, as the quality ceiling, and not distilled. The earlier runs of 20 to 21 and 24 October 2026 recorded no measurable gain from distillation, which the notebook gives as the reason for switching it off \Preliminary.
+
+\subsection{Ablation configurations}\label{sec:tsrm-abl}
+
+Every ablation trains the \tier{low} tier at $3\times$ for $\Res{tsr.config.cfg.minutes.ablation}$ minutes, two at a time on the two GPUs, against a reference run of the same recipe and budget. \Cref{tab:tsrm-abl-config} lists what each one changes and how the change is implemented. The reference is the full recipe at the same budget.
+
+\begin{table}[!htbp]
+\caption{TSR ablation configurations. Each row changes one part of the \tier{low} recipe at $3\times$ and $\Res{tsr.config.cfg.minutes.ablation}$ minutes, against the reference}\label{tab:tsrm-abl-config}
+{\scriptsize\raggedright\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}p{0.31\textwidth}p{0.30\textwidth}p{0.31\textwidth}}
+\toprule
+Name & Change & Implementation \\
+\midrule
+\texttt{abl\_reference} & None & Full recipe with the same $30$-minute budget \\
+\texttt{abl\_no\_history} & Single-frame upscaling: no history, no hidden state & \texttt{use\_history=False}: every frame resets (\cref{eq:tsrm-reset}), and unused parameters are allowed in DDP \\
+\texttt{abl\_no\_gbuffers} & Colour-only render input: the estimator supplies the motion & \texttt{ablate\_gbuffers}: depth, motion, depth availability and motion quality are zero in every frame \\
+\texttt{abl\_no\_motion\_net} & No motion estimator, colour-only input, zero motion & \texttt{motion\_net=False} and \texttt{ablate\_gbuffers}: no estimator and no motion loss \\
+\texttt{abl\_no\_video\_training} & Render-like samples only & Both video shares set to zero, the \texttt{p\_video} keys of the configuration, and the withholding of \cref{sec:tsrm-data} still applies \\
+\texttt{abl\_no\_long\_unroll} & Six-frame windows only & \texttt{long\_every}$=0$ \\
+\botrule
+\end{tabular*}}
+\end{table}
+
+Each ablation validates on batches built with its own recipe, so validation scores are not comparable between ablations. The test protocol of \cref{sec:tsrm-test} evaluates them all on the same suites. Its engine-mode evaluation of \texttt{abl\_no\_motion\_net} is an exception. The evaluation sets the colour-only flag only for \texttt{abl\_no\_gbuffers} and the no-history flag only for \texttt{abl\_no\_history}. The engine-mode rows of \texttt{abl\_no\_motion\_net} therefore receive depth and motion that the model was never trained with \UnderRevision. The plain-mode rows of this ablation are not affected, because plain inputs have no engine data, and \cref{M-tab:tsr-abl} uses only those rows.
+
+\subsection{Fusion, precision and export}\label{sec:tsrm-deploy}
+
+Fusion replaces every RepConv by a plain $3\times3$ convolution with the folded kernel and bias of \cref{eq:tsrm-fold}, followed by a copy of its PReLU. The rest of the network is unchanged. The motion estimator is built from ordinary convolutions and is not folded. The fused and unfused networks compute the same function up to floating-point error, and the notebook checks the difference on a synthetic batch of each scale and records the maximum absolute difference in FP32.
+
+The evaluation and the latency measurements use the fused networks converted to FP16 weights, and the evaluation runs them under autocast. The latency is the mean over $100$ timed forward passes of one fused FP16 step at batch $1$, after $10$ warm-up steps, with CUDA events and cuDNN autotuning. It is measured at $1080$p and $2160$p outputs for $3\times$ and at $1080$p for $2\times$. The arithmetic estimate in the notebook is a parameter, not a measurement. All latencies are eager PyTorch on one T4, and in-engine latency on target GPUs is not measured \UnderRevision.
+
+The ONNX export wraps one fused step with explicit state tensors. Its inputs are the colour, depth, motion, reactive mask, exposure, jitter, a flag vector of depth availability, motion quality and input kind, and the previous output, hidden state, depth, colour and jitter. Its outputs are the output and the new hidden state. The export uses opset $17$ with the TorchScript exporter, static shapes for one LR size (the notebook uses $36\times64$ and the scale), and it is checked with ONNX Runtime on the CPU against PyTorch in FP32. A deployment must export one graph per render resolution.
+
+The exported step has no reset input. The caller supplies the previous output for the first frame, and the graph then blends that output with the learned weight $a_t$, instead of the zero weight of \cref{eq:tsrm-reset}. The notebook's export test runs a single frame and does not exercise the first frame of a sequence. An engine integration must therefore supply a valid previous output on the first frame, which the export does not check \UnderRevision.
+
+\subsection{Test protocol}\label{sec:tsrm-test}
+
+The test suites are built from the test split of the manifest, which the notebook loads before the evaluation and never uses for training. \Cref{tab:tsrm-suites} lists them. A clip is the first $T$ frames of an item, starting at frame $0$, cropped at the centre to the crop size of its suite. The first $4n$ items of a source with at least $T$ frames are tried, and a clip is skipped when it cannot be decoded or when one of its frames is blank, meaning a luma standard deviation below $2$ on the $0$ to $255$ scale. A blank frame would be reconstructed exactly by every method and would score the PSNR cap of $100$ dB. Clips with frozen frames or scene cuts are not filtered.
+
+\begin{table}[!htbp]
+\caption{TSR test suites. Motion labels are exact (renderer or exact flow) or RAFT. Each suite runs in both modes except GameIR, which runs in engine mode only}\label{tab:tsrm-suites}
+{\scriptsize\raggedright\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}p{0.19\textwidth}p{0.37\textwidth}p{0.17\textwidth}p{0.04\textwidth}p{0.12\textwidth}}
+\toprule
+Suite & Source and frame size & Motion & $T$ & Scales \\
+\midrule
+\texttt{synthetic-game} & Game stills and DIV2K \cite{agustsson2017div2k} test items, $1024$-pixel texture crops, rendered at $\Res{tsr.config.cfg.eval.synthetic_p}$ output pixels, six sequences per motion class & Exact & $\Res{tsr.config.cfg.eval.synthetic_t}$ & $3\times$, $2\times$ \\
+\texttt{tartanair} & TartanAir \cite{wang2020tartanair} test environments, $480\times576$ & Exact (forward flow played backwards) & $\Res{tsr.config.cfg.eval.real_t}$ & $3\times$, $2\times$ \\
+\texttt{sintel} & MPI Sintel \cite{butler2012sintel} test scene families, $432\times1008$ & Exact (with occlusion masks) & $\Res{tsr.config.cfg.eval.real_t}$ & $3\times$, $2\times$ \\
+\texttt{vid4} & Vid4 \cite{liu2014vid4} test sequences, $480\times696$ & RAFT & $\Res{tsr.config.cfg.eval.real_t}$ & $3\times$, $2\times$ \\
+\texttt{vimeo1080p} & Pinned validation shards of Vimeo-1080p, which the manifest assigns to the test split, shorter side at most $540$, crop $540\times960$ & RAFT & $\Res{tsr.config.cfg.eval.real_t}$ & $3\times$, $2\times$ \\
+\texttt{gameir-native} & GameIR \cite{zhou2024gameir} test town, $720$p native input and $1440\times1920$ target & RAFT, engine mode only & $6$ & $2\times$ \\
+\botrule
+\end{tabular*}}
+\end{table}
+
+In engine mode the network receives the jittered single-sample input of each suite, with the motion labels as motion vectors and the depth where the source has it. On the real video suites and GameIR the motion is RAFT-small \cite{teed2020raft} with its default weights, run for $12$ iterations on the clean full-resolution frames, and it is kept where the forward-backward error is below one pixel plus five percent of the flow magnitude. RAFT sees the target frames rather than the jittered input, so engine mode on these suites is an oracle for motion, as the notebook notes \UnderRevision. In plain mode the input is the anti-aliased bicubic downscale of the target, and the exact or RAFT motion serves only as a metric label. The synthetic suite uses the same text-tile bank as training, generated with the same seed.
+
+The baselines are jitter-aware bicubic and bilinear upsampling in both modes, the bilinear one being $\mathcal{U}$ of \cref{eq:tsrm-up}, and the analytic TAA upscaler in engine mode only. TAA reprojects its history with the engine motion, clamps the history to the $3\times3$ YCoCg neighbourhood of the current bilinear upsample, and blends in $10$ percent of the new frame. The networks are the teacher, \tier{low} and \tier{igpu} at $3\times$, the \tier{low} student at $2\times$, and the six ablations at $3\times$, in both modes.
+
+The static-convergence test is a separate run. It renders a camera at rest with sub-pixel jitter on the synthetic static class, with the first six test stills, sixteen frames and the seed $4242$, in engine mode. It covers the bilinear and TAA baselines, the \tier{low}, \tier{igpu} and teacher networks, and the reference, no-long-unroll and no-history ablations. Its per-frame PSNR is averaged over the six sequences, and the FLIP error \cite{andersson2020flip} of the last frame is reported.
+
+\subsection{Metrics and aggregation}\label{sec:tsrm-metrics}
+
+The metrics are computed for every frame $t\ge1$ of every clip, because the first frame has no history. The luma of an RGB image $\mathbf{c}\in[0,1]^3$ is the limited-range value
+\begin{equation}\label{eq:tsrm-luma}
+Y(\mathbf{c})=\frac{16+65.481\,c_R+128.553\,c_G+24.966\,c_B}{255},
+\end{equation}
+which lies in $[16/255,235/255]$. The peak-signal-to-noise ratio of luma is then
+\begin{equation}\label{eq:tsrm-psnr}
+\mathrm{PSNR}_Y=10\log_{10}\frac{1}{\mathrm{MSE}},\qquad \mathrm{MSE}=\frac{1}{|\Omega|}\sum_{\mathbf{p}\in\Omega}\big(Y(\hat{\mathbf{y}}_t)(\mathbf{p})-Y(\mathbf{y}_t)(\mathbf{p})\big)^2,
+\end{equation}
+where $\Omega$ is the set of output pixels with an $s$-pixel border removed on each side. The structural similarity (SSIM) \cite{wang2004ssim} uses the same luma and border with an $11\times11$ Gaussian window of standard deviation $1.5$. The detail PSNR uses the top $15$ percent of the gradient magnitude of the target luma, which contains thin geometry, foliage and text. The disoccluded PSNR and the particle PSNR use the pixels with $\bar{\mathbf{V}}_t=0$ and the pixels where the reactive mask, upsampled by nearest neighbour, exceeds $0.1$, each when the batch holds more than $50$ such pixels. This rule is tested over the whole batch and not per sample, so in a batch of several synthetic samples a sample without such pixels receives the cap of $100$ dB \UnderRevision.
+
+The warping error measures the output alone along the exact label motion, and it is defined for $\lambda_t=1$:
+\begin{equation}\label{eq:tsrm-warpe}
+E_\mathrm{w}(t)=\frac{\sum_{\mathbf{p}}\bar{\mathbf{V}}_t(\mathbf{p})\,\frac13\sum_c\big|\hat{\mathbf{y}}_t-\mathcal{W}(\hat{\mathbf{y}}_{t-1},\bar{\mathbf{M}}_t)\big|_c(\mathbf{p})}{\sum_{\mathbf{p}}\bar{\mathbf{V}}_t(\mathbf{p})}.
+\end{equation}
+The temporal-change error compares the change of the output with the change of the target along the label motion, and it is defined for every label with $\lambda_t>0$:
+\begin{equation}\label{eq:tsrm-tce}
+E_\mathrm{tc}(t)=\frac{\sum_{\mathbf{p}}\bar{\mathbf{V}}_t(\mathbf{p})\,\frac13\sum_c\big|\big(\hat{\mathbf{y}}_t-\mathcal{W}(\hat{\mathbf{y}}_{t-1},\bar{\mathbf{M}}_t)\big)-\big(\mathbf{y}_t-\mathcal{W}(\mathbf{y}_{t-1},\bar{\mathbf{M}}_t)\big)\big|_c(\mathbf{p})}{\sum_{\mathbf{p}}\bar{\mathbf{V}}_t(\mathbf{p})}.
+\end{equation}
+LPIPS \cite{zhang2018lpips} and the tOF of TecoGAN \cite{chu2020tecogan} are computed on frames $t\equiv0\pmod 4$ only, to limit the cost. The tOF is the mean norm, in pixels, of the difference between the RAFT flow from the output frame to its predecessor and the RAFT flow from the target to its predecessor.
+
+Suite results average each metric over the rows of a suite, mode, scale and method where the metric is defined. Optional metrics therefore weigh each clip by its number of defined rows, and comparisons on single clips average the rows of each clip first.

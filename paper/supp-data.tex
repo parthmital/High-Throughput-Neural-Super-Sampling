@@ -1,0 +1,577 @@
+\section{Data, copy detection and leakage control}\label{sec:data}
+
+The data pipeline notebook builds the single manifest that both training notebooks read. It has three jobs. It gathers public stills and video sequences, it removes near copies so that no test content reaches training, and it records for every item its leakage group, its split and the locations of its frames, motion and depth. \cref{M-sec:data} of the article summarises the procedure. This section gives the complete method, every threshold, and every saved output of the notebook.
+
+Every result here comes from one saved run of the pipeline. A result that rests on one run carries the \Preliminary{} tag, because a run with other seeds or other caps can change the counts. Descriptions of what the code does carry no tag. Every count and threshold quoted in this section is a generated result key, except for design constants that are written in the code, and each of these is quoted from the code.
+
+Four terms are used throughout. An \emph{item} is one still image or one video sequence, and it is the unit of the manifest. A \emph{keyframe} is a decoded frame of an item that is used for statistics and copy detection. A \emph{leakage group} is a set of items that must never be split between training, validation and test, such as the frames of one video or one rendered scene. A \emph{duplicate edge} joins two keyframes that show the same picture. Each item ends with one split: train, val or test for items that are used, drop for an item removed because it is a near copy of test content or shares a group with it, and filtered for an item removed by a quality rule.
+
+The notebook runs eleven timed stages in this order: Kaggle discovery, Hugging Face materialisation, keyframe statistics, quality filters, perceptual hashes, DINOv2 embeddings, SIFT features, threshold calibration, candidate search and verification, the leakage-safe split with its audit, and the manifest with the dataset card. \cref{tab:data-stages} gives the time of each stage.
+
+\begin{table}[!htbp]
+\caption{Stage times of the saved run, in minutes}\label{tab:data-stages}
+\footnotesize
+\begin{tabular}{@{}lr@{}}
+\toprule
+Stage & Minutes \\
+\midrule
+Kaggle discovery & \Res{data.stage_times.kaggle_discovery.minutes} \\
+Hugging Face materialisation & \Res{data.stage_times.hf_materialisation.minutes} \\
+Keyframe statistics & \Res{data.stage_times.keyframe_stats.minutes} \\
+Filters & \Res{data.stage_times.filters.minutes} \\
+Perceptual hashes & \Res{data.stage_times.hashes.minutes} \\
+Embeddings & \Res{data.stage_times.embeddings.minutes} \\
+Local features (SIFT) & \Res{data.stage_times.local_features.minutes} \\
+Calibration & \Res{data.stage_times.calibration.minutes} \\
+Duplicate search and verification & \Res{data.stage_times.duplicate_search.minutes} \\
+Split and audit & \Res{data.stage_times.split_and_audit.minutes} \\
+Manifest & \Res{data.stage_times.manifest.minutes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Source datasets}\label{sec:data-sources}
+
+The pipeline reads two hosts. The Kaggle datasets are attached to the notebook and read from the read-only input mount, which the code locates by the dataset's owner and slug. The Hugging Face (HF) datasets are read over HTTPS. The code keeps one connection alive per thread, checks the length of every range read, and retries failed reads. A zip member is read through range requests without downloading the archive, and the GameIR tars are read as one sequential stream that stops once the clip cap is reached. The Vimeo-1080p step is different. It downloads each named parquet shard in full, reads the MP4 files inside it, and deletes the shard, so the notebook's statement that the pipeline makes no full archive downloads does not hold for that source. Each source is optional. A source that fails is logged and skipped, and the run continues.
+
+\Cref{tab:data-sources} lists the eleven sources. The sizes are the means of the saved keyframe sizes. The licence column repeats the strings written in the code. The upstream licence pages were not checked for this section, so these are the code's statements and not checked legal facts. The code marks the game captures as needing a check for each use, and it gives the Vimeo-1080p licence as unspecified. The notebook's dataset card refers to \texttt{RESEARCH.md} for commercial-use restrictions. That file exists in the repository, but its contents were not checked for this section. The licences need checking against each upstream page before any release.
+
+\begin{table}[!htbp]
+\caption{Source datasets, as the code reads them. Sizes are mean keyframe widths and heights in pixels from the saved keyframe table. Licence strings are the code's statements, not checked against upstream pages}\label{tab:data-sources}
+\footnotesize
+\begin{tabular}{@{}p{2.4cm}p{3.2cm}p{3.6cm}p{1.9cm}@{}}
+\toprule
+Source & Host and identifier & Content and ground truth & Size (px) \\
+\midrule
+DIV2K & Kaggle \texttt{soumikrakshit/\allowbreak div2k-\allowbreak high-\allowbreak resolution-\allowbreak images} & Photographs, still, no motion, and validation images pinned to test & \Res{data.keyframe_stats.div2k.width.mean}$\times$\Res{data.keyframe_stats.div2k.height.mean} \\
+Flickr2K & Kaggle \texttt{daehoyang/flickr2k} & Photographs, still, train only & \Res{data.keyframe_stats.flickr2k.width.mean}$\times$\Res{data.keyframe_stats.flickr2k.height.mean} \\
+Game stills & HF \texttt{ericphann/\allowbreak video-\allowbreak game-\allowbreak super-\allowbreak resolution} & 1080p game captures, still, with \texttt{training-hr} as train and \texttt{test-hr} as test & \Res{data.keyframe_stats.game_stills.width.mean}$\times$\Res{data.keyframe_stats.game_stills.height.mean} \\
+REDS & Kaggle \texttt{amithkesavmrajagiri/\allowbreak reds-\allowbreak dataset} & 720p video clips, no motion labels, train only & \Res{data.keyframe_stats.reds.width.mean}$\times$\Res{data.keyframe_stats.reds.height.mean} \\
+Vimeo-90K septuplets & Kaggle \texttt{wangsally/\allowbreak vimeo-\allowbreak 90k-\allowbreak 7} & Seven-frame video sequences, no motion labels, train only & \Res{data.keyframe_stats.vimeo_septuplet.width.mean}$\times$\Res{data.keyframe_stats.vimeo_septuplet.height.mean} \\
+Vimeo-90K triplets & Kaggle \texttt{chenshu123/\allowbreak vimeo-\allowbreak triplet} & Three-frame sequences from the official test list, test only & \Res{data.keyframe_stats.vimeo_triplet.width.mean}$\times$\Res{data.keyframe_stats.vimeo_triplet.height.mean} \\
+MPI Sintel & Kaggle \texttt{artemmmtry/\allowbreak mpi-\allowbreak sintel-\allowbreak dataset} & Rendered scenes with exact forward flow and occlusion masks, with \texttt{market} and \texttt{cave} as test & \Res{data.keyframe_stats.sintel.width.mean}$\times$\Res{data.keyframe_stats.sintel.height.mean} \\
+Vid4 & Kaggle \texttt{uom200647r/\allowbreak vid4-\allowbreak dataset} & Video clips, no motion labels, test only & \Res{data.keyframe_stats.vid4.width.mean}$\times$\Res{data.keyframe_stats.vid4.height.mean} \\
+TartanAir & HF \texttt{theairlabcmu/tartanair} & Rendered scenes with exact forward flow, occlusion masks and depth, with two environments as test & \Res{data.keyframe_stats.tartanair.width.mean}$\times$\Res{data.keyframe_stats.tartanair.height.mean} \\
+GameIR & HF \texttt{LLLebin/GameIR} & CARLA and Unreal Engine 4 game renders at 1440p and 720p, with depth and no exact flow, and the test tar as test & \Res{data.keyframe_stats.gameir.width.mean}$\times$\Res{data.keyframe_stats.gameir.height.mean} \\
+Vimeo-1080p & HF \texttt{danjacobellis/\allowbreak vimeo1080p} & 1080p MP4 videos, no motion labels, validation shard as test & \Res{data.keyframe_stats.vimeo1080p.width.mean}$\times$\Res{data.keyframe_stats.vimeo1080p.height.mean} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The roles are set by the code. The test items are the DIV2K validation images, the Vid4 clips, the official Vimeo-90K triplet test list, the Sintel \texttt{market} and \texttt{cave} scene families, the two TartanAir test environments, the GameIR test tar and the Vimeo-1080p validation shard. Every other item is a training candidate, and the split of \cref{sec:data-split} decides whether it ends in train or val. The sources are DIV2K \cite{agustsson2017div2k}, REDS \cite{nah2019reds}, Vimeo-90K \cite{xue2019vimeo}, MPI Sintel \cite{butler2012sintel}, TartanAir \cite{wang2020tartanair}, GameIR \cite{zhou2024gameir}, Vid4 \cite{liu2014vid4} and CARLA \cite{dosovitskiy2017carla}, which the GameIR renders use. The DIV2K training and validation counts follow the published split of 800 training and 100 validation images, which the catalogue reproduces.
+
+Two sources carry ground truth beyond the frames themselves. Sintel and TartanAir give exact forward optical flow and occlusion masks, and TartanAir and GameIR give depth. These are the only sources the training uses as exact labels, and the rest rely on the frames, either as targets or through the RAFT teacher flow of \cref{sec:data-synth-tsr}.
+
+\subsection{Discovery and catalogue}\label{sec:data-discovery}
+
+Discovery runs once per attached Kaggle dataset, and the seven Kaggle sources run in parallel threads. For each dataset the code lists files with \texttt{sampled\_walk}. This function keeps a frontier of directories, expands one directory chosen at random at each step, and lists every file in that directory completely. A listed sequence folder is therefore never cut in half. Listing stops when the file cap is reached, which is \Res{data.config.cfg.list_cap_files} files by default. The REDS and Vimeo-90K septuplet listings reached the cap before the walk finished, so their listings are incomplete, and the other sources listed completely.
+
+A file is kept only if its path has no token that marks a degraded copy or a non-colour pass. The degraded tokens are \texttt{lr}, \texttt{lq}, \texttt{bicubic}, \texttt{blur}, \texttt{x2} to \texttt{x4} and similar, and the non-colour tokens include \texttt{flow}, \texttt{depth}, \texttt{occlusions}, \texttt{mask} and \texttt{albedo}. Tokens are the lower-case pieces of the directory and file names. For video, if any path carries a high-resolution token (\texttt{hr}, \texttt{gt}, \texttt{original} or \texttt{groundtruth}), only those paths are kept. Stills become one item each. Video frames become one item per folder, and the leakage group is the folder name for level 1 sources and the parent folder for level 2 sources. A folder with fewer than three frames is skipped. For Sintel, the group is the scene prefix (for example \texttt{market}), and each item carries the forward flow files and the occlusion masks that match its frames. The Vimeo-90K triplet clips are read directly from the official test list, and up to 1,000 of them are sampled with the seed.
+
+\Cref{tab:data-discovery} reports the discovery per source. The listed and kept counts are file counts, and the items are the sequences or stills that survived the path rules. Sintel lists \Res{data.discovery_kaggle.sintel.listed} files and keeps \Res{data.discovery_kaggle.sintel.kept_files} of them, and the difference comes from files that the path rules remove, such as non-colour passes and masks. \Preliminary
+
+\begin{table}[!htbp]
+\caption{Kaggle discovery per source. Files are counted after the directory walk and after the path rules. The REDS and Vimeo-90K septuplet listings reached their cap, so their file counts are lower bounds}\label{tab:data-discovery}
+\footnotesize
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Source & Files listed & Files kept & Directories listed & Items & Test items \\
+\midrule
+DIV2K & \Res{data.discovery_kaggle.div2k.listed} & \Res{data.discovery_kaggle.div2k.kept_files} & \Res{data.discovery_kaggle.div2k.dirs_listed} & \Res{data.discovery_kaggle.div2k.items} & \Res{data.discovery_kaggle.div2k.test_items} \\
+Flickr2K & \Res{data.discovery_kaggle.flickr2k.listed} & \Res{data.discovery_kaggle.flickr2k.kept_files} & \Res{data.discovery_kaggle.flickr2k.dirs_listed} & \Res{data.discovery_kaggle.flickr2k.items} & \Res{data.discovery_kaggle.flickr2k.test_items} \\
+REDS & \Res{data.discovery_kaggle.reds.listed} & \Res{data.discovery_kaggle.reds.kept_files} & \Res{data.discovery_kaggle.reds.dirs_listed} & \Res{data.discovery_kaggle.reds.items} & \Res{data.discovery_kaggle.reds.test_items} \\
+Vimeo-90K septuplets & \Res{data.discovery_kaggle.vimeo_septuplet.listed} & \Res{data.discovery_kaggle.vimeo_septuplet.kept_files} & \Res{data.discovery_kaggle.vimeo_septuplet.dirs_listed} & \Res{data.discovery_kaggle.vimeo_septuplet.items} & \Res{data.discovery_kaggle.vimeo_septuplet.test_items} \\
+Vimeo-90K triplets & \Res{data.discovery_kaggle.vimeo_triplet.listed} & \Res{data.discovery_kaggle.vimeo_triplet.kept_files} & \Res{data.discovery_kaggle.vimeo_triplet.dirs_listed} & \Res{data.discovery_kaggle.vimeo_triplet.items} & \Res{data.discovery_kaggle.vimeo_triplet.test_items} \\
+MPI Sintel & \Res{data.discovery_kaggle.sintel.listed} & \Res{data.discovery_kaggle.sintel.kept_files} & \Res{data.discovery_kaggle.sintel.dirs_listed} & \Res{data.discovery_kaggle.sintel.items} & \Res{data.discovery_kaggle.sintel.test_items} \\
+Vid4 & \Res{data.discovery_kaggle.vid4.listed} & \Res{data.discovery_kaggle.vid4.kept_files} & \Res{data.discovery_kaggle.vid4.dirs_listed} & \Res{data.discovery_kaggle.vid4.items} & \Res{data.discovery_kaggle.vid4.test_items} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Hugging Face sources are materialised next, into the data root, and each one follows its own access rule. Game stills are a random sample of the listed PNG files in the training and test folders, with the seed. TartanAir is read per environment. For each environment the code reads the first trajectory of the Easy difficulty zips, takes a contiguous run of frames starting at one quarter of the way along the trajectory, and stores RGB, depth, forward flow and a validity mask. The validity mask is white where the TartanAir mask is zero, which means a valid correspondence. The run stops early if a flow or mask file is missing. Each run is cut into sequences of 24 frames, which is the TartanAir sequence length in the configuration. GameIR keeps the 1440p and 720p renders and the depth of every clip with at least three high-resolution frames and a matching low-resolution frame. The code records a frame stride of ten rendered frames for these clips, but it does not subsample them, so the frames are whatever the mini tar holds. Vimeo-1080p writes each MP4 to disk, counts its frames, and keeps videos with at least eight frames.
+
+\Cref{tab:data-catalogue} is the catalogue, which counts items, frames, exact-motion items and depth items for each source and role. The counts are taken before the quality filters, so they describe what was materialised. \Preliminary
+
+\begin{table}[!htbp]
+\caption{Catalogue before filtering, by source, kind and role. Exact motion counts items with exact forward flow and depth counts items with depth. Each row is one source and role that exists in the run}\label{tab:data-catalogue}
+\footnotesize
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Source & Role & Items & Frames & Exact motion & Depth \\
+\midrule
+DIV2K & train & \Res{data.catalogue_summary.div2k.still.train.items} & \Res{data.catalogue_summary.div2k.still.train.frames} & \Res{data.catalogue_summary.div2k.still.train.exact_motion} & \Res{data.catalogue_summary.div2k.still.train.with_depth} \\
+DIV2K & test & \Res{data.catalogue_summary.div2k.still.test.items} & \Res{data.catalogue_summary.div2k.still.test.frames} & \Res{data.catalogue_summary.div2k.still.test.exact_motion} & \Res{data.catalogue_summary.div2k.still.test.with_depth} \\
+Flickr2K & train & \Res{data.catalogue_summary.flickr2k.still.train.items} & \Res{data.catalogue_summary.flickr2k.still.train.frames} & \Res{data.catalogue_summary.flickr2k.still.train.exact_motion} & \Res{data.catalogue_summary.flickr2k.still.train.with_depth} \\
+Game stills & train & \Res{data.catalogue_summary.game_stills.still.train.items} & \Res{data.catalogue_summary.game_stills.still.train.frames} & \Res{data.catalogue_summary.game_stills.still.train.exact_motion} & \Res{data.catalogue_summary.game_stills.still.train.with_depth} \\
+Game stills & test & \Res{data.catalogue_summary.game_stills.still.test.items} & \Res{data.catalogue_summary.game_stills.still.test.frames} & \Res{data.catalogue_summary.game_stills.still.test.exact_motion} & \Res{data.catalogue_summary.game_stills.still.test.with_depth} \\
+GameIR & train & \Res{data.catalogue_summary.gameir.seq.train.items} & \Res{data.catalogue_summary.gameir.seq.train.frames} & \Res{data.catalogue_summary.gameir.seq.train.exact_motion} & \Res{data.catalogue_summary.gameir.seq.train.with_depth} \\
+GameIR & test & \Res{data.catalogue_summary.gameir.seq.test.items} & \Res{data.catalogue_summary.gameir.seq.test.frames} & \Res{data.catalogue_summary.gameir.seq.test.exact_motion} & \Res{data.catalogue_summary.gameir.seq.test.with_depth} \\
+REDS & train & \Res{data.catalogue_summary.reds.seq.train.items} & \Res{data.catalogue_summary.reds.seq.train.frames} & \Res{data.catalogue_summary.reds.seq.train.exact_motion} & \Res{data.catalogue_summary.reds.seq.train.with_depth} \\
+Vimeo-90K septuplets & train & \Res{data.catalogue_summary.vimeo_septuplet.seq.train.items} & \Res{data.catalogue_summary.vimeo_septuplet.seq.train.frames} & \Res{data.catalogue_summary.vimeo_septuplet.seq.train.exact_motion} & \Res{data.catalogue_summary.vimeo_septuplet.seq.train.with_depth} \\
+Vimeo-90K triplets & test & \Res{data.catalogue_summary.vimeo_triplet.seq.test.items} & \Res{data.catalogue_summary.vimeo_triplet.seq.test.frames} & \Res{data.catalogue_summary.vimeo_triplet.seq.test.exact_motion} & \Res{data.catalogue_summary.vimeo_triplet.seq.test.with_depth} \\
+MPI Sintel & train & \Res{data.catalogue_summary.sintel.seq.train.items} & \Res{data.catalogue_summary.sintel.seq.train.frames} & \Res{data.catalogue_summary.sintel.seq.train.exact_motion} & \Res{data.catalogue_summary.sintel.seq.train.with_depth} \\
+MPI Sintel & test & \Res{data.catalogue_summary.sintel.seq.test.items} & \Res{data.catalogue_summary.sintel.seq.test.frames} & \Res{data.catalogue_summary.sintel.seq.test.exact_motion} & \Res{data.catalogue_summary.sintel.seq.test.with_depth} \\
+TartanAir & train & \Res{data.catalogue_summary.tartanair.seq.train.items} & \Res{data.catalogue_summary.tartanair.seq.train.frames} & \Res{data.catalogue_summary.tartanair.seq.train.exact_motion} & \Res{data.catalogue_summary.tartanair.seq.train.with_depth} \\
+TartanAir & test & \Res{data.catalogue_summary.tartanair.seq.test.items} & \Res{data.catalogue_summary.tartanair.seq.test.frames} & \Res{data.catalogue_summary.tartanair.seq.test.exact_motion} & \Res{data.catalogue_summary.tartanair.seq.test.with_depth} \\
+Vid4 & test & \Res{data.catalogue_summary.vid4.seq.test.items} & \Res{data.catalogue_summary.vid4.seq.test.frames} & \Res{data.catalogue_summary.vid4.seq.test.exact_motion} & \Res{data.catalogue_summary.vid4.seq.test.with_depth} \\
+Vimeo-1080p & train & \Res{data.catalogue_summary.vimeo1080p.seq.train.items} & \Res{data.catalogue_summary.vimeo1080p.seq.train.frames} & \Res{data.catalogue_summary.vimeo1080p.seq.train.exact_motion} & \Res{data.catalogue_summary.vimeo1080p.seq.train.with_depth} \\
+Vimeo-1080p & test & \Res{data.catalogue_summary.vimeo1080p.seq.test.items} & \Res{data.catalogue_summary.vimeo1080p.seq.test.frames} & \Res{data.catalogue_summary.vimeo1080p.seq.test.exact_motion} & \Res{data.catalogue_summary.vimeo1080p.seq.test.with_depth} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\Cref{fig:data-catalogue} shows the same catalogue as plots. The left panel stacks the items of each source by role. The Vimeo-90K septuplets are the largest source by items, and the Vimeo-90K triplets, which are test only, form the largest block of test items. The right panel gives the frame totals on a logarithmic axis, which spans about three decades. The Vimeo-90K and Vimeo-1080p sources carry the most frames, and the sources with exact motion and depth are a small share of the frames. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\textwidth]{\DataOut/plots/catalogue.png}
+\caption{Catalogue before filtering. Left: items per source, stacked by role. Right: frames on a logarithmic axis, and the sequences with exact motion and with depth. Both panels come from the notebook's catalogue cell}\label{fig:data-catalogue}
+\end{figure}
+
+\subsection{Quality filtering}\label{sec:data-filters}
+
+Quality is judged on statistics of the keyframes, which \cref{sec:data-keyframes} defines. For each keyframe the code computes the grey mean and the grey standard deviation of the full-resolution frame, where grey is the mean of the red, green and blue values. It also computes the letterbox fraction $\lambda$. A row counts as dark when its mean grey value is below 8. The letterbox fraction is the number of dark rows at the top plus the number at the bottom, divided by the frame height. The sharpness is computed on the 256 by 256 thumbnail $g$. The code applies the four-neighbour Laplacian
+\begin{equation}
+L(x,y)=4g(x,y)-g(x-1,y)-g(x+1,y)-g(x,y-1)-g(x,y+1),\label{eq:data-sharp}
+\end{equation}
+and takes the variance of $L$ over the interior pixels as the sharpness. A flat image has a small variance of $L$, and a sharp image has a large one. The colourfulness measure of each keyframe uses the opponent channels $rg=R-G$ and $yb=\tfrac{1}{2}(R+G)-B$, and its value is
+\begin{equation}
+C=\sqrt{\sigma_{rg}^2+\sigma_{yb}^2}+0.3\sqrt{\mu_{rg}^2+\mu_{yb}^2},\label{eq:data-colour}
+\end{equation}
+where $\sigma$ and $\mu$ are the standard deviation and mean over the thumbnail. This is the colourfulness index of Hasler and S{\"u}sstrunk \cite{hasler2003measuring}. The colourfulness is recorded but no rule uses it.
+
+An item is rejected if it has any of five reasons. The first is a decode error, which means a keyframe could not be read. The second is a side below 256 pixels, which means any keyframe with a smaller width or height than 256. The third is flatness, which means the median grey standard deviation over the item's keyframes is below 8. The fourth is letterboxing, which means the median letterbox fraction is above 0.35. The fifth is blur, which means the median sharpness is below 20 for stills and below 5 for sequences. Stills are judged on their one keyframe. Sequences are judged on the median of their keyframes, so one dark shot or one fade does not reject a whole video. A rejected item keeps its row in the manifest with split filtered and is left out of the duplicate search, so the decision can be audited. The manifest does not record which rule fired. The notebook printed these reasons, but the printed output was not saved, so this section gives no per-reason counts.
+
+\Cref{tab:data-split-source} gives the per-source totals. In this run \Res{data.summary.filtered} of \Res{data.summary.items} items were filtered. Filtering removed \Res{data.split_by_source.vimeo_septuplet.filtered} Vimeo-90K septuplet items and \Res{data.split_by_source.game_stills.filtered} game-still items, and the remaining filtered items came from the triplet and Vimeo-1080p sources. The filtered items are a small share of all items. \Preliminary
+
+\begin{table}[!htbp]
+\caption{Split per source. Drop means removed as a near copy of test content or as a member of a test group, and filtered means removed by a quality rule}\label{tab:data-split-source}
+\footnotesize
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Source & Train & Val & Test & Drop & Filtered \\
+\midrule
+DIV2K & \Res{data.split_by_source.div2k.train} & \Res{data.split_by_source.div2k.val} & \Res{data.split_by_source.div2k.test} & \Res{data.split_by_source.div2k.drop} & \Res{data.split_by_source.div2k.filtered} \\
+Flickr2K & \Res{data.split_by_source.flickr2k.train} & \Res{data.split_by_source.flickr2k.val} & \Res{data.split_by_source.flickr2k.test} & \Res{data.split_by_source.flickr2k.drop} & \Res{data.split_by_source.flickr2k.filtered} \\
+Game stills & \Res{data.split_by_source.game_stills.train} & \Res{data.split_by_source.game_stills.val} & \Res{data.split_by_source.game_stills.test} & \Res{data.split_by_source.game_stills.drop} & \Res{data.split_by_source.game_stills.filtered} \\
+GameIR & \Res{data.split_by_source.gameir.train} & \Res{data.split_by_source.gameir.val} & \Res{data.split_by_source.gameir.test} & \Res{data.split_by_source.gameir.drop} & \Res{data.split_by_source.gameir.filtered} \\
+REDS & \Res{data.split_by_source.reds.train} & \Res{data.split_by_source.reds.val} & \Res{data.split_by_source.reds.test} & \Res{data.split_by_source.reds.drop} & \Res{data.split_by_source.reds.filtered} \\
+MPI Sintel & \Res{data.split_by_source.sintel.train} & \Res{data.split_by_source.sintel.val} & \Res{data.split_by_source.sintel.test} & \Res{data.split_by_source.sintel.drop} & \Res{data.split_by_source.sintel.filtered} \\
+TartanAir & \Res{data.split_by_source.tartanair.train} & \Res{data.split_by_source.tartanair.val} & \Res{data.split_by_source.tartanair.test} & \Res{data.split_by_source.tartanair.drop} & \Res{data.split_by_source.tartanair.filtered} \\
+Vid4 & \Res{data.split_by_source.vid4.train} & \Res{data.split_by_source.vid4.val} & \Res{data.split_by_source.vid4.test} & \Res{data.split_by_source.vid4.drop} & \Res{data.split_by_source.vid4.filtered} \\
+Vimeo-1080p & \Res{data.split_by_source.vimeo1080p.train} & \Res{data.split_by_source.vimeo1080p.val} & \Res{data.split_by_source.vimeo1080p.test} & \Res{data.split_by_source.vimeo1080p.drop} & \Res{data.split_by_source.vimeo1080p.filtered} \\
+Vimeo-90K septuplets & \Res{data.split_by_source.vimeo_septuplet.train} & \Res{data.split_by_source.vimeo_septuplet.val} & \Res{data.split_by_source.vimeo_septuplet.test} & \Res{data.split_by_source.vimeo_septuplet.drop} & \Res{data.split_by_source.vimeo_septuplet.filtered} \\
+Vimeo-90K triplets & \Res{data.split_by_source.vimeo_triplet.train} & \Res{data.split_by_source.vimeo_triplet.val} & \Res{data.split_by_source.vimeo_triplet.test} & \Res{data.split_by_source.vimeo_triplet.drop} & \Res{data.split_by_source.vimeo_triplet.filtered} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\Cref{fig:data-quality} shows the distributions that the rules act on. The grey standard deviation of the septuplet keyframes forms a bell shape centred well above the threshold of 8, so the flatness rule touches only the lower tail. The sharpness panel is on a logarithmic axis, and its two dashed lines mark the still and sequence thresholds, which are both drawn for every source. The sequences sit well above the sequence threshold, the stills sit higher still, and the sequence threshold cuts only the far lower tail. Several keyframes have a sharpness of zero, which the figure shows at the left edge. The letterbox panel is concentrated at zero, with a smaller group near 0.25 and few keyframes beyond the threshold of 0.35. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\textwidth]{\DataOut/plots/quality_distributions.png}
+\caption{Keyframe statistics that the filters use, by source: grey standard deviation (left), log10 sharpness (centre) and letterbox fraction (right). Dashed lines mark the thresholds. The sharpness panel draws both the still and the sequence thresholds for every source}\label{fig:data-quality}
+\end{figure}
+
+\Cref{fig:data-rejected} shows the first sixteen rejected keyframes. Most are very dark. The flatness and letterbox rules reject dark frames, and the blurry examples are soft frames with little texture. The sharpness rule therefore rejects low-texture content as well as defocus, and the label blurry means low Laplacian variance. The figure is a selection, not a sample. The code takes the first two rejected keyframes of each source and reason and then keeps the first sixteen rows, so the grid shows only the Vimeo-90K septuplets, the Vimeo-90K triplets and the game stills. The notebook text describes examples from every source and reason, but the selection does not do that. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth]{\DataOut/plots/rejected_examples.png}
+\caption{The first sixteen rejected keyframes in keyframe order, with the reasons of each item. The grid does not cover every source or reason, because the code keeps the first sixteen rows of its selection}\label{fig:data-rejected}
+\end{figure}
+
+\subsection{Keyframe selection and statistics}\label{sec:data-keyframes}
+
+Each item is represented by keyframes, chosen from its frame list. A still and a sequence of one frame give one keyframe, which is the frame itself. A sequence of two to 23 frames gives its middle frame. A sequence of 24 or more frames gives three keyframes, at 10, 50 and 90 percent of its length, because the first and last frames of a long video are often fades or black. The triplets and septuplets are shorter than 24 frames, and so they contribute one keyframe each, while the long REDS, Vimeo-1080p and TartanAir sequences contribute three each. The total is \Res{data.summary.keyframes} keyframes for \Res{data.summary.items} items.
+
+Each keyframe is decoded in a pool of spawned worker processes. The workers are spawned, not forked, so they do not inherit the CUDA context or the thread locks of the notebook kernel, and a dead worker raises an error instead of hanging. Each keyframe gives a 256 by 256 thumbnail, resized with bilinear filtering. The resize does not keep the aspect ratio, so a 16:9 frame is squashed horizontally and a 4:3 frame is squashed less. This is a property of the method and its effect on copy recall is not measured. The thumbnail is the input to the hashes, the embedding and the local features, and the full-resolution statistics above are computed before the resize. \Cref{tab:data-keyframes} gives the mean statistics per source. The sharpness mean is largest for Vid4 and smallest for the Vimeo-90K septuplets. Sharpness is measured on the 256 pixel thumbnail, so the value also depends on how much each source was reduced to that size, and it is not a measure of image quality across sources. \Observation
+
+\begin{table}[!htbp]
+\caption{Keyframe counts and mean statistics per source. Width and height are in pixels, grey standard deviation is on the full-resolution frame, sharpness is the Laplacian variance of the 256 by 256 thumbnail, and letterbox is the largest fraction in the source}\label{tab:data-keyframes}
+\footnotesize
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Source & Keyframes & Width & Height & Grey std & Sharpness & Letterbox max \\
+\midrule
+DIV2K & \Res{data.keyframe_stats.div2k.n} & \Res{data.keyframe_stats.div2k.width.mean} & \Res{data.keyframe_stats.div2k.height.mean} & \Res{data.keyframe_stats.div2k.std.mean} & \Res{data.keyframe_stats.div2k.sharpness.mean} & \Res{data.keyframe_stats.div2k.letterbox.max} \\
+Flickr2K & \Res{data.keyframe_stats.flickr2k.n} & \Res{data.keyframe_stats.flickr2k.width.mean} & \Res{data.keyframe_stats.flickr2k.height.mean} & \Res{data.keyframe_stats.flickr2k.std.mean} & \Res{data.keyframe_stats.flickr2k.sharpness.mean} & \Res{data.keyframe_stats.flickr2k.letterbox.max} \\
+Game stills & \Res{data.keyframe_stats.game_stills.n} & \Res{data.keyframe_stats.game_stills.width.mean} & \Res{data.keyframe_stats.game_stills.height.mean} & \Res{data.keyframe_stats.game_stills.std.mean} & \Res{data.keyframe_stats.game_stills.sharpness.mean} & \Res{data.keyframe_stats.game_stills.letterbox.max} \\
+GameIR & \Res{data.keyframe_stats.gameir.n} & \Res{data.keyframe_stats.gameir.width.mean} & \Res{data.keyframe_stats.gameir.height.mean} & \Res{data.keyframe_stats.gameir.std.mean} & \Res{data.keyframe_stats.gameir.sharpness.mean} & \Res{data.keyframe_stats.gameir.letterbox.max} \\
+REDS & \Res{data.keyframe_stats.reds.n} & \Res{data.keyframe_stats.reds.width.mean} & \Res{data.keyframe_stats.reds.height.mean} & \Res{data.keyframe_stats.reds.std.mean} & \Res{data.keyframe_stats.reds.sharpness.mean} & \Res{data.keyframe_stats.reds.letterbox.max} \\
+MPI Sintel & \Res{data.keyframe_stats.sintel.n} & \Res{data.keyframe_stats.sintel.width.mean} & \Res{data.keyframe_stats.sintel.height.mean} & \Res{data.keyframe_stats.sintel.std.mean} & \Res{data.keyframe_stats.sintel.sharpness.mean} & \Res{data.keyframe_stats.sintel.letterbox.max} \\
+TartanAir & \Res{data.keyframe_stats.tartanair.n} & \Res{data.keyframe_stats.tartanair.width.mean} & \Res{data.keyframe_stats.tartanair.height.mean} & \Res{data.keyframe_stats.tartanair.std.mean} & \Res{data.keyframe_stats.tartanair.sharpness.mean} & \Res{data.keyframe_stats.tartanair.letterbox.max} \\
+Vid4 & \Res{data.keyframe_stats.vid4.n} & \Res{data.keyframe_stats.vid4.width.mean} & \Res{data.keyframe_stats.vid4.height.mean} & \Res{data.keyframe_stats.vid4.std.mean} & \Res{data.keyframe_stats.vid4.sharpness.mean} & \Res{data.keyframe_stats.vid4.letterbox.max} \\
+Vimeo-1080p & \Res{data.keyframe_stats.vimeo1080p.n} & \Res{data.keyframe_stats.vimeo1080p.width.mean} & \Res{data.keyframe_stats.vimeo1080p.height.mean} & \Res{data.keyframe_stats.vimeo1080p.std.mean} & \Res{data.keyframe_stats.vimeo1080p.sharpness.mean} & \Res{data.keyframe_stats.vimeo1080p.letterbox.max} \\
+Vimeo-90K septuplets & \Res{data.keyframe_stats.vimeo_septuplet.n} & \Res{data.keyframe_stats.vimeo_septuplet.width.mean} & \Res{data.keyframe_stats.vimeo_septuplet.height.mean} & \Res{data.keyframe_stats.vimeo_septuplet.std.mean} & \Res{data.keyframe_stats.vimeo_septuplet.sharpness.mean} & \Res{data.keyframe_stats.vimeo_septuplet.letterbox.max} \\
+Vimeo-90K triplets & \Res{data.keyframe_stats.vimeo_triplet.n} & \Res{data.keyframe_stats.vimeo_triplet.width.mean} & \Res{data.keyframe_stats.vimeo_triplet.height.mean} & \Res{data.keyframe_stats.vimeo_triplet.std.mean} & \Res{data.keyframe_stats.vimeo_triplet.sharpness.mean} & \Res{data.keyframe_stats.vimeo_triplet.letterbox.max} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Copy detection}\label{sec:data-copy}
+
+A copy is a keyframe that shows the same picture as another keyframe, after a change of scale, compression, colour, crop or mirror. Copy detection must separate copies from similar pictures. Two photographs of the same kind of scene, two frames of one game or two skylines can be close in a global description while showing different pictures. The pipeline therefore uses a two-stage rule. The first stage proposes candidate pairs with cheap global descriptions. The second stage confirms a pair with a geometric check, and two further tests accept pairs whose global scores lie beyond every hard negative.
+\paragraph{Perceptual hashes.} A perceptual hash maps an image to a short bit string that changes little under compression and scaling \cite{venkatesan2000robust}. The variant below, a DCT hash with a difference hash (dHash) alongside it, is this code's choice. The pHash of a keyframe takes its 32 by 32 grey image $G$ and computes the two-dimensional discrete cosine transform
+\begin{equation}
+C=D\,G\,D^{\mathsf T},\label{eq:data-phash}
+\end{equation}
+where $D$ is the 32 by 32 orthonormal DCT-II matrix. The 8 by 8 block of lowest frequencies is kept, and the direct-current term is left out of the median. Each of the 64 bits is one if its coefficient is above that median, and zero otherwise. The dHash takes a 9 by 8 grey image and sets each bit to one when the pixel to the right is brighter than the pixel on the left. The distance between two hashes is the Hamming distance, which counts the bits that differ. The code uses 64-bit hashes, so the distance ranges from 0 to 64. Hashes catch near-exact copies, including rescaled, recompressed and recoloured frames. They do not catch crops or mirror images, and the later stages cover those.
+
+\paragraph{Global embeddings and cosine similarity.} The embedding uses DINOv2-small, a self-supervised vision transformer \cite{oquab2024dinov2}, and the code's descriptor for each image has 384 dimensions, as the embedding log of the data pipeline records. The code takes the pooled output of the model for each thumbnail after bilinear resizing to 224 by 224, with the usual channel means and standard deviations, and it normalises the output to unit length. For two unit vectors $u$ and $v$, the cosine similarity is $u\cdot v$, and for general vectors it is
+\begin{equation}
+\cos(u,v)=\frac{u\cdot v}{\lVert u\rVert\,\lVert v\rVert}.\label{eq:data-cos}
+\end{equation}
+A cosine near one means that the two descriptors point the same way. Two different pictures with similar content can also have a high cosine, which is why the embedding only proposes candidates. The model runs in half precision on both GPUs, in batches of 256 thumbnails.
+
+\paragraph{Exhaustive neighbour search.} For every searched keyframe, the code finds its $k$ neighbours with the largest dot products, where $k=\Res{data.config.cfg.dedup.k}$. A neighbour must belong to a different leakage group, so a keyframe never matches its own sequence. The search computes the full similarity matrix in chunks of 2,048 rows on the GPU and takes the top $k$ of each row. Hash candidates are found in the same spirit. Each hash bit becomes $+1$ or $-1$, and two hashes have a Hamming distance $h$ exactly when the dot product of their $\pm1$ vectors is $64-2h$. The code therefore finds all pairs whose dot product passes $64-2h$, in chunks of 4,096 rows, and it looks only at textured keyframes, which are those with a grey standard deviation of at least \Res{data.config.cfg.dedup.min_std_hash}.
+
+\paragraph{Local features and geometric verification.} The second stage looks for shared structure. The code runs the scale-invariant feature transform (SIFT) on each thumbnail and on its mirror image, keeps up to \Res{data.config.cfg.dedup.sift_features} keypoints per image, and stores their 128-dimensional descriptors \cite{lowe2004sift}. For two keyframes $A$ and $B$, a keypoint of $A$ is matched to its nearest keypoint in $B$ when the nearest descriptor distance is less than 0.8 times the second nearest distance. This is the ratio test of Lowe, which removes matches that are about as close to a second candidate. At least six matches are needed. The matches are then fitted with one affine map, which sends a point $p$ of $A$ to a point of $B$ by
+\begin{equation}
+p'=Ap+t,\qquad A\in\mathbb{R}^{2\times2},\ t\in\mathbb{R}^{2},\label{eq:data-affine}
+\end{equation}
+where $A$ carries rotation, scale and shear and $t$ carries the translation. The fit uses random sample consensus (RANSAC), which repeatedly fits the map to a random subset of matches and keeps the map with the most matches within 4.0 pixels of the prediction, for up to 1,000 iterations \cite{fischler1981ransac}. The map is rejected when its determinant is not positive or when its singular values fall outside the range 0.2 to 5. Those values would mean a collapsed or extreme scale. At least six inliers must remain.
+
+The verification score is the grid coverage. The code divides the first image into an 8 by 8 grid of cells and counts the cells that contain at least one inlier. The score therefore ranges from 0 to 64. This rule is what makes the verification robust. A logo, a heads-up display or a caption can produce matches in one corner, but those matches cover only the cells of that corner. Two different frames then score low even when they share a small object. The code scores each pair as the larger of the scores against the second image and against its mirror, so a mirrored copy is also found.
+
+\paragraph{The edge rule.} A pair becomes a duplicate edge when one of three tests passes. The exact-hash test passes when the pHash distance is at most $h_{\mathrm{exact}}$, the dHash distance is at most $2h_{\mathrm{exact}}+4$, and both keyframes are textured. The strong-embedding test passes when the cosine is at least $t_{\mathrm{strong}}$. The verification test passes when the grid score is at least $t_{\mathrm{cells}}$. The labels are assigned in that order and a later test overwrites an earlier one, so a pair that passes several tests is labelled verified first. The thresholds come from the calibration of \cref{sec:data-calibration}. A candidate pair is proposed when its cosine is at least $t_{\mathrm{ret}}$, or when its pHash distance is at most $h_{\mathrm{cand}}$ on textured keyframes. If the hash candidates exceed 20 per keyframe, the hash radius is tightened. In this run the candidate count was far below that limit, so the radius was not changed.
+
+The search proposed \Res{data.duplicate_search.candidates} unique candidate pairs. The embedding stage proposed \Res{data.duplicate_search.candidates_embedding} pairs before merging and the hash stage proposed \Res{data.duplicate_search.candidates_phash} pairs, so the embedding stage supplied almost all candidates. The verification confirmed \Res{data.duplicate_search.edges} edges before the audit, of which \Res{data.duplicate_search.edges_verified} were verified, \Res{data.duplicate_search.edges_strong_embedding} were strong-embedding edges and \Res{data.duplicate_search.edges_exact_hash} were exact-hash edges. \Preliminary
+
+\Cref{fig:data-duplicates} shows ten edges, with the cross-source ones first. The top row shows the first keyframe of each pair and the bottom row the second, and the captions give the source, the rule, the cosine and the grid score. Every pair on the figure looks like one picture, so the shown edges are the kind that a reader would accept as copies. The Vimeo-90K septuplet and Vimeo-1080p pairs appear to show the same footage. The game-still pairs are within one source, and the drops below show that many training game stills are copies of test frames. The strong-embedding pairs have low grid scores although the pictures look identical. The grid score counts only the cells that SIFT matches cover, so a frame with few matches can score low, but this was not checked for these pairs. These readings come from the figure, and the strong-embedding edges were not checked one by one. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth]{\DataOut/plots/duplicate_examples.png}
+\caption{Ten duplicate edges, cross-source pairs first. Each column shows the two keyframes of one edge. The title above the top row gives the source of the first keyframe, the rule, the cosine and the grid score, and the title below the bottom row gives the source of the second keyframe}\label{fig:data-duplicates}
+\end{figure}
+
+\subsection{Calibration on synthetic copies}\label{sec:data-calibration}
+
+The thresholds are calibrated on copies that the code makes itself, because the pipeline does not know which real pairs are copies. Positives are copies of random keyframes, with \Res{data.config.cfg.calibration_pairs} copies in this run. Half are light copies and half are heavy copies. A light copy is rescaled by a factor between 0.4 and 1.0 and returned to 256 pixels, with a brightness and contrast change and a shift in half of the cases, and a Gaussian blur with a radius between 0.5 and 1.5 in 30 percent of the cases. Every copy is recompressed as a JPEG with a quality between 35 and 92. A heavy copy also takes a random crop covering 60 to 95 percent of the area, which is resized to 256 pixels, and then receives the same colour, blur and recompression steps as a light copy. It is mirrored with probability one half, rotated by up to four degrees with probability 0.3, and given the text ``SAMPLE 1080p'' with probability 0.3. Light copies are what a perceptual hash is meant to survive. Heavy copies add geometric changes that only the verification can handle.
+
+Negatives come from two sets. Random negatives are pairs of keyframes drawn from different groups. Hard negatives are the nearest neighbour in another group for each keyframe of three sources whose groups are known to be distinct: DIV2K, Sintel and TartanAir. Distinct means that two different groups never show the same content, which is the premise of the hard set. The random set gives \Res{data.calibration_scores.0.random.n} pairs and the hard set gives \Res{data.calibration_scores.0.hard.n} unique pairs in this run. Random negatives are sampled from the whole pool, so a random pair can be a genuine copy, which is why the code takes the 99.9th percentile of the random set rather than its maximum.
+
+Each pair is scored with the four measures of \cref{sec:data-copy}, which are the cosine, the pHash Hamming distance, the dHash distance and the grid score. The recall of a rule is the share of positives it flags. The false positive count is the number of negatives it flags. The precision is the number of flagged positives divided by all flagged pairs. For the thresholds, let $Q_q$ denote the $q$-quantile of a set of values, and clip to a range with $\mathrm{clip}$. The code sets
+\begin{align}
+t_{\mathrm{ret}}&=\mathrm{clip}\big(Q_{0.02}(\cos_{\mathrm{copy}}),\,0.5,\,0.9\big),\label{eq:data-tret}\\
+t_{\mathrm{strong}}&=\mathrm{clip}\big(N_{\cos}+0.03,\,0.92,\,0.995\big),\label{eq:data-tstrong}\\
+t_{\mathrm{cells}}&=\mathrm{clip}\big(N_{\mathrm{cells}}+2,\,10,\,40\big),\label{eq:data-tcells}\\
+h_{\mathrm{exact}}&=\mathrm{clip}\big(M_{\mathrm{ham}}-4,\,0,\,6\big),\qquad h_{\mathrm{cand}}=\mathrm{clip}\big(Q_{0.95}(\mathrm{ham}_{\mathrm{light}}),\,h_{\mathrm{exact}},\,12\big),\label{eq:data-thr}
+\end{align}
+where $N$ is the most similar negative score, which is the larger of the 99.9th percentile of the random negatives and the most similar hard negative, $M_{\mathrm{ham}}$ is the smaller of the 0.1th percentile of the random negative Hamming distances and the smallest hard negative distance, and $\cos_{\mathrm{copy}}$ and $\mathrm{ham}_{\mathrm{light}}$ are the cosine of all copies and the Hamming distances of the light copies. The first threshold retrieves 98 percent of copies, the second accepts pairs above every negative without verification, the third lies above the most similar negative's grid score, the fourth lies four bits below the closest negative's pHash distance, and the fifth covers 95 percent of light copies without going below the fourth. The threshold $t_{\mathrm{ret}}$ only proposes candidates, and an edge needs one of the three tests of the edge rule.
+
+\Cref{tab:data-copies} gives the score distribution of each group, and \cref{tab:data-calibration} gives the thresholds and the recalls. The 99.9th percentile of the random negatives is set by the few largest values, so one unusual random pair can move $t_{\mathrm{cells}}$ or $t_{\mathrm{strong}}$. The recall figures are over the calibration set and the precision is over its negatives, so they are not measured on real copies. The real share of copies in the data is unknown. \Preliminary
+
+\begin{table}[!htbp]
+\caption{Scores of the calibration pairs by group. Cosine is the DINOv2 cosine, Hamming the pHash distance and cells the grid score of the verification}\label{tab:data-copies}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Group & Pairs & Cosine mean & Cosine max & Hamming mean & Hamming min & Cells mean \\
+\midrule
+Copies, light & \Res{data.calibration_scores.1.light.n} & \Res{data.calibration_scores.1.light.cosine.mean} & \Res{data.calibration_scores.1.light.cosine.max} & \Res{data.calibration_scores.1.light.hamming.mean} & \Res{data.calibration_scores.1.light.hamming.min} & \Res{data.calibration_scores.1.light.cells.mean} \\
+Copies, heavy & \Res{data.calibration_scores.1.heavy.n} & \Res{data.calibration_scores.1.heavy.cosine.mean} & \Res{data.calibration_scores.1.heavy.cosine.max} & \Res{data.calibration_scores.1.heavy.hamming.mean} & \Res{data.calibration_scores.1.heavy.hamming.min} & \Res{data.calibration_scores.1.heavy.cells.mean} \\
+Hard negatives & \Res{data.calibration_scores.0.hard.n} & \Res{data.calibration_scores.0.hard.cosine.mean} & \Res{data.calibration_scores.0.hard.cosine.max} & \Res{data.calibration_scores.0.hard.hamming.mean} & \Res{data.calibration_scores.0.hard.hamming.min} & \Res{data.calibration_scores.0.hard.cells.mean} \\
+Random negatives & \Res{data.calibration_scores.0.random.n} & \Res{data.calibration_scores.0.random.cosine.mean} & \Res{data.calibration_scores.0.random.cosine.max} & \Res{data.calibration_scores.0.random.hamming.mean} & \Res{data.calibration_scores.0.random.hamming.min} & \Res{data.calibration_scores.0.random.cells.mean} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\caption{Calibrated thresholds and the recalls and precision they give on the calibration set. Recall is the share of copies flagged, and the false positive count is over all negatives}\label{tab:data-calibration}
+\footnotesize
+\begin{tabular}{@{}llr@{}}
+\toprule
+Quantity & Meaning & Value \\
+\midrule
+$t_{\mathrm{ret}}$ & candidate cosine & \Res{data.dedup_calibration.embedding.t_ret} \\
+Recall at $t_{\mathrm{ret}}$ & share of copies retrieved & \Res{data.dedup_calibration.embedding.recall_at_t_ret} \\
+$t_{\mathrm{strong}}$ & strong cosine & \Res{data.dedup_calibration.embedding.t_strong} \\
+Recall at $t_{\mathrm{strong}}$ & share of copies accepted without verification & \Res{data.dedup_calibration.embedding.recall_at_t_strong} \\
+$t_{\mathrm{cells}}$ & verification threshold in cells & \Res{data.dedup_calibration.verify.t_cells} \\
+Recall of verification & share of copies with a grid score of at least $t_{\mathrm{cells}}$ & \Res{data.dedup_calibration.verify.recall} \\
+$h_{\mathrm{exact}}$ & exact-hash distance & \Res{data.dedup_calibration.phash.h_exact} \\
+$h_{\mathrm{cand}}$ & candidate hash distance & \Res{data.dedup_calibration.phash.h_cand} \\
+Recall of light copies at $h_{\mathrm{exact}}$ & share of light copies & \Res{data.dedup_calibration.phash.recall_light_at_h_exact} \\
+Combined recall & share of all copies flagged by the edge rule & \Res{data.dedup_calibration.rule.recall} \\
+Combined recall, light & share of light copies flagged & \Res{data.dedup_calibration.rule.recall_light} \\
+Combined recall, heavy & share of heavy copies flagged & \Res{data.dedup_calibration.rule.recall_heavy} \\
+False positives & negatives flagged by the edge rule & \Res{data.dedup_calibration.rule.false_positives} \\
+Precision & flagged copies over all flagged pairs & \Res{data.dedup_calibration.rule.precision} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The combined rule flags light copies almost completely, and its recall on heavy copies is lower, which is expected because a crop removes part of the picture and a rotation changes the geometry that the affine fit must absorb. The rule has \Res{data.dedup_calibration.rule.false_positives} false positive among the negatives. That negative is the random pair with the largest grid score, which is \Res{data.calibration_scores.0.random.cells.max} cells at a cosine of \Res{data.calibration_scores.0.random.cosine.max}. The thumbnails are not saved, so the pair was not inspected, and it may be a genuine copy that random sampling drew. \Observation
+
+\Cref{fig:data-calibration} shows the four diagnostic plots. The cosine histogram separates the copies, which lie at the high end, from the random negatives near zero, and the hard negatives sit between them. The two thresholds lie at the edges of the copy distribution and above the hard negatives. The grid-score panel uses a logarithmic count axis. Copies spread over tens of cells, most negatives score in the low single digits, and the threshold lies above the random tail. The pHash panel shows light copies at distances near zero, heavy copies at intermediate distances, and the negatives far above the exact-hash threshold, which is why light copies fall under it. The receiver operating characteristic of the cosine alone reaches only part of the copies at the false positive rates where the rule keeps almost all of them. This is why the pipeline does not use the cosine alone. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\textwidth]{\DataOut/plots/dedup_calibration.png}
+\caption{Calibration diagnostics. From left: cosine histograms of the four groups with $t_\mathrm{ret}$ and $t_\mathrm{strong}$ dashed, grid scores on a log count axis with $t_\mathrm{cells}$, pHash distances with $h_\mathrm{exact}$ and $h_\mathrm{cand}$, and the receiver operating characteristic of the cosine alone}\label{fig:data-calibration}
+\end{figure}
+
+\subsection{Leakage groups and the split}\label{sec:data-split}
+
+The leakage group is the unit that the split must keep together. Its definition depends on the source. Each still is its own group, so a still never shares a group with another still. A video or rendered sequence takes its folder name as the group for level 1 sources (REDS and Vid4), and the parent folder for level 2 sources, which are the two Vimeo-90K sets. Vimeo-1080p uses each video as its own group. Sintel uses the scene prefix, TartanAir uses the environment, and GameIR uses the town. The group is written as the source name followed by the group name, so groups from different sources never collide.
+
+The split works on the duplicate edges and the groups together, in four steps. The first step is provenance. A group that holds an active test item is test-only, and every other item of that group is dropped with reason test group. The second step is content. Starting from the test items, the code walks the duplicate edges only, and never the shared groups, so every non-test item reached through an edge is dropped with reason test duplicate. A walk through the edges can pass through several items, so a chain of copies is also dropped. Walking only through edges stops one copied clip from taking its whole folder with it. The third step forms the remaining components. Two remaining items are in the same component when they share a group or when they are joined by an edge, and each component is found with a union-find structure. The fourth step assigns each component to validation or to training. The component goes to validation when a hash of the seed and the component's root item identifier, taken modulo 10,000, falls below $10{,}000\times$ the validation fraction. The validation fraction is \Res{data.config.cfg.val_fraction}, so about one component in twenty is validation. The assignment is deterministic and depends only on the seed and the root.
+
+\Cref{tab:data-split} gives the split report and \cref{tab:data-split-source} gives the split per source. In this run \Res{data.split_report.dropped_test_duplicate} items were dropped as test duplicates and \Res{data.split_report.dropped_test_group} as test groups. The zero count of test-group drops follows from the group definitions, because no training item of these sources shares a group with a test item. The largest duplicate cluster holds \Res{data.split_report.largest_duplicate_cluster} items, and the remaining items form \Res{data.split_report.trainval_components} components, of which the largest holds \Res{data.split_report.largest_trainval_component} items. \Preliminary
+
+\begin{table}[!htbp]
+\caption{Split report of the saved run. Active items are the items not filtered, and the split counts are the final splits after the audit}\label{tab:data-split}
+\footnotesize
+\begin{tabular}{@{}lr@{}}
+\toprule
+Quantity & Value \\
+\midrule
+Items & \Res{data.split_report.items} \\
+Active items (not filtered) & \Res{data.split_report.active} \\
+Duplicate edges, after audit repairs & \Res{data.split_report.dup_edges} \\
+Largest duplicate cluster & \Res{data.split_report.largest_duplicate_cluster} \\
+Train and validation components & \Res{data.split_report.trainval_components} \\
+Largest train and validation component & \Res{data.split_report.largest_trainval_component} \\
+Dropped, test group & \Res{data.split_report.dropped_test_group} \\
+Dropped, test duplicate & \Res{data.split_report.dropped_test_duplicate} \\
+Train & \Res{data.split_report.split_counts.train} \\
+Validation & \Res{data.split_report.split_counts.val} \\
+Test & \Res{data.split_report.split_counts.test} \\
+Dropped & \Res{data.split_report.split_counts.drop} \\
+Filtered & \Res{data.split_report.split_counts.filtered} \\
+Audit rounds & \Res{data.split_report.audit_rounds} \\
+Cross-split violations after the audit & \Res{data.split_report.audit_violations} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\Cref{fig:data-split} shows the split per source as bars. The Vimeo-90K septuplets are the largest block of training and validation data, and the Vimeo-90K triplets are test only. The game stills account for most drops in this run, and every one of their drops is a training-role item linked to test frames. \Cref{tab:data-split-source} gives that count in full, and the fraction of the game-still training items that were dropped is \ResRatio{data.split_by_source.game_stills.drop}{data.catalogue_summary.game_stills.still.train.items}. \Preliminary{} The septuplet drops are the second group. The cross-source edges link the septuplets mainly to the triplet test set and to Vimeo-1080p videos, and the septuplet drops are reached from test items through those edges. This is the leakage that the rule removes from the septuplet training data. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.75\textwidth]{\DataOut/plots/split_by_source.png}
+\caption{Items per source and split, after the audit. Drop is a near copy of test content or a member of a test group, and filtered is a quality rejection}\label{fig:data-split}
+\end{figure}
+
+\subsection{Leakage audit}\label{sec:data-audit}
+
+The split is checked after it is made. The audit compares each validation keyframe with the training keyframes, and each test keyframe with the training and validation keyframes. For each query it takes the \Res{data.config.cfg.dedup.audit_k} nearest references by cosine and the nearest reference by pHash. Every such pair is scored with the same rule as the search. Any pair that passes the rule is a violation, which is a duplicate across two splits. Each violation is added as an edge, and the split is made again from the start. The loop repeats until a round finds no violation, up to \Res{data.config.cfg.dedup.audit_rounds} rounds. The notebook asserts that no violation remains.
+
+The first round of this run found \ResAbsDiff{data.summary.edges_verified}{data.duplicate_search.edges_verified} cross-split duplicates, and the verified edges rose by the same number from the search to the final split. The second round found none, so the audit stopped after \Res{data.summary.audit_rounds} rounds with \Res{data.summary.audit_violations} violations left. The violations of the first round were not saved, so their rule and cosines are not recorded in the outputs, and the verified label is inferred from the change in rule counts. \Preliminary
+
+\Cref{tab:data-audit} gives how close the validation and test keyframes come to their nearest references. The worst values are the largest over all keyframes and the median is the typical value. The cosine of the worst validation keyframe is \Res{data.leakage_audit.val.train.max_cosine.worst}, and that of the worst test keyframe is \Res{data.leakage_audit.test.train_val.max_cosine.worst}. Both lie below the strong-embedding threshold of \Res{data.dedup_calibration.embedding.t_strong}. The largest grid score is \Res{data.leakage_audit.test.train_val.max_verification_cells.worst} cells, below the threshold of \Res{data.dedup_calibration.verify.t_cells}, and the smallest pHash distance is \Res{data.leakage_audit.test.train_val.min_phash_hamming.worst}, which is inside the exact-hash range, so some test keyframe has an identical hash to a training keyframe. Because the audit found no violation, the edge rule must reject that pair, which can only happen if the pair is not textured or its dHash distance exceeds the bound of the edge rule. The pair itself is not in the outputs, so this is an inference from the rule and not an observation. \Preliminary
+
+\begin{table}[!htbp]
+\caption{Audit of the final split. Each row is a comparison of one split with its references. Worst is the largest value over the keyframes for cosine and grid score, and the smallest for the pHash distance. Median is the typical value over the keyframes}\label{tab:data-audit}
+\footnotesize
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Split and references & Metric & Worst & Median & Violations \\
+\midrule
+Validation against training & Maximum cosine & \Res{data.leakage_audit.val.train.max_cosine.worst} & \Res{data.leakage_audit.val.train.max_cosine.median} & \multirow{3}{*}{\Res{data.leakage_violations.rows}} \\
+ & Maximum grid score & \Res{data.leakage_audit.val.train.max_verification_cells.worst} & \Res{data.leakage_audit.val.train.max_verification_cells.median} & \\
+ & Minimum pHash distance & \Res{data.leakage_audit.val.train.min_phash_hamming.worst} & \Res{data.leakage_audit.val.train.min_phash_hamming.median} & \\
+Test against training and validation & Maximum cosine & \Res{data.leakage_audit.test.train_val.max_cosine.worst} & \Res{data.leakage_audit.test.train_val.max_cosine.median} & \multirow{3}{*}{\Res{data.leakage_violations.rows}} \\
+ & Maximum grid score & \Res{data.leakage_audit.test.train_val.max_verification_cells.worst} & \Res{data.leakage_audit.test.train_val.max_verification_cells.median} & \\
+ & Minimum pHash distance & \Res{data.leakage_audit.test.train_val.min_phash_hamming.worst} & \Res{data.leakage_audit.test.train_val.min_phash_hamming.median} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\Cref{fig:data-leakage} shows the audit as histograms. The cosine panel places most test keyframes at a nearest-reference cosine in the middle of the range, with a secondary group at high cosines, and no keyframe reaches the strong-embedding line. The grid-score panel is on a logarithmic count axis, and most keyframes score in the low single digits, far below the threshold line. The pHash panel places most nearest distances in the middle teens, above the exact-hash line. These histograms show that the audit's nearest references are similar pictures and not copies. The secondary group at high cosines is the population that the audit must not confuse with copies, and the grid score is what separates it. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\textwidth]{\DataOut/plots/leakage_audit.png}
+\caption{Audit histograms for validation against training and test against training and validation. From left: the nearest-reference cosine with the strong-embedding line, the best grid score with the verification line, and the nearest pHash distance with the exact-hash line}\label{fig:data-leakage}
+\end{figure}
+
+The audit is a check and not a proof. It compares each keyframe with its five nearest cosine neighbours and with its nearest hash, so a copy that is neither among the five cosine neighbours nor the nearest hash would pass unseen. The candidate search used the same rule with a wider reach, which lowers that risk, but the audit has no independent test of its own coverage. The notebook text does not discuss this limit.
+
+\subsection{Final split, dataset card and stage times}\label{sec:data-final}
+
+The manifest is written with one row per item, with its source, kind, role, frame URIs, motion and depth URIs, leakage group, component, split and drop reason. The dataset card repeats the source, host, licence string, content type, item count and whether any item has exact motion or depth. \Cref{tab:data-card} gives the card with the item counts from the saved output and the licence strings of \cref{tab:data-sources}. The card records exact motion for Sintel and TartanAir and depth for TartanAir and GameIR, which matches the catalogue of \cref{tab:data-catalogue}.
+
+\begin{table}[!htbp]
+\caption{Dataset card. Items are the materialised and discovered items before the split. Exact motion and depth are yes where at least one item of the source carries them, as recorded in the saved card}\label{tab:data-card}
+\footnotesize
+\begin{tabular}{@{}llrll@{}}
+\toprule
+Source & Host & Items & Exact motion, depth & Content \\
+\midrule
+DIV2K & Kaggle & \Res{data.dataset_card.div2k.items} & no, no & photo \\
+Flickr2K & Kaggle & \Res{data.dataset_card.flickr2k.items} & no, no & photo \\
+Game stills & HF & \Res{data.dataset_card.game_stills.items} & no, no & game \\
+GameIR & HF & \Res{data.dataset_card.gameir.items} & no, yes & game \\
+REDS & Kaggle & \Res{data.dataset_card.reds.items} & no, no & video \\
+MPI Sintel & Kaggle & \Res{data.dataset_card.sintel.items} & yes, no & rendered \\
+TartanAir & HF & \Res{data.dataset_card.tartanair.items} & yes, yes & rendered \\
+Vid4 & Kaggle & \Res{data.dataset_card.vid4.items} & no, no & video \\
+Vimeo-1080p & HF & \Res{data.dataset_card.vimeo1080p.items} & no, no & video \\
+Vimeo-90K septuplets & Kaggle & \Res{data.dataset_card.vimeo_septuplet.items} & no, no & video \\
+Vimeo-90K triplets & Kaggle & \Res{data.dataset_card.vimeo_triplet.items} & no, no & video \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\Cref{tab:data-stages} gives the time of each stage. The Hugging Face transfer and the keyframe decoding take most of the run, and the copy detection, calibration and audit together take a few minutes. The run used \Res{data.hardware.gpus} \Res{data.hardware.gpu_list.0.name} GPUs with \Res{data.hardware.gpu_list.0.vram_gb} GB of memory each, \Res{data.hardware.cpu_count} CPU cores and \Res{data.hardware.ram_total_gb} GB of RAM, with Python \Res{data.hardware.python}, PyTorch \Res{data.hardware.torch} and CUDA \Res{data.hardware.cuda}. The total run time was \Res{data.summary.run_hours} hours. \Preliminary
+
+\Cref{fig:data-stages} plots the stage times on a logarithmic axis. The bars differ by more than three decades, from the manifest write to the Hugging Face transfer, and the figure makes clear that the data transfer and decoding dominate the time, while the search and the audit are small. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{\DataOut/plots/stage_times.png}
+\caption{Stage times of the saved run on a logarithmic axis, in minutes}\label{fig:data-stages}
+\end{figure}
+
+\subsection{Synthetic game-like sequences}\label{sec:data-synth}
+
+Only Sintel and TartanAir carry exact labels among the real sources, and the low-resolution inputs of real sequences are built in one of two ways described below. The synthetic renderer supplies the cases that real data does not: exact motion, exact depth, exact disocclusions, thin geometry and particles without motion vectors, HUD overlays, menus and scene cuts. The renderer is a PyTorch module, \texttt{nss\_synth.py}, that runs on the GPU. It takes a batch of cached still textures and returns a batch of frames with every label derived from the scene, so the labels are exact by construction. Its outputs go to the temporal super-resolution (TSR) and frame-generation (FG) networks described in \cref{M-sec:tsr} and \cref{M-sec:fg}. The TSR and FG notebooks give the textures and draw from the renderer in fixed proportions, which \cref{sec:data-synth-probs} lists.
+
+The renderer relies on definitions from \cref{sec:bg}, in particular the sampling and motion concepts of \cref{sec:bg-sampling} and \cref{sec:bg-motion}. The rest of this section describes the code in order.
+
+\subsubsection{Layered scene}\label{sec:data-synth-scene}
+
+A scene is a two-and-a-half-dimensional stack of two layers over a background. The background layer is a texture, which the notebooks take as 512 by 512 still crops. The foreground layer is another texture from the same batch, obtained by rolling the batch by one position, so that the foreground of each sample is the background of a different sample. With probability $0.25$ the foreground is a flat colour instead, drawn with each channel uniform on $[0,1]$ and multiplied by a per-pixel factor clipped to the range $[0.85,1]$. The foreground carries an alpha mask $a$ that decides where it covers the background. The mask has three parts. The first is a superellipse blob, whose boundary is the set where
+\begin{equation}
+\left|\frac{u'}{r_x}\right|^{p}+\left|\frac{v'}{r_y}\right|^{p}=1,\qquad p\in[1.5,4],\ r_x,r_y\in[0.12,0.42],\label{eq:data-alpha}
+\end{equation}
+with $(u',v')$ the screen position relative to the blob centre after a random rotation. The second part is up to four thin wires, each present with probability 0.6. A wire is a band between 0.6 and 2 texels wide, and it covers the points within half its width of a random line. The third part is a fence with probability 0.35, made of periodic bars with a period of 6 to 20 texels, a bar width of 1 to 2 texels and a random orientation. The fence fills a square region of side 1.2 around the blob. The union of the blob, the wires and the fence is the mask, and the foreground is present in a sample with probability 0.85. An absent foreground has a zero mask. The thin parts are deliberately between 0.6 and 2 texels wide, which is below what the low render resolution can resolve, so the renderer aliases them as a game does.
+
+For TSR samples, a world-space text tile is stamped into the background of a sample with probability 0.3, at a random integer position of the still. The notebooks render a text bank once with the Python imaging library, which holds 64 tiles of 128 by 24 pixels for TSR and 256 tiles of 160 by 28 pixels for FG. A tile is a word or phrase in a font, a translucent subtitle plate, a bar or a crosshair. The fonts are the font set that the runtime finds on the system, so the tile images depend on the machine. The FG batches do not stamp world text, because the FG renderer creates its scenes without a text bank.
+
+\subsubsection{Motion and speed classes}\label{sec:data-synth-motion}
+
+Each layer moves along a continuous affine path. Screen positions are normalised to $[-1,1]$, texture positions are normalised to $[-1,1]$, and the layer maps screen to texture by
+\begin{equation}
+M(t)=\begin{pmatrix} s(t)\cos\theta(t) & -s(t)\sin\theta(t) & o_x(t)\\ s(t)\sin\theta(t) & s(t)\cos\theta(t) & o_y(t)\end{pmatrix},\label{eq:data-layer}
+\end{equation}
+where $s(t)=s_0e^{\zeta t}$ is the scale, $\theta(t)=\theta_0+\omega t$ is the rotation, and $o(t)=o_0+ut+\tfrac12 at^2-2u\,\max(0,t-t_{\mathrm{flip}})f$ is the offset, with $f\in\{0,1\}$ the reversal flag. The zoom rate $\zeta$ and the rotation rate $\omega$ are drawn from normal distributions with standard deviations 0.006 and 0.008, and they are zero for static layers. The acceleration $a$ is normal with a standard deviation of $0.1$ times the texture speed. The reversal flag makes the offset change direction at $t_{\mathrm{flip}}$, so the layer pans back along its path. In the FG batches the camera layer reverses at $t=1$ with the reversal probability of \cref{sec:data-synth-probs}.
+
+Each layer draws a speed class from a mixture, and the class sets the screen speed in output pixels per frame. \Cref{tab:data-speed} lists the classes. The camera layer and the object layer draw their classes independently. The texture speed is the screen speed scaled by the texels per output pixel, and the path is limited so that the view stays inside the texture for the whole clip. The room available to a path is $\max(0,\,1-1.42s_0-0.02)$, and the displacement of the path over the clip is limited to that room, which keeps the view inside the texture. A path that would leave the texture is slowed to fit. The object layer is placed so that a random texel of its texture lands at a random screen position at $t=0$, and its rotation range is twice that of the camera.
+
+\begin{table}[!htbp]
+\caption{Speed classes of the layer trajectories. Speeds are in output pixels per frame, and the probabilities are the mixture weights of \texttt{MOTION\_PROFILE} in the renderer}\label{tab:data-speed}
+\footnotesize
+\begin{tabular}{@{}llrl@{}}
+\toprule
+Class & Speed range (px per frame) & Probability & Rotation and zoom \\
+\midrule
+Static & 0 & 0.15 & none \\
+Slow & 0.3 to 3 & 0.45 & drawn \\
+Medium & 3 to 10 & 0.25 & drawn \\
+Fast & 10 to 28 & 0.15 & drawn \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The speed classes are the ones the TSR evaluation reports, so their boundaries are part of that protocol. The renderer draws a speed uniformly inside the class range. A static camera or object has no rotation and zoom, so its only motion is its offset. The batch records the camera's class, and the TSR evaluation reports each class separately.
+
+\subsubsection{Particles and the reactive mask}\label{sec:data-synth-particles}
+
+Each sample has six particles. Each particle is on with probability 0.5, has a centre in $[-1,1]^2$, moves with a velocity drawn in $[-0.06,0.06]^2$ per unit time, and has a radius of $2+10U$ pixels for a uniform $U$ on $[0,1]$. Its colour is drawn in $[0.6,1]^3$ and its amplitude in $[0.2,0.7]$. The weight of a particle at a pixel $x$ is a Gaussian in the distance to its centre,
+\begin{equation}
+g_k(x,t)=\mathbb{1}_{\text{on}}\,A_k\exp\!\left(-\frac{\lVert x-c_k(t)\rVert^2}{2r_k^2}\right),\label{eq:data-particle}
+\end{equation}
+where $c_k(t)$ is the moving centre, $A_k$ the amplitude and $r_k$ the radius. The particles are blended into the colour one after the other, each by $col\leftarrow col(1-g_k)+p_k g_k$, where $p_k$ is the particle colour. The reactive mask is the combined coverage $1-\prod_k(1-g_k)$, which is one where particles are dense and zero where none is present. The particles write no motion vectors, as in real engines. Their flow is taken from the layers only, so a particle moves the colour without moving the labels, and the reactive mask is meant to mark the pixels where the history should be trusted less.
+
+\subsubsection{Sampling, jitter and exact motion}\label{sec:data-synth-sampling}
+
+The colour of a layer at a screen position is sampled from its texture with bilinear interpolation. The renderer does not build a mip pyramid for the texture, so a sample at a low resolution reads the full-resolution texture at one point and fine detail aliases. A low-resolution frame is rendered at $h\times h$ pixels with one sample per pixel. The sample sits at a sub-pixel position given by a Halton sequence \cite{halton1960efficiency} in bases 2 and 3, with offsets in $[-0.5,0.5)$ of a low-resolution pixel. The sequence has a period of 16 frames, and each sample starts at a random phase in that period, so neighbouring frames of one sample are offset differently. The high-resolution target is rendered at $P\times P$ pixels with four samples per pixel. The four offsets lie on a rotated grid, $(-0.375,-0.125)$, $(0.125,-0.375)$, $(0.375,0.125)$ and $(-0.125,0.375)$ in pixels, and the target is their mean. The four-sample target is an anti-aliased reference of the same scene, and the single-sample input is what a game produces at a low render resolution. The four-sample rule is named 4x SSAA in the figures, which means four samples per pixel and not a four-times scale.
+
+Depth is stored per layer and per pixel, and each pixel takes the depth of the foreground if its alpha exceeds one half, and otherwise the depth of the background. The background depth is $d_{\mathrm{bg}}(1+0.3y_{\mathrm{tex}})$ for a per-sample constant $d_{\mathrm{bg}}$ between 0.6 and 1.0, and the foreground depth is a constant $d_{\mathrm{fg}}$ between 0.15 and 0.5. The network receives inverse depth, $1/(1+d/\tilde d)$, where $\tilde d$ is the median depth of the sample. Exposure is a per-sample gain $2^{V}$ with $V$ uniform on $[-0.8,0.8]$, applied in linear light after the sRGB decoding and before the encoding. The composited colour is
+\begin{equation}
+c=a\,c_{\mathrm{fg}}+(1-a)\,c_{\mathrm{bg}},\label{eq:data-composite}
+\end{equation}
+where $c_{\mathrm{fg}}$ and $c_{\mathrm{bg}}$ are the sampled colours of the two layers and $a$ is the foreground alpha at the same point. The background is sampled with reflection padding at its edges and the foreground with zero padding, so the background is continuous at the texture edge and the foreground vanishes there.
+
+Exact motion is computed from the layer matrices, not from the pixels. For every pixel of a frame at time $t$, the renderer finds the surface point of the visible layer, maps it back to time $t-1$ and returns the displacement in pixels. The visibility test asks whether the point at $t-1$ is covered by the foreground. A pixel is valid when its point stays inside the view and is visible at $t-1$, and invalid when it was covered or left the view. The motion and the validity are both in the frame's own grid, and the renderer uses the jittered grid for the low-resolution motion, so the motion refers to the sample position that the network sees. The validity map marks the disoccluded pixels, which have no valid history.
+
+\subsubsection{Temporal super-resolution batches}\label{sec:data-synth-tsr}
+
+The TSR batch function \texttt{sr\_batch} renders $T$ frames of $n$ samples at scale $s$, with targets of $P\times P$ pixels, and returns the low-resolution inputs, the targets, the motion, the validity, the depth, the reactive mask, the jitter offsets and the exposure. The notebook uses $s=\Res{tsr.config.cfg.scale}$, $T=\Res{tsr.config.cfg.seq_len}$ frames and $P=\Res{tsr.config.cfg.patch}$ pixels. The batch records four flags, which are the availability of depth, the quality of the motion labels, the quality of the other labels and the kind of input. The motion quality is one for exact motion, one half for estimated motion and zero for none. The kind is one for a render input and zero for ordinary video. Synthetic renders have quality one and kind one, and a later step can change them.
+
+Some samples are turned into ordinary video. \texttt{video\_degrade} selects a share $p$ of the samples and replaces their low-resolution input by \texttt{video\_lr}. That function blurs the high-resolution frame with a five-tap Gaussian whose standard deviation is up to 0.6 high-resolution pixels, and downscales it with one of three filters chosen per sample (an anti-aliased bicubic filter \cite{keys1981bicubic}, an anti-aliased bilinear filter, or an area average), adds Gaussian noise with a standard deviation up to $2/255$, and quantises to eight bits. Without the blur, only the bicubic filter is used, which is the standard bicubic degradation of video benchmarks. For a video sample the depth and reactive inputs are zeroed, the jitter is zeroed, and the depth flag is cleared. The motion vectors are recomputed as the block average of the full-resolution motion divided by the scale, and a sample is valid only where every pixel of its block is valid. Of the video samples, a share $p_{\mathrm{mv}}$ keeps its motion with quality at most one half, which stands for motion a decoder could supply. The rest have motion quality zero, so the network must estimate their motion. The docstring of the function says that the labels are re-sampled at pixel centres, but the code takes the block average. The docstring also gives the blur in output pixels, while the code applies it to the high-resolution frame, so the docstring is out of date.
+
+The other source of TSR batches is cached real sequences. \texttt{sr\_batch\_from\_frames} reads cached frames, flips each sample horizontally and vertically with probability one half each, negates the flow components that a flip reverses, applies an exposure gain, and samples the low-resolution input as one jittered read of the full-resolution frame. Its motion comes from the cache: the exact motion of Sintel and TartanAir, which is played backwards so that its forward flow points from the current frame to the previous one, or the RAFT teacher motion of every other sequence, with the forward-backward check of the RAFT estimate as its validity \cite{teed2020raft}. Real samples carry the input kind one, so an unchanged real sample looks like a render sample to the network, unless the video step changes it. GameIR clips are part of the TSR sequences, and their frames lie ten rendered frames apart, which the notebook's FG section names as the reason for leaving them out of FG. The TSR batches read the consecutive manifest frames as adjacent frames. If the frames are ten rendered frames apart, as the manifest records, each GameIR clip is one window whose motion is estimated over a ten-frame gap, and the stored frame stride is never read. The two notebooks disagree on this point, and the TSR use of the GameIR windows needs a decision. \UnderRevision
+
+After a batch is built, \texttt{withhold\_engine\_data} withholds the motion and depth of a share of every batch, so that the network also works without them. The withheld motion sets the quality to zero, and the withheld depth clears its flag. The docstring says that only render samples lose their motion, but the function applies to every sample in the batch, so the docstring is out of date. The function runs only during training and not during validation.
+
+\subsubsection{Frame-generation batches}\label{sec:data-synth-fg}
+
+The FG batch function \texttt{fg\_batch} renders two real frames $I_0$ at time $0$ and $I_1$ at time $1$, and a target at time $\tau$. The target time is $\tau=0.5$ for interpolation, a uniform time in $[0.15,0.85]$ for a share $p_{\tau}$ of interpolation samples, and $\tau=1.5$ for extrapolation. Extrapolation is chosen with probability $p_{\mathrm{extrap}}$, and then the target lies after the newest real frame, which is the low-latency mode. The FG frames are rendered at $P\times P$ pixels with four samples per pixel, so they are anti-aliased. The synthetic FG frames therefore have no low-resolution aliasing, unlike the TSR inputs. The batch also returns the engine motion vector of $I_1$, the depth of $I_1$, the exact flows from the target to each real frame, the validity of each flow, and a camera prior. The camera prior maps every target pixel through the camera layer only to time $1$, and it is the flow that a camera-only engine would know. In an extrapolation sample the camera prior is available to the network with probability $0.8$, as set in \texttt{set\_availability}.
+
+Four events are added to the batch. A camera reversal reverses the camera path after $t=1$, which produces a rapid change of direction. A scene cut replaces $I_1$, its motion and depth, and the target by those of another sample, zeroes every validity mask, and makes the correct output the repeated frame $I_1$. A heads-up display overlay and subtitle changes are composited in screen space after rendering, with a UI layer of four slots. Each slot shows a tile with probability 0.7 at a random position, and with probability 0.3 the tile changes between $t=0$ and $t=1$, which is the subtitle change. The UI layer is composited as $I_k\leftarrow I_k(1-\alpha_k)+c_k$, where $c_k$ and $\alpha_k$ are the premultiplied colour and the alpha of the UI at time $k$. The target receives the UI of $I_1$, not an interpolated UI, so a generated frame shows the newest overlay. A menu is a full-screen panel with alpha $0.6$, a dark grey colour and a probability set by the FG configuration. The UI mask records the union of the two UI alphas, and the network learns the mask through a cross-entropy term that is outside this section.
+
+The FG batch from real quads, \texttt{fg\_batch\_from\_frames}, takes four consecutive frames $k$ to $k+3$ of a real sequence. The teacher flows are $2\to0$, $1\to0$, $1\to2$ and $3\to2$, computed by RAFT at half resolution and scaled back to the full grid \cite{teed2020raft}. An interpolation sample uses $I_0=k$, $I_1=k+2$ and the target $k+1$. An extrapolation sample uses the same two inputs and the target $k+3$. A multi-frame sample, with share $p_{\mathrm{mfg}}$ of the interpolation samples, uses $I_0=k$, $I_1=k+3$ and a target at $k+1$ or $k+2$, which corresponds to the times $1/3$ and $2/3$ of 3x generation. The cache has no flows for these pairs, so their motion and flow labels are marked unavailable. The real quads use the same flip and UI rules, and they carry the availability flags set by \texttt{set\_availability}.
+
+\subsubsection{Probabilities}\label{sec:data-synth-probs}
+
+\Cref{tab:data-probs} lists every probability that governs the synthetic and real samples. The first block is the configuration of the TSR and FG notebooks, which the generator reads from the saved configuration files. The second block is fixed in the renderer code, and the notebooks do not change it.
+\begin{table}[!htbp]
+\caption{Probabilities of the synthetic and real batches. Configuration values come from the saved configuration of each notebook. Renderer constants are fixed in the code. Availability is the probability that the auxiliary input is withheld}\label{tab:data-probs}
+\footnotesize
+\begin{tabular}{@{}p{3.1cm}p{1.5cm}p{7.2cm}@{}}
+\toprule
+Quantity & Value & Meaning \\
+\midrule
+TSR, real share $p_{\mathrm{real}}$ & \Res{tsr.config.cfg.p_real} & share of each batch drawn from cached real sequences \\
+TSR, video share, synthetic $p_{\mathrm{video,synth}}$ & \Res{tsr.config.cfg.p_video_synth} & share of synthetic samples turned into ordinary video \\
+TSR, video share, real $p_{\mathrm{video,real}}$ & \Res{tsr.config.cfg.p_video_real} & share of real samples turned into ordinary video \\
+TSR, video motion $p_{\mathrm{video,mv}}$ & \Res{tsr.config.cfg.p_video_mv} & share of video samples that keep estimated motion \\
+TSR, withheld motion $p_{\mathrm{drop,mv}}$ & \Res{tsr.config.cfg.p_drop_mv} & share of samples whose motion is withheld in training \\
+TSR, withheld depth $p_{\mathrm{drop,depth}}$ & \Res{tsr.config.cfg.p_drop_depth} & share of samples whose depth is withheld in training \\
+TSR, long unroll interval & \Res{tsr.config.cfg.long_every} & one step in this many is a long unroll of \Res{tsr.config.cfg.long_t} frames at \Res{tsr.config.cfg.long_patch} pixels \\
+TSR, teacher forcing & \Res{tsr.config.cfg.mv_warmup_frac} & share of each run with teacher-forced motion for the estimator \\
+FG, real share $p_{\mathrm{real}}$ & \Res{fg.config.cfg.p_real} & share of each batch drawn from real quads \\
+FG, extrapolation $p_{\mathrm{extrap}}$ & \Res{fg.config.cfg.p_extrap} & share of samples with $\tau=1.5$ \\
+FG, random time $p_{\tau}$ & \Res{fg.config.cfg.p_tau} & share of synthetic interpolation samples with a uniform $\tau$ \\
+FG, multi-frame $p_{\mathrm{mfg}}$ & \Res{fg.config.cfg.p_mfg} & share of real interpolation samples taken as 3x generation \\
+FG, withheld motion, synthetic $p_{\mathrm{drop,mv}}$ & \Res{fg.config.cfg.p_drop_mv} & share of synthetic samples whose motion is withheld \\
+FG, withheld motion, real $p_{\mathrm{drop,mv,real}}$ & \Res{fg.config.cfg.p_drop_mv_real} & share of real samples whose motion is withheld \\
+FG, UI $p_{\mathrm{ui}}$ & \Res{fg.config.cfg.p_ui} & share of samples with a HUD or subtitle layer \\
+FG, menu $p_{\mathrm{menu}}$ & \Res{fg.config.cfg.p_menu} & share of samples with a full-screen menu \\
+FG, scene cut $p_{\mathrm{cut}}$ & \Res{fg.config.cfg.p_cut} & share of samples with a scene cut \\
+FG, camera reversal $p_{\mathrm{flip}}$ & \Res{fg.config.cfg.p_flip} & share of samples whose camera reverses after $t=1$ \\
+Renderer, foreground present & 0.85 & share of samples with a foreground mask \\
+Renderer, flat foreground & 0.25 & share of samples whose foreground is a flat colour \\
+Renderer, world text & 0.3 & share of TSR samples with a text tile stamped into the background \\
+Renderer, particle on & 0.5 & chance that each of the six particles is on \\
+Renderer, wire present & 0.6 & chance that each of the four wires is present \\
+Renderer, fence present & 0.35 & chance that the fence is present \\
+Renderer, UI slot shown & 0.7 & chance that each of the four UI slots is shown \\
+Renderer, UI change & 0.3 & chance that a shown UI slot changes at $t=1$ \\
+Calibration, JPEG quality & 35 to 92 & JPEG quality of the copies made for calibration \\
+Availability, depth, FG & 0.3 & chance that the depth of a synthetic sample is withheld \\
+Availability, camera prior, FG & 0.2 & chance that the camera prior of an extrapolation sample is withheld \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+
+The saved configuration files record the values of the TSR and FG runs. The renderer constants are fixed in the code, and no saved ablation varies them, so their effect on the results is not measured.
+
+\Cref{fig:data-synth-tsr} shows one synthetic TSR sample at three times. The first column is the low-resolution jittered render, enlarged with nearest-neighbour interpolation so the pixels are visible. The second column is the same frame as ordinary video, which is smoother because of the blur and the filter. The third column is the four-sample target. The fourth column is the motion vector field, with the direction and size coded by colour, and the fifth column is the validity map, in which white marks pixels with a valid history. The sixth column is the depth, and the last column is the reactive mask.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\textwidth,height=0.22\textheight,keepaspectratio]{\TsrOut/plots/synthetic_preview.png}
+\caption{One synthetic TSR sample at three times, from the TSR notebook. Columns: jittered render input, the same frame as plain video, the four-sample target, motion vectors, valid history, depth and reactive mask. 4x SSAA means four samples per pixel}\label{fig:data-synth-tsr}
+\end{figure}
+
+\FloatBarrier
+
+The rendered sample shows the intended behaviour. The jittered render has coarse, shifting aliasing on the fence bars and wires, and its colour is blocky. The plain video is smoother, but it keeps the same content. The target has the thin fence and wire lines that the render loses. The motion field changes smoothly across the background, which follows one affine path, and the black blob marks the foreground, which moves on its own path. The validity map has white over most of the frame and dark diagonal streaks that follow the fence bars, where the background behind a moving bar is not visible in the previous frame. The depth shows a lighter blob for the foreground and a speckled background, which appears to follow the wire and fence pattern of the render. The reactive mask shows a single soft spot in the lower right, which is one particle, and it moves slightly between the three times. These readings are from the figure and not from a numerical test. \Observation
+
+\Cref{fig:data-synth-fg} shows the FG preview, one row for each event type. Each row shows the older real frame $I_0$, the newer real frame $I_1$, the target, the UI mask and the flow from the target to $I_1$. The interpolation row has a small motion, with nearly identical $I_0$ and $I_1$ and a target between them. The UI mask of that row is empty. The extrapolation row, with a camera reversal, shows a green blob that moves further between $I_1$ and the target, and the flow shows the blob and the background moving in different directions. The HUD row shows a crosshair and the text ``XP 487'' that appear in $I_0$, $I_1$ and the target, and the UI mask holds both. The menu row dims the scene, because the menu panel covers the full frame at alpha $0.6$, and the text ``Wave Health'' appears in the mask. The scene cut row shows that $I_1$ and the target are the same picture from a different scene, so the target repeats $I_1$ as designed. These readings come from the preview and not from a test. \Observation
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\textwidth,height=0.22\textheight,keepaspectratio]{\FgOut/plots/synthetic_preview.png}
+\caption{Synthetic FG samples, one row per event. Columns: the older real frame $I_0$, the newer real frame $I_1$, the target, the UI mask and the flow from the target to $I_1$. Rows: interpolation, extrapolation with a camera reversal, a HUD and subtitle change, a menu, and a scene cut}\label{fig:data-synth-fg}
+\end{figure}

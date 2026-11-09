@@ -1,0 +1,84 @@
+%% Section S8: status register of findings, defects found in the reported runs, limitations and planned revisions.
+%% Update this section after every new run (see the revision procedure in the appendix).
+\section{Status of findings, limitations and planned revisions}\label{sec:status}
+
+This section collects the findings of \cref{sec:data,sec:tsrr,sec:fgr} with their status labels (\cref{sec:status-legend}), lists the defects found in the code that produced the reported runs, states the limitations of the evidence, and names the revisions planned for the next version of the pipeline. Values are given in the cited sections, so that this register does not need to change when only the numbers change.
+
+\subsection{Register of findings}\label{sec:status-register}
+
+\Cref{tab:status-register} lists each finding with its status, its evidence and the section that shows it.
+
+\begin{longtable}{@{}p{0.62\textwidth}p{0.13\textwidth}p{0.17\textwidth}@{}}
+\caption{Findings of the reported runs, with their status and where they are shown}\label{tab:status-register}\\
+\toprule
+Finding & Status & Evidence \\
+\midrule
+\endfirsthead
+\toprule
+Finding & Status & Evidence \\
+\midrule
+\endhead
+\botrule
+\endlastfoot
+\multicolumn{3}{@{}l}{\emph{Data}} \\
+Copy detection with geometric verification left no duplicate between the training split and the validation or test splits in the second audit round. & \Confirmed & \cref{sec:data-audit} \\
+The calibrated detector separates synthetic copies from random and hard negatives with high recall at near-perfect precision. & \Preliminary & \cref{sec:data-calibration} \\
+\multicolumn{3}{@{}l}{\emph{Temporal super-resolution}} \\
+With engine data the \tier{low} 3x student is far above the analytic TAA upscaler on every test suite. & \Confirmed & \cref{sec:tsrr-main} \\
+On plain video the \tier{low} 3x student is above bicubic upscaling on every test suite. & \Confirmed & \cref{sec:tsrr-main} \\
+Training on plain-video degradations is what makes the plain mode work, and it costs the engine mode nothing measurable. & \Preliminary & \cref{sec:tsrr-ablation} \\
+History and engine G-buffers are the largest engine-mode effects in the ablations. & \Preliminary & \cref{sec:tsrr-ablation} \\
+The built-in motion estimator adds a few tenths of a dB on plain video. & \Preliminary & \cref{sec:tsrr-ablation} \\
+Sixteen-frame unrolls are needed for static scenes to keep converging over many frames. & \Preliminary & \cref{sec:tsrr-static} \\
+The temporal-change error of the student is lower than that of TAA in engine mode but not lower than bicubic's on every suite in plain mode. & \Preliminary & \cref{sec:tsrr-main} \\
+\multicolumn{3}{@{}l}{\emph{Frame generation}} \\
+Fine-tuning RIFE 4.26 with zero-initialised hint channels gives a \tier{high} tier at or above unchanged RIFE 4.26 on most interpolation suites, including Middlebury. & \Preliminary & \cref{sec:fgr} \\
+The tiers small enough for integrated GPUs stay well below RIFE 4.26 in interpolation. & \Confirmed & \cref{sec:fgr} \\
+In extrapolation the trained tiers are above frame repetition on plain video, while RIFE 4.26 is not built for it. & \Confirmed & \cref{sec:fgr} \\
+With exact engine motion vectors, plain motion-vector reprojection remains as good as or better than learned extrapolation on some suites. & \Preliminary & \cref{sec:fgr} \\
+Training with UI scenes and the UI mask sharply reduces UI ghosting on synthetic HUD scenes. & \Preliminary & \cref{sec:fgr} \\
+The late-latched camera prior helps on rapid camera reversals in extrapolation. & \Preliminary & \cref{sec:fgr} \\
+The histogram cut gate detects every synthetic cut but false-alarms on real content without motion vectors and on multi-frame gaps. & \UnderRevision & \cref{sec:fgr} \\
+Inheriting RIFE 4.26 weights matters most on plain video in the ablations. & \Preliminary & \cref{sec:fgr} \\
+\multicolumn{3}{@{}l}{\emph{Real-time cost}} \\
+In eager PyTorch on a T4 every measured tier except the smallest TSR tier exceeds a 16.7\,ms frame budget at 1080p. & \UnderRevision & \cref{sec:tsrr-cost,sec:fgr} \\
+Measured time is several times the arithmetic estimate, which points to per-kernel overhead and memory traffic. This is inferred from timings, not profiled. & \Observation & \cref{sec:tsrr-cost} \\
+Interpolation adds a held frame of game latency, extrapolation does not, in the pacing model. & \Confirmed & \cref{sec:fgr} \\
+The fused networks export to ONNX and match PyTorch in ONNX Runtime. & \Confirmed & \cref{sec:tsrr-cost,sec:fgr} \\
+\end{longtable}
+
+\subsection{Defects found in the code of the reported runs}\label{sec:status-defects}
+
+Writing this supplement meant checking every statement against the code, and that check found defects in the code that produced the reported runs. They are fixed in the repository for the next run. The reported numbers come from the code as it ran, so the affected results are labelled \UnderRevision{} where they appear.
+
+\begin{enumerate}
+\item \emph{Region PSNR on empty masks.} The TSR metric code tested the number of pixels of a region mask (disocclusions, particles) over the whole batch rather than per sample, so a sample with no pixels in the region scored the 100\,dB cap. The region-restricted PSNR values of the reported runs are therefore biased upwards where such samples occur. The corrected code tests each sample and leaves out of the mean any sample whose region has 50 pixels or fewer. The whole-frame metrics are unaffected.
+\item \emph{Ablation inputs at test time.} Two ablations were evaluated with inputs that differ from their training inputs: the TSR model without the motion estimator received engine data in engine mode, and the FG model without the motion prior had depth removed although it was trained with depth. Their plain-mode rows and all main-model rows are unaffected.
+\item \emph{Strided render clips.} The native CARLA render clips are stored every tenth rendered frame, but TSR training treated them as consecutive frames. They are now excluded from temporal training windows, as FG already did, and kept for the native 2x test.
+\item \emph{ONNX reset.} The exported TSR graph had no reset input, so its first frame blended a caller-supplied history. A reset input now makes the exported graph start afresh exactly as the first frame of a clip does in PyTorch.
+\item \emph{Fallback limits.} The per-source limits used when the data-pipeline manifest is unavailable differed from those of the saved data-pipeline run. They now match it.
+\item \emph{Descriptions.} Several docstrings and notebook texts described behaviour the code does not have (for example that a fresh FG model outputs RIFE's frame exactly, or that one ONNX graph is exported per resolution). They now match the code, and the article was corrected where it repeated them.
+\end{enumerate}
+
+\subsection{Limitations of the evidence}\label{sec:status-limits}
+
+\begin{enumerate}
+\item \emph{One run per configuration.} Each configuration ran once with one seed. An earlier repeat of the TSR configuration with shorter budgets put run-to-run differences at a few tenths of a dB, so differences of that size are not distinguished from noise.
+\item \emph{Few samples on some suites.} Several FG means rest on few samples after removing those replaced by the cut gate (\cref{sec:fgr}), and Middlebury has 12 sequences.
+\item \emph{Simulated inputs.} Low-resolution inputs are made from finished high-resolution frames, so level-of-detail, shading-rate and lighting effects of real renderers (specular aliasing, reflections) are absent. The plain-video protocol uses clean downscaling without codec artefacts.
+\item \emph{Little exact motion.} Real training windows are dominated by Vimeo-90K, and only a small share of TSR windows have exact motion vectors (\cref{sec:data}).
+\item \emph{Latency on a data-centre GPU.} Times are eager PyTorch on a T4, not a deployment runtime on integrated or entry-level GPUs. The pacing model is a simulation, not a measurement on a display.
+\item \emph{No commercial comparison.} Commercial upscalers and frame generators need engine captures, which this study does not have.
+\end{enumerate}
+
+\subsection{Planned revisions}\label{sec:status-revisions}
+
+The next version of the pipeline is expected to change the following, and the corresponding parts of this supplement and of the article will be revised with it.
+
+\begin{enumerate}
+\item Rerun all three notebooks with the corrected code of \cref{sec:status-defects}, and repeat key configurations with further seeds to measure run-to-run variation.
+\item Calibrate the cut gate on real clips, separately for each frame gap, instead of on adjacent synthetic pairs.
+\item Widen the small FG tiers with half-resolution flow, since capacity now limits them.
+\item Time fused models in deployment runtimes (compute shaders, TensorRT, DirectML) on integrated GPUs, and wire the per-real-frame reuse of the FG feature encoder.
+\item Add engine captures with exact motion and real renderer effects, which would also allow a comparison with commercial systems.
+\end{enumerate}

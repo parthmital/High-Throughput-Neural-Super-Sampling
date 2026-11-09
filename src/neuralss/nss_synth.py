@@ -830,7 +830,7 @@ def sr_batch_from_frames(
 def video_lr(hr, scale, g, blur=True, noise=True):
     """Low-resolution video frames from (N, T, 3, H, W) targets, the way ordinary video is downscaled: an
     anti-aliased bicubic, bilinear or area filter chosen per sample, an optional mild Gaussian pre-blur
-    (sigma up to 0.6 output pixels, camera and codec softness), optional Gaussian noise (sigma up to 2 / 255)
+    (sigma up to 0.6 high-resolution pixels, before the downscale; camera and codec softness), optional Gaussian noise (sigma up to 2 / 255)
     and 8-bit quantisation. blur / noise False gives the standard bicubic (BI) degradation of VSR benchmarks.
     """
     n, T, _, H, W = hr.shape
@@ -872,8 +872,9 @@ def video_lr(hr, scale, g, blur=True, noise=True):
 def video_degrade(b, scale, g, p, p_mv=0.0):
     """Turn a share p of a TSR batch into ordinary video: video_lr inputs, no jitter, no depth, no reactive
     mask, and (except a share p_mv, which keeps estimated motion vectors) no motion vectors, so the network's
-    built-in motion estimator must run; kind = 0. Motion labels for the estimator are re-sampled at pixel
-    centres from the full-resolution motion."""
+    built-in motion estimator must run; kind = 0. Motion labels for the estimator are block-averaged from the
+    full-resolution motion (scale x scale blocks, in low-resolution pixels), and a label is valid only where the
+    whole block is valid."""
     n, T = b["lr"].shape[:2]
     dev = b["lr"].device
     sel = torch.rand(n, device=dev, generator=g) < p

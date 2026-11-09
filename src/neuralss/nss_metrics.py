@@ -321,8 +321,9 @@ def ycocg_to_rgb(x):
 
 class AnalyticTAAU:
     """Hand-tuned temporal anti-aliasing upscaler: reproject history with upsampled motion vectors, clamp it to the
-    3x3 YCoCg neighbourhood of the current jitter-aware upsample, reset on invalid history, blend 10 percent of the
-    new frame. A stand-in for analytic TAAU / FSR 2-style accumulation without its proprietary heuristics.
+    3x3 YCoCg neighbourhood of the current jitter-aware upsample, blend 10 percent of the new frame. It has no
+    invalid-history test (history is always used after the first frame). A stand-in for analytic TAAU / FSR 2-style
+    accumulation without its proprietary heuristics.
     """
 
     def __init__(self, base_upsample, scale, blend=0.1):
@@ -348,8 +349,9 @@ class AnalyticTAAU:
 
 
 def fg_analytic(i0, i1, f0, f1):
-    """Motion-vector reprojection baseline: warp both frames along linear-motion flows and keep, per pixel, the
-    warp that agrees better with the other (occlusion heuristic); falls back to I1 where both disagree strongly.
+    """Motion-vector reprojection baseline: warp both frames along linear-motion flows, then blend the two warps
+    with a sigmoid weight that is high where they agree (mean absolute difference below 0.1) and falls to 0 where
+    they disagree, so the output is the warp of I1 there (an occlusion heuristic).
     """
     w0, w1 = backward_warp(i0, f0), backward_warp(i1, f1)
     agree = (w0 - w1).abs().mean(1, keepdim=True)
@@ -380,7 +382,11 @@ def simulate_latency(
 
     Returns per-mode statistics: displayed frame rate, game input latency (input sample -> first photons of a
     real frame reflecting it), camera latency (input sample -> first displayed frame, real or generated, whose
-    camera reflects it) and content age (time since the newest real input in each displayed frame).
+    camera reflects it) and content age (time since the newest real input in each displayed frame). Each latency
+    is a mean and a 95th percentile over samples: game latency has one sample per input; content age has the two
+    displayed frames of each input. Camera latency has one sample per input in 'interp' (its generated frame) but
+    two in the extrapolation modes (the real and the generated frame), so an extrapolation mean weights the real
+    frame as much as the generated one.
     """
     rng = np.random.default_rng(seed)
     t = 0.0

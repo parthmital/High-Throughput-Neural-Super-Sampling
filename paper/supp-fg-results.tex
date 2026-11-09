@@ -1,0 +1,852 @@
+\section{Frame generation and real-time cost: results}\label{sec:fgr}
+
+This section reports every saved output of the frame-generation notebook and of the Middlebury comparison that was run after it. The notebook trains the frame generator, calibrates its scene-cut detector, evaluates every network on the test split and writes the metric files, the plots and the predictions that the tables and figures below show. The method is described in \cref{sec:fgm}, the metrics in \cref{sec:bg-metrics} and the latency concepts in \cref{sec:bg-latency}. For each result we state what is measured, what the table or figure shows, the mechanism where the design explains it, what the result does not show and the number of samples when that number is small.
+
+Two conventions apply throughout. The \tier{high} tier is the notebook's teacher, a network with RIFE 4.26's widths that starts from the pre-trained RIFE weights. The notebook calls the \tier{low} tier the student, and the tables use the article's tier names. Each test result also has two views. The all-sample view averages every sample, including those where the cut gate replaced the network output with the newest real frame. The not-gated view averages only the samples the gate left alone, and it is the view the article uses for plain video. \Cref{sec:fgr-gate} explains why.
+
+\Preliminary{} All frame-generation results come from one run. It started on \Res{run.neural-frame-generation.start} on two Tesla T4 GPUs with \Res{fg.hardware.cpu_count} CPU cores and PyTorch \Res{fg.hardware.torch}. It took \Res{run.neural-frame-generation.hours} hours to the end of the evaluation, and the summary cell recorded \Res{fg.summary.run_hours} hours. The Middlebury comparison in \cref{sec:fgr-mb} was run afterwards on a CPU with the same checkpoints. Because there is one run, no finding below has a repeat that would show its run-to-run variation.
+
+\subsection{Training runs}\label{sec:fgr-train}
+
+The notebook trained the \tier{high} tier for \Res{fg.config.cfg.minutes.teacher} minutes, the \tier{low} tier for \Res{fg.config.cfg.minutes.student} minutes, and the \tier{igpu} and \tier{mid} tiers in parallel for \Res{fg.config.cfg.minutes.pair} minutes each. Before training it built the caches and probed the batch size. After the \tier{low} tier it ran six ablations of \Res{fg.config.cfg.minutes.ablation} minutes each, in three parallel pairs. \Cref{fig:fgr-stages} gives the stage times. The caches took \Res{fg.stage_times.caches.minutes} minutes against a build budget of \Res{fg.config.cfg.cache.build_min} minutes, and the test suites and the evaluation took \Res{fg.stage_times.test_suites.minutes} and \Res{fg.stage_times.evaluation.minutes} minutes.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.7\textwidth]{\FgOut/plots/stage_times.png}
+\caption{Wall-clock minutes per stage of the frame-generation run, from the notebook's stage timer}\label{fig:fgr-stages}
+\end{figure}
+
+Every validation round scored the checkpoint on held-out batches with engine data, without it, and on the interpolation, extrapolation and UI regions. The checkpoint metric is the mean of the engine and plain scores, so each best value is an average over the two input modes. \Cref{tab:fgr-runs} lists the best round of every run. \Preliminary{} The \tier{high} tier reached \Res{fg.best_validation.fg_teacher.val_psnr} dB, the \tier{mid} tier \Res{fg.best_validation.fg_mid.val_psnr} dB, the \tier{low} tier \Res{fg.best_validation.fg_low.val_psnr} dB and the \tier{igpu} tier \Res{fg.best_validation.fg_igpu.val_psnr} dB. For the \tier{high} tier the engine and plain scores differ by \ResAbsDiff{fg.best_validation.fg_teacher.val_psnr_engine}{fg.best_validation.fg_teacher.val_psnr_plain} dB, so the engine dropout during training leaves the two input modes close on the validation batches.
+
+\begin{table}[!htbp]
+\caption{Training runs (the \tier{high} row is the notebook's teacher): validation PSNR (dB) of the best checkpoint by the checkpoint metric (mean of the engine and plain validation PSNR), with the round and the minutes of its run. The rounds and minutes columns give the validation rounds and the elapsed training time}\label{tab:fgr-runs}
+\scriptsize\setlength{\tabcolsep}{2pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrrrr}
+\toprule
+Run & Rounds & Min. & Best round & Val. PSNR & Engine & Plain & Interp. & Extrap. & UI \\
+\midrule
+\tier{high} & \Res{fg.history_fg_teacher.rounds} & \Res{fg.history_fg_teacher.elapsed_min.last} & \Res{fg.best_validation.fg_teacher.round} & \Res{fg.best_validation.fg_teacher.val_psnr} & \Res{fg.best_validation.fg_teacher.val_psnr_engine} & \Res{fg.best_validation.fg_teacher.val_psnr_plain} & \Res{fg.best_validation.fg_teacher.val_psnr_interp} & \Res{fg.best_validation.fg_teacher.val_psnr_extrap} & \Res{fg.best_validation.fg_teacher.val_psnr_ui} \\
+\tier{low} & \Res{fg.history_fg_low.rounds} & \Res{fg.history_fg_low.elapsed_min.last} & \Res{fg.best_validation.fg_low.round} & \Res{fg.best_validation.fg_low.val_psnr} & \Res{fg.best_validation.fg_low.val_psnr_engine} & \Res{fg.best_validation.fg_low.val_psnr_plain} & \Res{fg.best_validation.fg_low.val_psnr_interp} & \Res{fg.best_validation.fg_low.val_psnr_extrap} & \Res{fg.best_validation.fg_low.val_psnr_ui} \\
+\tier{mid} & \Res{fg.history_fg_mid.rounds} & \Res{fg.history_fg_mid.elapsed_min.last} & \Res{fg.best_validation.fg_mid.round} & \Res{fg.best_validation.fg_mid.val_psnr} & \Res{fg.best_validation.fg_mid.val_psnr_engine} & \Res{fg.best_validation.fg_mid.val_psnr_plain} & \Res{fg.best_validation.fg_mid.val_psnr_interp} & \Res{fg.best_validation.fg_mid.val_psnr_extrap} & \Res{fg.best_validation.fg_mid.val_psnr_ui} \\
+\tier{igpu} & \Res{fg.history_fg_igpu.rounds} & \Res{fg.history_fg_igpu.elapsed_min.last} & \Res{fg.best_validation.fg_igpu.round} & \Res{fg.best_validation.fg_igpu.val_psnr} & \Res{fg.best_validation.fg_igpu.val_psnr_engine} & \Res{fg.best_validation.fg_igpu.val_psnr_plain} & \Res{fg.best_validation.fg_igpu.val_psnr_interp} & \Res{fg.best_validation.fg_igpu.val_psnr_extrap} & \Res{fg.best_validation.fg_igpu.val_psnr_ui} \\
+\midrule
+Reference & \Res{fg.history_abl_reference.rounds} & \Res{fg.history_abl_reference.elapsed_min.last} & \Res{fg.best_validation.abl_reference.round} & \Res{fg.best_validation.abl_reference.val_psnr} & \Res{fg.best_validation.abl_reference.val_psnr_engine} & \Res{fg.best_validation.abl_reference.val_psnr_plain} & \Res{fg.best_validation.abl_reference.val_psnr_interp} & \Res{fg.best_validation.abl_reference.val_psnr_extrap} & \Res{fg.best_validation.abl_reference.val_psnr_ui} \\
+No UI & \Res{fg.history_abl_no_ui_training.rounds} & \Res{fg.history_abl_no_ui_training.elapsed_min.last} & \Res{fg.best_validation.abl_no_ui_training.round} & \Res{fg.best_validation.abl_no_ui_training.val_psnr} & \Res{fg.best_validation.abl_no_ui_training.val_psnr_engine} & \Res{fg.best_validation.abl_no_ui_training.val_psnr_plain} & \Res{fg.best_validation.abl_no_ui_training.val_psnr_interp} & \Res{fg.best_validation.abl_no_ui_training.val_psnr_extrap} & n/a \\
+No prior & \Res{fg.history_abl_no_motion_prior.rounds} & \Res{fg.history_abl_no_motion_prior.elapsed_min.last} & \Res{fg.best_validation.abl_no_motion_prior.round} & \Res{fg.best_validation.abl_no_motion_prior.val_psnr} & \Res{fg.best_validation.abl_no_motion_prior.val_psnr_engine} & \Res{fg.best_validation.abl_no_motion_prior.val_psnr_plain} & \Res{fg.best_validation.abl_no_motion_prior.val_psnr_interp} & \Res{fg.best_validation.abl_no_motion_prior.val_psnr_extrap} & \Res{fg.best_validation.abl_no_motion_prior.val_psnr_ui} \\
+Extrap. only & \Res{fg.history_abl_extrap_only.rounds} & \Res{fg.history_abl_extrap_only.elapsed_min.last} & \Res{fg.best_validation.abl_extrap_only.round} & \Res{fg.best_validation.abl_extrap_only.val_psnr} & \Res{fg.best_validation.abl_extrap_only.val_psnr_engine} & \Res{fg.best_validation.abl_extrap_only.val_psnr_plain} & n/a & \Res{fg.best_validation.abl_extrap_only.val_psnr_extrap} & \Res{fg.best_validation.abl_extrap_only.val_psnr_ui} \\
+No distill. & \Res{fg.history_abl_no_distillation.rounds} & \Res{fg.history_abl_no_distillation.elapsed_min.last} & \Res{fg.best_validation.abl_no_distillation.round} & \Res{fg.best_validation.abl_no_distillation.val_psnr} & \Res{fg.best_validation.abl_no_distillation.val_psnr_engine} & \Res{fg.best_validation.abl_no_distillation.val_psnr_plain} & \Res{fg.best_validation.abl_no_distillation.val_psnr_interp} & \Res{fg.best_validation.abl_no_distillation.val_psnr_extrap} & \Res{fg.best_validation.abl_no_distillation.val_psnr_ui} \\
+No inherit. & \Res{fg.history_abl_no_inheritance.rounds} & \Res{fg.history_abl_no_inheritance.elapsed_min.last} & \Res{fg.best_validation.abl_no_inheritance.round} & \Res{fg.best_validation.abl_no_inheritance.val_psnr} & \Res{fg.best_validation.abl_no_inheritance.val_psnr_engine} & \Res{fg.best_validation.abl_no_inheritance.val_psnr_plain} & \Res{fg.best_validation.abl_no_inheritance.val_psnr_interp} & \Res{fg.best_validation.abl_no_inheritance.val_psnr_extrap} & \Res{fg.best_validation.abl_no_inheritance.val_psnr_ui} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} Every run's best round was its last validation round, so no run had converged when its budget ended. The \tier{low} tier had \Res{fg.history_fg_low.rounds} validation rounds and was still improving at the last one, after \Res{fg.history_fg_low.elapsed_min.last} minutes. The tier ranking therefore partly reflects the budgets, and a longer run would change the gaps between the tiers by an amount this run cannot measure.
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{\FgOut/plots/training_curves.png}
+\caption{Validation PSNR (dB, left) against elapsed minutes for every run, with the ablations dashed, and the training loss of the four main runs (right). Training losses of the students include the distillation term and are not comparable with the teacher's loss}\label{fig:fgr-training}
+\end{figure*}
+
+\Observation{} \Cref{fig:fgr-training} shows the same picture as the table. The \tier{high} tier rises quickly and flattens late in its budget, the \tier{mid} tier follows, and the \tier{igpu} tier stays lowest. The ablations run for 30 minutes and their curves stop there, with the reference reaching \Res{fg.history_abl_reference.val_psnr.max} dB. The training losses fall in every run. They are plotted for the shape of each curve, and their levels do not compare the tiers, because the students add a distillation term that the teacher does not have.
+
+The batch probe (\cref{tab:fgr-batch}) chose the largest batch whose peak memory stayed below 75 percent of the GPU memory, a margin the notebook keeps for the losses and data that the probe leaves out. For the \tier{high} tier alone the largest such batch was 48 per GPU, at \Res{fg.batch_probe.teacher.48.peak_vram_pct} percent peak memory, and a batch of 64 reached \Res{fg.batch_probe.teacher.64.peak_vram_pct} percent and was rejected. With the teacher alongside, the \tier{low} student also used 48, at \Res{fg.batch_probe.student.48.peak_vram_pct} percent. The \tier{mid} tier used half the student's batch, with a minimum of 8, by the notebook's rule. \Observation{} Throughput levelled off once the batch reached 16 samples, so the larger batches bought little speed.
+
+\begin{table}[!htbp]
+\caption{Batch-size probe on GPU 0: peak allocated memory as a share of the GPU memory and training samples per second for the \tier{high} teacher and for the \tier{low} student with the teacher alongside. The probe picks the largest batch with at most 75 percent peak memory}\label{tab:fgr-batch}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrr}
+\toprule
+Batch per GPU & \tier{high} peak memory (\%) & \tier{high} samples/s & \tier{low} peak memory (\%) & \tier{low} samples/s \\
+\midrule
+4 & \Res{fg.batch_probe.teacher.4.peak_vram_pct} & \Res{fg.batch_probe.teacher.4.samples_per_s} & \Res{fg.batch_probe.student.4.peak_vram_pct} & \Res{fg.batch_probe.student.4.samples_per_s} \\
+8 & \Res{fg.batch_probe.teacher.8.peak_vram_pct} & \Res{fg.batch_probe.teacher.8.samples_per_s} & \Res{fg.batch_probe.student.8.peak_vram_pct} & \Res{fg.batch_probe.student.8.samples_per_s} \\
+12 & \Res{fg.batch_probe.teacher.12.peak_vram_pct} & \Res{fg.batch_probe.teacher.12.samples_per_s} & \Res{fg.batch_probe.student.12.peak_vram_pct} & \Res{fg.batch_probe.student.12.samples_per_s} \\
+16 & \Res{fg.batch_probe.teacher.16.peak_vram_pct} & \Res{fg.batch_probe.teacher.16.samples_per_s} & \Res{fg.batch_probe.student.16.peak_vram_pct} & \Res{fg.batch_probe.student.16.samples_per_s} \\
+24 & \Res{fg.batch_probe.teacher.24.peak_vram_pct} & \Res{fg.batch_probe.teacher.24.samples_per_s} & \Res{fg.batch_probe.student.24.peak_vram_pct} & \Res{fg.batch_probe.student.24.samples_per_s} \\
+32 & \Res{fg.batch_probe.teacher.32.peak_vram_pct} & \Res{fg.batch_probe.teacher.32.samples_per_s} & \Res{fg.batch_probe.student.32.peak_vram_pct} & \Res{fg.batch_probe.student.32.samples_per_s} \\
+48 & \Res{fg.batch_probe.teacher.48.peak_vram_pct} & \Res{fg.batch_probe.teacher.48.samples_per_s} & \Res{fg.batch_probe.student.48.peak_vram_pct} & \Res{fg.batch_probe.student.48.samples_per_s} \\
+64 & \Res{fg.batch_probe.teacher.64.peak_vram_pct} & \Res{fg.batch_probe.teacher.64.samples_per_s} & \Res{fg.batch_probe.student.64.peak_vram_pct} & \Res{fg.batch_probe.student.64.samples_per_s} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+No run failed and no run wrote an out-of-memory log, so every run trained at the batch the probe chose.
+
+\subsection{Interpolation}\label{sec:fgr-interp}
+
+Interpolation generates the frame at $\tau=0.5$ between two real frames. The test suites are the Vimeo-90K triplets, the Vimeo-1080p clips at 544 lines and at their native 1072 lines, Vid4, TartanAir, Sintel, the synthetic suite of game-like scenes and, after the run, the twelve Middlebury sequences. Each suite is run on plain input, with engine data where the suite has it, and the baselines are frame repetition, frame averaging and, with engine data, motion-vector reprojection.
+
+\subsubsection{Why the not-gated view is reported}\label{sec:fgr-gate}
+
+\Preliminary{} The test clips contain no scene cuts, so every real sample that the cut gate replaced is a false alarm, and the replaced output is the newest real frame rather than an interpolation. Including those outputs measures the gate and not the generator. \Cref{tab:fgr-gate-effect} shows the effect. On TartanAir one gated sample out of ten lowers the all-sample mean of RIFE 4.26 by \ResAbsDiff{fg.test_results.tartanair.interp.plain.rife_4_26.psnr}{fg.test_per_sample.tartanair.interp.plain.rife_4_26.psnr} dB. The not-gated view therefore reports the generators on the samples where generation actually runs. The gate is evaluated separately in \cref{sec:fgr-cut}.
+
+\begin{table}[!htbp]
+\caption{Effect of the cut gate on plain interpolation (PSNR, dB): all samples against the samples the gate left alone. Gated samples carry the newest real frame, so they lower the all-sample mean of every method that the gate covers}\label{tab:fgr-gate-effect}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrr}
+\toprule
+Suite & Gated / samples & RIFE, all & RIFE, kept & \tier{high}, all & \tier{high}, kept \\
+\midrule
+Synthetic & \Res{fg.cut_gate_rates.synthetic.interp.plain.gated} of \Res{fg.cut_gate_rates.synthetic.interp.plain.samples} & \Res{fg.test_results.synthetic.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.synthetic.interp.plain.high.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.high.psnr} \\
+Vimeo-90K triplet & \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.gated} of \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.samples} & \Res{fg.test_results.vimeo_triplet.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.vimeo_triplet.interp.plain.high.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.high.psnr} \\
+Vimeo-1080p, 544 lines & \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.gated} of \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.samples} & \Res{fg.test_results.vimeo1080p.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.vimeo1080p.interp.plain.high.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.high.psnr} \\
+Vimeo-1080p, native & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.plain.gated} of \Res{fg.cut_gate_rates.vimeo1080p_native.interp.plain.samples} & \Res{fg.test_results.vimeo1080p_native.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.vimeo1080p_native.interp.plain.high.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.high.psnr} \\
+Vid4 & \Res{fg.cut_gate_rates.vid4.interp.plain.gated} of \Res{fg.cut_gate_rates.vid4.interp.plain.samples} & \Res{fg.test_results.vid4.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.vid4.interp.plain.high.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.high.psnr} \\
+TartanAir & \Res{fg.cut_gate_rates.tartanair.interp.plain.gated} of \Res{fg.cut_gate_rates.tartanair.interp.plain.samples} & \Res{fg.test_results.tartanair.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.tartanair.interp.plain.high.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.high.psnr} \\
+Sintel & \Res{fg.cut_gate_rates.sintel.interp.plain.gated} of \Res{fg.cut_gate_rates.sintel.interp.plain.samples} & \Res{fg.test_results.sintel.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.rife_4_26.psnr} & \Res{fg.test_results.sintel.interp.plain.high.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.high.psnr} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\UnderRevision{} The gate also fires on samples without a cut. It replaced \Res{fg.cut_gate_rates.synthetic.interp.plain.gated} of \Res{fg.cut_gate_rates.synthetic.interp.plain.samples} plain synthetic samples, a share of \Res{fg.cut_gate_rates.synthetic.interp.plain.gated_share}, while its threshold was calibrated for one percent false alarms on continuous pairs. The gap between calibration and test is the reason the not-gated view is needed, and a gate that false-alarms at this rate is not deployable in its present form.
+
+\subsubsection{Plain video}\label{sec:fgr-interp-plain}
+
+\Cref{tab:fgr-interp-plain} gives the not-gated PSNR of every tier and baseline.
+
+\begin{table}[!htbp]
+\caption{Frame interpolation on plain video (no engine data), PSNR (dB), not-gated samples (kept of all samples in brackets). Bold marks the best deployable tier per row. Repeat is the newest real frame, average is the mean of the two real frames and RIFE 4.26 is the pre-trained network unchanged}\label{tab:fgr-interp-plain}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrr}
+\toprule
+Suite (kept of samples) & Repeat & Average & RIFE 4.26 & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Synthetic (\Res{fg.test_per_sample.synthetic.interp.plain.kept} of \Res{fg.test_per_sample.synthetic.interp.plain.n}) & \Res{fg.test_per_sample.synthetic.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.average.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.student.psnr} & \Res{fg.test_per_sample.synthetic.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.synthetic.interp.plain.high.psnr}} \\
+Vimeo-90K triplet (\Res{fg.test_per_sample.vimeo_triplet.interp.plain.kept} of \Res{fg.test_per_sample.vimeo_triplet.interp.plain.n}) & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.average.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.student.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo_triplet.interp.plain.high.psnr}} \\
+Vimeo-1080p, 544 lines (\Res{fg.test_per_sample.vimeo1080p.interp.plain.kept} of \Res{fg.test_per_sample.vimeo1080p.interp.plain.n}) & \Res{fg.test_per_sample.vimeo1080p.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.average.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.student.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p.interp.plain.high.psnr}} \\
+Vimeo-1080p, native (\Res{fg.test_per_sample.vimeo1080p_native.interp.plain.kept} of \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.n}) & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.average.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.student.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p_native.interp.plain.high.psnr}} \\
+Vid4 (\Res{fg.test_per_sample.vid4.interp.plain.kept} of \Res{fg.test_per_sample.vid4.interp.plain.n}) & \Res{fg.test_per_sample.vid4.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.average.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.student.psnr} & \Res{fg.test_per_sample.vid4.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vid4.interp.plain.high.psnr}} \\
+TartanAir (\Res{fg.test_per_sample.tartanair.interp.plain.kept} of \Res{fg.test_per_sample.tartanair.interp.plain.n}) & \Res{fg.test_per_sample.tartanair.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.average.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.student.psnr} & \Res{fg.test_per_sample.tartanair.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.tartanair.interp.plain.high.psnr}} \\
+Sintel (\Res{fg.test_per_sample.sintel.interp.plain.kept} of \Res{fg.test_per_sample.sintel.interp.plain.n}) & \Res{fg.test_per_sample.sintel.interp.plain.repeat.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.average.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.igpu.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.student.psnr} & \Res{fg.test_per_sample.sintel.interp.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.sintel.interp.plain.high.psnr}} \\
+\midrule
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} The \tier{high} tier is the best tier on every suite. It beats RIFE 4.26 by \ResAbsDiff{fg.test_per_sample.vimeo_triplet.interp.plain.high.psnr}{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.psnr} dB on the Vimeo-90K triplets, by \ResAbsDiff{fg.test_per_sample.vimeo1080p.interp.plain.high.psnr}{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.psnr} dB on Vimeo-1080p at 544 lines, by \ResAbsDiff{fg.test_per_sample.vimeo1080p_native.interp.plain.high.psnr}{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.psnr} dB at native resolution and by \ResAbsDiff{fg.test_per_sample.vid4.interp.plain.high.psnr}{fg.test_per_sample.vid4.interp.plain.rife_4_26.psnr} dB on Vid4. RIFE 4.26 stays ahead on TartanAir, by \ResAbsDiff{fg.test_per_sample.tartanair.interp.plain.high.psnr}{fg.test_per_sample.tartanair.interp.plain.rife_4_26.psnr} dB, and on Sintel, by \ResAbsDiff{fg.test_per_sample.sintel.interp.plain.high.psnr}{fg.test_per_sample.sintel.interp.plain.rife_4_26.psnr} dB. The Sintel gap rests on \Res{fg.test_per_sample.sintel.interp.plain.kept} kept samples, and the Vid4 margin rests on \Res{fg.test_per_sample.vid4.interp.plain.kept} samples, which makes it the least certain of the positive margins. On the synthetic suite RIFE 4.26 is also ahead, by \ResAbsDiff{fg.test_per_sample.synthetic.interp.plain.high.psnr}{fg.test_per_sample.synthetic.interp.plain.rife_4_26.psnr} dB, although the \tier{high} tier has the lower interpolation error there.
+
+\Observation{} The two suites where RIFE 4.26 leads are the two with the fewest real training quads, which are Sintel with \Res{fg.caches.quad_sources.train.sintel} and TartanAir with \Res{fg.caches.quad_sources.train.tartanair} quads, against \Res{fg.caches.quad_sources.train.vimeo_septuplet} Vimeo-90K quads in the cache. This is a hypothesis about the training data mix. The run did not test it, and a run with those suites up-weighted would be needed to confirm it.
+
+\Preliminary{} The \tier{mid} tier, at \Res{fg.model_tiers.mid.gmac_per_1080p_frame} GMAC per 1080p frame, is within 0.5 dB of RIFE 4.26 on five of the seven suites, counting Middlebury. The \tier{low} tier, at \Res{fg.model_tiers.low.gmac_per_1080p_frame} GMAC and with half of RIFE's channel widths, beats frame averaging on every suite and trails RIFE 4.26 by between \ResAbsDiff{fg.test_per_sample.vid4.interp.plain.student.psnr}{fg.test_per_sample.vid4.interp.plain.rife_4_26.psnr} dB on Vid4 and \ResAbsDiff{fg.test_per_sample.tartanair.interp.plain.student.psnr}{fg.test_per_sample.tartanair.interp.plain.rife_4_26.psnr} dB on TartanAir. The \tier{igpu} tier is barely above averaging on the two 1080p suites, by \ResAbsDiff{fg.test_per_sample.vimeo1080p.interp.plain.igpu.psnr}{fg.test_per_sample.vimeo1080p.interp.plain.average.psnr} dB at 544 lines and by \ResAbsDiff{fg.test_per_sample.vimeo1080p_native.interp.plain.igpu.psnr}{fg.test_per_sample.vimeo1080p_native.interp.plain.average.psnr} dB at native resolution. \Observation{} The \tier{low} tier has half the channel widths of RIFE 4.26 (\cref{sec:fgm}), and its gap is consistent with that narrower network. The run did not test the cause.
+
+\Preliminary{} \Cref{tab:fgr-interp-metrics} gives the other metrics on the same samples. RIFE 4.26 has the lowest LPIPS on every real suite, and the \tier{high} tier is second on six of the seven suites, with the \tier{mid} tier second on the native suite. Interpolation error ranks the \tier{high} tier first on four suites and RIFE 4.26 first on the others, so the perceptual and error measures disagree about the best network on this set. Occluded-region PSNR orders the networks differently from full-frame PSNR on several suites, most clearly on the triplets, where RIFE 4.26 leads on occluded pixels while \tier{high} leads on the full frame. The occluded pixels are where a blend of the two frames cannot be right, so the full-frame PSNR does not describe them.
+
+\begin{table}[!htbp]
+\caption{Frame interpolation on plain video, the metrics other than PSNR, not-gated samples. Synth. is the synthetic suite and 1080p the Vimeo-1080p clips at 544 lines}\label{tab:fgr-interp-metrics}
+\scriptsize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrr}
+\toprule
+Method & Synth. & Triplet & 1080p & Native & Vid4 & TartanAir & Sintel \\
+\midrule
+\multicolumn{8}{l}{\itshape SSIM (higher is better)} \\
+Repeat & \Res{fg.test_per_sample.synthetic.interp.plain.repeat.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.repeat.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.repeat.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.repeat.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.repeat.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.repeat.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.repeat.ssim} \\
+Average & \Res{fg.test_per_sample.synthetic.interp.plain.average.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.average.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.average.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.average.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.average.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.average.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.average.ssim} \\
+RIFE 4.26 & \Res{fg.test_per_sample.synthetic.interp.plain.rife_4_26.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.rife_4_26.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.rife_4_26.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.rife_4_26.ssim} \\
+\tier{igpu} & \Res{fg.test_per_sample.synthetic.interp.plain.igpu.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.igpu.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.igpu.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.igpu.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.igpu.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.igpu.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.igpu.ssim} \\
+\tier{low} & \Res{fg.test_per_sample.synthetic.interp.plain.student.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.student.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.student.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.student.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.student.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.student.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.student.ssim} \\
+\tier{mid} & \Res{fg.test_per_sample.synthetic.interp.plain.mid.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.mid.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.mid.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.mid.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.mid.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.mid.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.mid.ssim} \\
+\tier{high} & \Res{fg.test_per_sample.synthetic.interp.plain.high.ssim} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.high.ssim} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.high.ssim} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.high.ssim} & \Res{fg.test_per_sample.vid4.interp.plain.high.ssim} & \Res{fg.test_per_sample.tartanair.interp.plain.high.ssim} & \Res{fg.test_per_sample.sintel.interp.plain.high.ssim} \\
+\midrule
+\multicolumn{8}{l}{\itshape LPIPS (lower is better)} \\
+Repeat & \Res{fg.test_per_sample.synthetic.interp.plain.repeat.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.repeat.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.repeat.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.repeat.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.repeat.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.repeat.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.repeat.lpips} \\
+Average & \Res{fg.test_per_sample.synthetic.interp.plain.average.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.average.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.average.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.average.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.average.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.average.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.average.lpips} \\
+RIFE 4.26 & \Res{fg.test_per_sample.synthetic.interp.plain.rife_4_26.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.rife_4_26.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.rife_4_26.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.rife_4_26.lpips} \\
+\tier{igpu} & \Res{fg.test_per_sample.synthetic.interp.plain.igpu.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.igpu.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.igpu.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.igpu.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.igpu.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.igpu.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.igpu.lpips} \\
+\tier{low} & \Res{fg.test_per_sample.synthetic.interp.plain.student.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.student.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.student.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.student.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.student.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.student.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.student.lpips} \\
+\tier{mid} & \Res{fg.test_per_sample.synthetic.interp.plain.mid.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.mid.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.mid.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.mid.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.mid.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.mid.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.mid.lpips} \\
+\tier{high} & \Res{fg.test_per_sample.synthetic.interp.plain.high.lpips} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.high.lpips} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.high.lpips} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.high.lpips} & \Res{fg.test_per_sample.vid4.interp.plain.high.lpips} & \Res{fg.test_per_sample.tartanair.interp.plain.high.lpips} & \Res{fg.test_per_sample.sintel.interp.plain.high.lpips} \\
+\midrule
+\multicolumn{8}{l}{\itshape Interpolation error, root-mean-square on the 0 to 255 scale (lower is better)} \\
+Repeat & \Res{fg.test_per_sample.synthetic.interp.plain.repeat.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.repeat.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.repeat.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.repeat.ie} & \Res{fg.test_per_sample.vid4.interp.plain.repeat.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.repeat.ie} & \Res{fg.test_per_sample.sintel.interp.plain.repeat.ie} \\
+Average & \Res{fg.test_per_sample.synthetic.interp.plain.average.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.average.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.average.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.average.ie} & \Res{fg.test_per_sample.vid4.interp.plain.average.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.average.ie} & \Res{fg.test_per_sample.sintel.interp.plain.average.ie} \\
+RIFE 4.26 & \Res{fg.test_per_sample.synthetic.interp.plain.rife_4_26.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.ie} & \Res{fg.test_per_sample.vid4.interp.plain.rife_4_26.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.rife_4_26.ie} & \Res{fg.test_per_sample.sintel.interp.plain.rife_4_26.ie} \\
+\tier{igpu} & \Res{fg.test_per_sample.synthetic.interp.plain.igpu.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.igpu.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.igpu.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.igpu.ie} & \Res{fg.test_per_sample.vid4.interp.plain.igpu.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.igpu.ie} & \Res{fg.test_per_sample.sintel.interp.plain.igpu.ie} \\
+\tier{low} & \Res{fg.test_per_sample.synthetic.interp.plain.student.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.student.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.student.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.student.ie} & \Res{fg.test_per_sample.vid4.interp.plain.student.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.student.ie} & \Res{fg.test_per_sample.sintel.interp.plain.student.ie} \\
+\tier{mid} & \Res{fg.test_per_sample.synthetic.interp.plain.mid.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.mid.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.mid.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.mid.ie} & \Res{fg.test_per_sample.vid4.interp.plain.mid.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.mid.ie} & \Res{fg.test_per_sample.sintel.interp.plain.mid.ie} \\
+\tier{high} & \Res{fg.test_per_sample.synthetic.interp.plain.high.ie} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.high.ie} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.high.ie} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.high.ie} & \Res{fg.test_per_sample.vid4.interp.plain.high.ie} & \Res{fg.test_per_sample.tartanair.interp.plain.high.ie} & \Res{fg.test_per_sample.sintel.interp.plain.high.ie} \\
+\midrule
+\multicolumn{8}{l}{\itshape PSNR over occluded pixels (dB, higher is better)} \\
+Repeat & \Res{fg.test_per_sample.synthetic.interp.plain.repeat.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.repeat.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.repeat.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.repeat.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.repeat.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.repeat.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.repeat.psnr_occluded} \\
+Average & \Res{fg.test_per_sample.synthetic.interp.plain.average.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.average.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.average.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.average.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.average.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.average.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.average.psnr_occluded} \\
+RIFE 4.26 & \Res{fg.test_per_sample.synthetic.interp.plain.rife_4_26.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.rife_4_26.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.rife_4_26.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.rife_4_26.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.rife_4_26.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.rife_4_26.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.rife_4_26.psnr_occluded} \\
+\tier{igpu} & \Res{fg.test_per_sample.synthetic.interp.plain.igpu.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.igpu.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.igpu.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.igpu.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.igpu.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.igpu.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.igpu.psnr_occluded} \\
+\tier{low} & \Res{fg.test_per_sample.synthetic.interp.plain.student.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.student.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.student.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.student.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.student.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.student.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.student.psnr_occluded} \\
+\tier{mid} & \Res{fg.test_per_sample.synthetic.interp.plain.mid.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.mid.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.mid.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.mid.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.mid.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.mid.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.mid.psnr_occluded} \\
+\tier{high} & \Res{fg.test_per_sample.synthetic.interp.plain.high.psnr_occluded} & \Res{fg.test_per_sample.vimeo_triplet.interp.plain.high.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p.interp.plain.high.psnr_occluded} & \Res{fg.test_per_sample.vimeo1080p_native.interp.plain.high.psnr_occluded} & \Res{fg.test_per_sample.vid4.interp.plain.high.psnr_occluded} & \Res{fg.test_per_sample.tartanair.interp.plain.high.psnr_occluded} & \Res{fg.test_per_sample.sintel.interp.plain.high.psnr_occluded} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\subsubsection{Engine data}\label{sec:fgr-interp-engine}
+
+\Cref{tab:fgr-interp-engine} gives the not-gated interpolation results with engine data. \Preliminary{} Motion-vector reprojection is below RIFE 4.26 on every real suite. On all samples, the gap is \ResAbsDiff{fg.test_results.sintel.interp.engine.mv_reprojection.psnr}{fg.test_results.sintel.interp.engine.rife_4_26.psnr} dB on Sintel and \ResAbsDiff{fg.test_results.vimeo_triplet.interp.engine.mv_reprojection.psnr}{fg.test_results.vimeo_triplet.interp.engine.rife_4_26.psnr} dB on the Vimeo-90K triplets. The comparison is made within the engine mode, so both networks see the same samples, the same gate and the same engine data.
+
+\begin{table}[!htbp]
+\caption{Frame interpolation with engine data (motion vectors, depth and camera where the suite has them), PSNR (dB), not-gated samples. The gate depends on the input mode, so the kept samples differ from the plain table}\label{tab:fgr-interp-engine}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrr}
+\toprule
+Suite (kept of samples) & RIFE 4.26 & MV reprojection & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Synthetic (\Res{fg.test_per_sample.synthetic.interp.engine.kept} of \Res{fg.test_per_sample.synthetic.interp.engine.n}) & \Res{fg.test_per_sample.synthetic.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.synthetic.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.synthetic.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.synthetic.interp.engine.student.psnr} & \Res{fg.test_per_sample.synthetic.interp.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.synthetic.interp.engine.high.psnr}} \\
+Vimeo-90K triplet (\Res{fg.test_per_sample.vimeo_triplet.interp.engine.kept} of \Res{fg.test_per_sample.vimeo_triplet.interp.engine.n}) & \Res{fg.test_per_sample.vimeo_triplet.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.engine.student.psnr} & \Res{fg.test_per_sample.vimeo_triplet.interp.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo_triplet.interp.engine.high.psnr}} \\
+Vimeo-1080p, 544 lines (\Res{fg.test_per_sample.vimeo1080p.interp.engine.kept} of \Res{fg.test_per_sample.vimeo1080p.interp.engine.n}) & \Res{fg.test_per_sample.vimeo1080p.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.engine.student.psnr} & \Res{fg.test_per_sample.vimeo1080p.interp.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p.interp.engine.high.psnr}} \\
+Vimeo-1080p, native (\Res{fg.test_per_sample.vimeo1080p_native.interp.engine.kept} of \Res{fg.test_per_sample.vimeo1080p_native.interp.engine.n}) & \Res{fg.test_per_sample.vimeo1080p_native.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.engine.student.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.interp.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p_native.interp.engine.high.psnr}} \\
+Vid4 (\Res{fg.test_per_sample.vid4.interp.engine.kept} of \Res{fg.test_per_sample.vid4.interp.engine.n}) & \Res{fg.test_per_sample.vid4.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vid4.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vid4.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.vid4.interp.engine.student.psnr} & \Res{fg.test_per_sample.vid4.interp.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vid4.interp.engine.high.psnr}} \\
+TartanAir (\Res{fg.test_per_sample.tartanair.interp.engine.kept} of \Res{fg.test_per_sample.tartanair.interp.engine.n}) & \Res{fg.test_per_sample.tartanair.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.tartanair.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.tartanair.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.tartanair.interp.engine.student.psnr} & \Res{fg.test_per_sample.tartanair.interp.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.tartanair.interp.engine.high.psnr}} \\
+Sintel (\Res{fg.test_per_sample.sintel.interp.engine.kept} of \Res{fg.test_per_sample.sintel.interp.engine.n}) & \Res{fg.test_per_sample.sintel.interp.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.sintel.interp.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.sintel.interp.engine.igpu.psnr} & \Res{fg.test_per_sample.sintel.interp.engine.student.psnr} & \textbf{\Res{fg.test_per_sample.sintel.interp.engine.mid.psnr}} & \Res{fg.test_per_sample.sintel.interp.engine.high.psnr} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Observation{} On TartanAir the motion vectors are exact, and reprojection is still \ResAbsDiff{fg.test_results.tartanair.interp.engine.mv_reprojection.psnr}{fg.test_results.tartanair.interp.engine.rife_4_26.psnr} dB below RIFE 4.26, so exact vectors alone do not make reprojection competitive with a learned blend. The effect of engine hints on the \tier{high} tier is given in \cref{sec:fgr-engine-hints}, where the comparison is paired on the same samples.
+
+\subsubsection{Three-frame generation}\label{sec:fgr-mfg}
+
+Three-frame generation produces two frames between real frames $k$ and $k+3$, at $\tau=1/3$ and $\tau=2/3$, with plain input only. \Cref{tab:fgr-mfg3x} gives the not-gated results.
+
+\begin{table}[!htbp]
+\caption{3x multi-frame generation on plain real clips (frames 0 and 3 give targets at tau = 1/3 and 2/3), PSNR (dB), not-gated samples. Bold marks the best deployable tier per row}\label{tab:fgr-mfg3x}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrr}
+\toprule
+Suite (kept of samples) & Repeat & Average & RIFE 4.26 & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Vimeo-1080p, 544 lines (\Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.kept} of \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.n}) & \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.average.psnr} & \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.student.psnr} & \Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p.mfg3x.plain.high.psnr}} \\
+Vimeo-1080p, native (\Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.kept} of \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.n}) & \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.average.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.student.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.high.psnr}} \\
+Vid4 (\Res{fg.test_per_sample.vid4.mfg3x.plain.kept} of \Res{fg.test_per_sample.vid4.mfg3x.plain.n}) & \Res{fg.test_per_sample.vid4.mfg3x.plain.repeat.psnr} & \Res{fg.test_per_sample.vid4.mfg3x.plain.average.psnr} & \Res{fg.test_per_sample.vid4.mfg3x.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vid4.mfg3x.plain.igpu.psnr} & \Res{fg.test_per_sample.vid4.mfg3x.plain.student.psnr} & \Res{fg.test_per_sample.vid4.mfg3x.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vid4.mfg3x.plain.high.psnr}} \\
+TartanAir (\Res{fg.test_per_sample.tartanair.mfg3x.plain.kept} of \Res{fg.test_per_sample.tartanair.mfg3x.plain.n}) & \Res{fg.test_per_sample.tartanair.mfg3x.plain.repeat.psnr} & \Res{fg.test_per_sample.tartanair.mfg3x.plain.average.psnr} & \Res{fg.test_per_sample.tartanair.mfg3x.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.tartanair.mfg3x.plain.igpu.psnr} & \Res{fg.test_per_sample.tartanair.mfg3x.plain.student.psnr} & \Res{fg.test_per_sample.tartanair.mfg3x.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.tartanair.mfg3x.plain.high.psnr}} \\
+Sintel (\Res{fg.test_per_sample.sintel.mfg3x.plain.kept} of \Res{fg.test_per_sample.sintel.mfg3x.plain.n}) & \Res{fg.test_per_sample.sintel.mfg3x.plain.repeat.psnr} & \Res{fg.test_per_sample.sintel.mfg3x.plain.average.psnr} & \Res{fg.test_per_sample.sintel.mfg3x.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.sintel.mfg3x.plain.igpu.psnr} & \Res{fg.test_per_sample.sintel.mfg3x.plain.student.psnr} & \Res{fg.test_per_sample.sintel.mfg3x.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.sintel.mfg3x.plain.high.psnr}} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} The \tier{high} tier matches or beats RIFE 4.26 on four of the five suites. It is ahead on Vid4 by \ResAbsDiff{fg.test_per_sample.vid4.mfg3x.plain.high.psnr}{fg.test_per_sample.vid4.mfg3x.plain.rife_4_26.psnr} dB, on native Vimeo-1080p by \ResAbsDiff{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.high.psnr}{fg.test_per_sample.vimeo1080p_native.mfg3x.plain.rife_4_26.psnr} dB, on Vimeo-1080p at 544 lines by \ResAbsDiff{fg.test_per_sample.vimeo1080p.mfg3x.plain.high.psnr}{fg.test_per_sample.vimeo1080p.mfg3x.plain.rife_4_26.psnr} dB and on TartanAir by \ResAbsDiff{fg.test_per_sample.tartanair.mfg3x.plain.high.psnr}{fg.test_per_sample.tartanair.mfg3x.plain.rife_4_26.psnr} dB. It is behind on Sintel by \ResAbsDiff{fg.test_per_sample.sintel.mfg3x.plain.high.psnr}{fg.test_per_sample.sintel.mfg3x.plain.rife_4_26.psnr} dB.
+
+\UnderRevision{} The gate fires more often on these samples, because the real frames are three apart and the histogram threshold was calibrated on adjacent pairs. It fired on \Res{fg.cut_gate_rates.sintel.mfg3x.plain.gated} of \Res{fg.cut_gate_rates.sintel.mfg3x.plain.samples} Sintel samples, \Res{fg.cut_gate_rates.tartanair.mfg3x.plain.gated} of \Res{fg.cut_gate_rates.tartanair.mfg3x.plain.samples} TartanAir samples, \Res{fg.cut_gate_rates.vimeo1080p.mfg3x.plain.gated} of \Res{fg.cut_gate_rates.vimeo1080p.mfg3x.plain.samples} Vimeo-1080p samples and \Res{fg.cut_gate_rates.vimeo1080p_native.mfg3x.plain.gated} of \Res{fg.cut_gate_rates.vimeo1080p_native.mfg3x.plain.samples} native samples, and on none of the \Res{fg.cut_gate_rates.vid4.mfg3x.plain.samples} Vid4 samples. Three-frame results on Sintel and TartanAir therefore rest on heavily gated sets, and the cut gate needs recalibration for wider frame gaps before these rows can be read as generator quality.
+
+\subsubsection{Middlebury}\label{sec:fgr-mb}
+
+Each Middlebury other-set sequence gives two input frames and a ground-truth middle frame, so an interpolated frame is scored directly against it. The comparison was run after the notebook on a CPU, with the RIFE 4.26 weights and the checkpoints of the run, and with colour input only. The frames are about 380 to 480 lines high, below the 576-line limit of the \tier{igpu} and \tier{low} flows and the 1152-line limit of the \tier{mid} and \tier{high} flows, so every tier estimates flow at full resolution, as it does in training. The comparison also includes RIFE 4.26 with its flow at half and at quarter resolution, which shows how much the flow scale matters on this set. \Cref{tab:fgr-mb} gives the PSNR of every sequence.
+
+\begin{table}[!htbp]
+\caption{Middlebury other-set interpolation (frames 10 and 11 to frame 10 and 11 interpolated, colour only, no engine data), PSNR (dB) per sequence, measured on CPU after the run with the saved checkpoints. Bold marks the best deployable tier per row}\label{tab:fgr-mb}
+\scriptsize\setlength{\tabcolsep}{2pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrrr}
+\toprule
+Sequence & Avg. & RIFE & RIFE half & RIFE quarter & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Beanbags & \Res{mb.middlebury_psnr.beanbags.average.psnr} & \Res{mb.middlebury_psnr.beanbags.rife_4_26.psnr} & \Res{mb.middlebury_psnr.beanbags.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.beanbags.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.beanbags.igpu.psnr} & \Res{mb.middlebury_psnr.beanbags.low.psnr} & \Res{mb.middlebury_psnr.beanbags.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.beanbags.high.psnr}} \\
+Dimetrodon & \Res{mb.middlebury_psnr.dimetrodon.average.psnr} & \Res{mb.middlebury_psnr.dimetrodon.rife_4_26.psnr} & \Res{mb.middlebury_psnr.dimetrodon.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.dimetrodon.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.dimetrodon.igpu.psnr} & \Res{mb.middlebury_psnr.dimetrodon.low.psnr} & \Res{mb.middlebury_psnr.dimetrodon.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.dimetrodon.high.psnr}} \\
+DogDance & \Res{mb.middlebury_psnr.dogdance.average.psnr} & \Res{mb.middlebury_psnr.dogdance.rife_4_26.psnr} & \Res{mb.middlebury_psnr.dogdance.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.dogdance.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.dogdance.igpu.psnr} & \Res{mb.middlebury_psnr.dogdance.low.psnr} & \textbf{\Res{mb.middlebury_psnr.dogdance.mid.psnr}} & \Res{mb.middlebury_psnr.dogdance.high.psnr} \\
+Grove2 & \Res{mb.middlebury_psnr.grove2.average.psnr} & \Res{mb.middlebury_psnr.grove2.rife_4_26.psnr} & \Res{mb.middlebury_psnr.grove2.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.grove2.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.grove2.igpu.psnr} & \Res{mb.middlebury_psnr.grove2.low.psnr} & \Res{mb.middlebury_psnr.grove2.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.grove2.high.psnr}} \\
+Grove3 & \Res{mb.middlebury_psnr.grove3.average.psnr} & \Res{mb.middlebury_psnr.grove3.rife_4_26.psnr} & \Res{mb.middlebury_psnr.grove3.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.grove3.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.grove3.igpu.psnr} & \Res{mb.middlebury_psnr.grove3.low.psnr} & \Res{mb.middlebury_psnr.grove3.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.grove3.high.psnr}} \\
+Hydrangea & \Res{mb.middlebury_psnr.hydrangea.average.psnr} & \Res{mb.middlebury_psnr.hydrangea.rife_4_26.psnr} & \Res{mb.middlebury_psnr.hydrangea.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.hydrangea.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.hydrangea.igpu.psnr} & \Res{mb.middlebury_psnr.hydrangea.low.psnr} & \textbf{\Res{mb.middlebury_psnr.hydrangea.mid.psnr}} & \Res{mb.middlebury_psnr.hydrangea.high.psnr} \\
+MiniCooper & \Res{mb.middlebury_psnr.minicooper.average.psnr} & \Res{mb.middlebury_psnr.minicooper.rife_4_26.psnr} & \Res{mb.middlebury_psnr.minicooper.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.minicooper.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.minicooper.igpu.psnr} & \Res{mb.middlebury_psnr.minicooper.low.psnr} & \Res{mb.middlebury_psnr.minicooper.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.minicooper.high.psnr}} \\
+RubberWhale & \Res{mb.middlebury_psnr.rubberwhale.average.psnr} & \Res{mb.middlebury_psnr.rubberwhale.rife_4_26.psnr} & \Res{mb.middlebury_psnr.rubberwhale.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.rubberwhale.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.rubberwhale.igpu.psnr} & \Res{mb.middlebury_psnr.rubberwhale.low.psnr} & \Res{mb.middlebury_psnr.rubberwhale.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.rubberwhale.high.psnr}} \\
+Urban2 & \Res{mb.middlebury_psnr.urban2.average.psnr} & \Res{mb.middlebury_psnr.urban2.rife_4_26.psnr} & \Res{mb.middlebury_psnr.urban2.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.urban2.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.urban2.igpu.psnr} & \Res{mb.middlebury_psnr.urban2.low.psnr} & \Res{mb.middlebury_psnr.urban2.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.urban2.high.psnr}} \\
+Urban3 & \Res{mb.middlebury_psnr.urban3.average.psnr} & \Res{mb.middlebury_psnr.urban3.rife_4_26.psnr} & \Res{mb.middlebury_psnr.urban3.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.urban3.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.urban3.igpu.psnr} & \Res{mb.middlebury_psnr.urban3.low.psnr} & \textbf{\Res{mb.middlebury_psnr.urban3.mid.psnr}} & \Res{mb.middlebury_psnr.urban3.high.psnr} \\
+Venus & \Res{mb.middlebury_psnr.venus.average.psnr} & \Res{mb.middlebury_psnr.venus.rife_4_26.psnr} & \Res{mb.middlebury_psnr.venus.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.venus.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.venus.igpu.psnr} & \Res{mb.middlebury_psnr.venus.low.psnr} & \Res{mb.middlebury_psnr.venus.mid.psnr} & \textbf{\Res{mb.middlebury_psnr.venus.high.psnr}} \\
+Walking & \Res{mb.middlebury_psnr.walking.average.psnr} & \Res{mb.middlebury_psnr.walking.rife_4_26.psnr} & \Res{mb.middlebury_psnr.walking.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.walking.rife_4_26_flow_quarter.psnr} & \textbf{\Res{mb.middlebury_psnr.walking.igpu.psnr}} & \Res{mb.middlebury_psnr.walking.low.psnr} & \Res{mb.middlebury_psnr.walking.mid.psnr} & \Res{mb.middlebury_psnr.walking.high.psnr} \\
+\midrule
+Mean (12) & \Res{mb.middlebury_psnr.mean.average.psnr} & \Res{mb.middlebury_psnr.mean.rife_4_26.psnr} & \Res{mb.middlebury_psnr.mean.rife_4_26_flow_half.psnr} & \Res{mb.middlebury_psnr.mean.rife_4_26_flow_quarter.psnr} & \Res{mb.middlebury_psnr.mean.igpu.psnr} & \Res{mb.middlebury_psnr.mean.low.psnr} & \Res{mb.middlebury_psnr.mean.mid.psnr} & \Res{mb.middlebury_psnr.mean.high.psnr} \\
+GMAC per 1080p frame & n/a & \Res{mb.middlebury_psnr.mean.rife_4_26.gmac_1080p} & \Res{mb.middlebury_psnr.mean.rife_4_26_flow_half.gmac_1080p} & \Res{mb.middlebury_psnr.mean.rife_4_26_flow_quarter.gmac_1080p} & \Res{mb.middlebury_psnr.mean.igpu.gmac_1080p} & \Res{mb.middlebury_psnr.mean.low.gmac_1080p} & \Res{mb.middlebury_psnr.mean.mid.gmac_1080p} & \Res{mb.middlebury_psnr.mean.high.gmac_1080p} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} On the twelve sequences the \tier{high} tier averages \Res{mb.middlebury_psnr.mean.high.psnr} dB against \Res{mb.middlebury_psnr.mean.rife_4_26.psnr} dB for RIFE 4.26, a margin of \ResAbsDiff{mb.middlebury_psnr.mean.high.psnr}{mb.middlebury_psnr.mean.rife_4_26.psnr} dB. The \tier{mid} tier averages \Res{mb.middlebury_psnr.mean.mid.psnr} dB, the \tier{low} tier \Res{mb.middlebury_psnr.mean.low.psnr} dB, the \tier{igpu} tier \Res{mb.middlebury_psnr.mean.igpu.psnr} dB and frame averaging \Res{mb.middlebury_psnr.mean.average.psnr} dB. The mean hides large differences between sequences. The \tier{high} tier beats RIFE 4.26 on nine of the twelve sequences, by \ResAbsDiff{mb.middlebury_psnr.dimetrodon.high.psnr}{mb.middlebury_psnr.dimetrodon.rife_4_26.psnr} dB on Dimetrodon at most, and it trails by \ResAbsDiff{mb.middlebury_psnr.beanbags.high.psnr}{mb.middlebury_psnr.beanbags.rife_4_26.psnr} dB on Beanbags, \ResAbsDiff{mb.middlebury_psnr.urban2.high.psnr}{mb.middlebury_psnr.urban2.rife_4_26.psnr} dB on Urban2 and \ResAbsDiff{mb.middlebury_psnr.urban3.high.psnr}{mb.middlebury_psnr.urban3.rife_4_26.psnr} dB on Urban3. The \tier{low} tier beats RIFE 4.26 on three sequences, and the \tier{igpu} tier beats it on two, Rubberwhale and Walking, with a tie on Dimetrodon. With twelve scenes and one run, the margin of the \tier{high} tier is a measured result on this set and not a general ranking.
+
+\Observation{} The flow scale matters on this set. RIFE 4.26 with flow at half resolution averages \Res{mb.middlebury_psnr.mean.rife_4_26_flow_half.psnr} dB, which is \ResAbsDiff{mb.middlebury_psnr.mean.rife_4_26.psnr}{mb.middlebury_psnr.mean.rife_4_26_flow_half.psnr} dB below the full-flow network, and at quarter resolution it averages \Res{mb.middlebury_psnr.mean.rife_4_26_flow_quarter.psnr} dB. Halving the flow saves cost, from \Res{mb.middlebury_psnr.mean.rife_4_26.gmac_1080p} to \Res{mb.middlebury_psnr.mean.rife_4_26_flow_half.gmac_1080p} GMAC per 1080p frame, but on nine sequences it loses quality. The flow scale is not monotone per sequence, because the half-resolution flow is the better of the two on three sequences, so no single flow scale suits every scene.
+
+\subsection{Extrapolation}\label{sec:fgr-extrap}
+
+Extrapolation generates a frame after the newest real frame, at $\tau=1.5$, from the two real frames before it. No later frame is available to hold, so the output must predict motion. Frame repetition is the cheapest baseline and it has no motion error at all when the scene is static. \Cref{tab:fgr-extrap-plain} gives the plain results and \cref{tab:fgr-extrap-engine} the results with engine data.
+
+\begin{table}[!htbp]
+\caption{Frame extrapolation (tau = 1.5) with engine data, PSNR (dB), not-gated samples. RIFE 4.26 takes no engine input, and its kept samples differ from the plain table because the gate depends on the input mode. Bold marks the best deployable tier per row}\label{tab:fgr-extrap-engine}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrrr}
+\toprule
+Suite (kept of samples) & Repeat & Avg. & MV & RIFE & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Synthetic (\Res{fg.test_per_sample.synthetic.extrap.engine.kept} of \Res{fg.test_per_sample.synthetic.extrap.engine.n}) & \Res{fg.test_per_sample.synthetic.extrap.engine.repeat.psnr} & \Res{fg.test_per_sample.synthetic.extrap.engine.average.psnr} & \Res{fg.test_per_sample.synthetic.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.synthetic.extrap.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.synthetic.extrap.engine.igpu.psnr} & \Res{fg.test_per_sample.synthetic.extrap.engine.student.psnr} & \Res{fg.test_per_sample.synthetic.extrap.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.synthetic.extrap.engine.high.psnr}} \\
+Vimeo-1080p, 544 lines (\Res{fg.test_per_sample.vimeo1080p.extrap.engine.kept} of \Res{fg.test_per_sample.vimeo1080p.extrap.engine.n}) & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.average.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.student.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p.extrap.engine.high.psnr}} \\
+Vimeo-1080p, native (\Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.kept} of \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.n}) & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.average.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.student.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p_native.extrap.engine.high.psnr}} \\
+Vid4 (\Res{fg.test_per_sample.vid4.extrap.engine.kept} of \Res{fg.test_per_sample.vid4.extrap.engine.n}) & \Res{fg.test_per_sample.vid4.extrap.engine.repeat.psnr} & \Res{fg.test_per_sample.vid4.extrap.engine.average.psnr} & \Res{fg.test_per_sample.vid4.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.vid4.extrap.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.vid4.extrap.engine.igpu.psnr} & \Res{fg.test_per_sample.vid4.extrap.engine.student.psnr} & \Res{fg.test_per_sample.vid4.extrap.engine.mid.psnr} & \textbf{\Res{fg.test_per_sample.vid4.extrap.engine.high.psnr}} \\
+TartanAir (\Res{fg.test_per_sample.tartanair.extrap.engine.kept} of \Res{fg.test_per_sample.tartanair.extrap.engine.n}) & \Res{fg.test_per_sample.tartanair.extrap.engine.repeat.psnr} & \Res{fg.test_per_sample.tartanair.extrap.engine.average.psnr} & \Res{fg.test_per_sample.tartanair.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.tartanair.extrap.engine.rife_4_26.psnr} & \Res{fg.test_per_sample.tartanair.extrap.engine.igpu.psnr} & \Res{fg.test_per_sample.tartanair.extrap.engine.student.psnr} & \textbf{\Res{fg.test_per_sample.tartanair.extrap.engine.mid.psnr}} & \Res{fg.test_per_sample.tartanair.extrap.engine.high.psnr} \\
+Sintel (\Res{fg.test_per_sample.sintel.extrap.engine.kept} of \Res{fg.test_per_sample.sintel.extrap.engine.n}) & \Res{fg.test_per_sample.sintel.extrap.engine.repeat.psnr} & \Res{fg.test_per_sample.sintel.extrap.engine.average.psnr} & \Res{fg.test_per_sample.sintel.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_per_sample.sintel.extrap.engine.rife_4_26.psnr} & \textbf{\Res{fg.test_per_sample.sintel.extrap.engine.igpu.psnr}} & \Res{fg.test_per_sample.sintel.extrap.engine.student.psnr} & \Res{fg.test_per_sample.sintel.extrap.engine.mid.psnr} & \Res{fg.test_per_sample.sintel.extrap.engine.high.psnr} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+\subsubsection{Plain video}\label{sec:fgr-extrap-plain}
+
+\begin{table}[!htbp]
+\caption{Frame extrapolation (tau = 1.5) on plain video, PSNR (dB), not-gated samples (kept of all samples in brackets). Bold marks the best deployable tier per row}\label{tab:fgr-extrap-plain}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrrr}
+\toprule
+Suite (kept of samples) & Repeat & Average & RIFE 4.26 & \tier{igpu} & \tier{low} & \tier{mid} & \tier{high} \\
+\midrule
+Synthetic (\Res{fg.test_per_sample.synthetic.extrap.plain.kept} of \Res{fg.test_per_sample.synthetic.extrap.plain.n}) & \Res{fg.test_per_sample.synthetic.extrap.plain.repeat.psnr} & \Res{fg.test_per_sample.synthetic.extrap.plain.average.psnr} & \Res{fg.test_per_sample.synthetic.extrap.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.synthetic.extrap.plain.igpu.psnr} & \Res{fg.test_per_sample.synthetic.extrap.plain.student.psnr} & \Res{fg.test_per_sample.synthetic.extrap.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.synthetic.extrap.plain.high.psnr}} \\
+Vimeo-1080p, 544 lines (\Res{fg.test_per_sample.vimeo1080p.extrap.plain.kept} of \Res{fg.test_per_sample.vimeo1080p.extrap.plain.n}) & \Res{fg.test_per_sample.vimeo1080p.extrap.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.plain.average.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.plain.student.psnr} & \Res{fg.test_per_sample.vimeo1080p.extrap.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p.extrap.plain.high.psnr}} \\
+Vimeo-1080p, native (\Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.kept} of \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.n}) & \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.repeat.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.average.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.igpu.psnr} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.student.psnr} & \textbf{\Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.mid.psnr}} & \Res{fg.test_per_sample.vimeo1080p_native.extrap.plain.high.psnr} \\
+Vid4 (\Res{fg.test_per_sample.vid4.extrap.plain.kept} of \Res{fg.test_per_sample.vid4.extrap.plain.n}) & \Res{fg.test_per_sample.vid4.extrap.plain.repeat.psnr} & \Res{fg.test_per_sample.vid4.extrap.plain.average.psnr} & \Res{fg.test_per_sample.vid4.extrap.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.vid4.extrap.plain.igpu.psnr} & \Res{fg.test_per_sample.vid4.extrap.plain.student.psnr} & \Res{fg.test_per_sample.vid4.extrap.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.vid4.extrap.plain.high.psnr}} \\
+TartanAir (\Res{fg.test_per_sample.tartanair.extrap.plain.kept} of \Res{fg.test_per_sample.tartanair.extrap.plain.n}) & \Res{fg.test_per_sample.tartanair.extrap.plain.repeat.psnr} & \Res{fg.test_per_sample.tartanair.extrap.plain.average.psnr} & \Res{fg.test_per_sample.tartanair.extrap.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.tartanair.extrap.plain.igpu.psnr} & \Res{fg.test_per_sample.tartanair.extrap.plain.student.psnr} & \Res{fg.test_per_sample.tartanair.extrap.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.tartanair.extrap.plain.high.psnr}} \\
+Sintel (\Res{fg.test_per_sample.sintel.extrap.plain.kept} of \Res{fg.test_per_sample.sintel.extrap.plain.n}) & \Res{fg.test_per_sample.sintel.extrap.plain.repeat.psnr} & \Res{fg.test_per_sample.sintel.extrap.plain.average.psnr} & \Res{fg.test_per_sample.sintel.extrap.plain.rife_4_26.psnr} & \Res{fg.test_per_sample.sintel.extrap.plain.igpu.psnr} & \Res{fg.test_per_sample.sintel.extrap.plain.student.psnr} & \Res{fg.test_per_sample.sintel.extrap.plain.mid.psnr} & \textbf{\Res{fg.test_per_sample.sintel.extrap.plain.high.psnr}} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} The \tier{high} tier beats frame repetition on every suite, by \ResAbsDiff{fg.test_per_sample.vimeo1080p_native.extrap.plain.high.psnr}{fg.test_per_sample.vimeo1080p_native.extrap.plain.repeat.psnr} dB at the least, on native Vimeo-1080p, and by \ResAbsDiff{fg.test_per_sample.tartanair.extrap.plain.high.psnr}{fg.test_per_sample.tartanair.extrap.plain.repeat.psnr} dB at the most, on TartanAir. The \tier{low} tier beats repetition on every suite too, by between \ResAbsDiff{fg.test_per_sample.vimeo1080p_native.extrap.plain.student.psnr}{fg.test_per_sample.vimeo1080p_native.extrap.plain.repeat.psnr} dB and \ResAbsDiff{fg.test_per_sample.tartanair.extrap.plain.student.psnr}{fg.test_per_sample.tartanair.extrap.plain.repeat.psnr} dB. RIFE 4.26 is at most \ResAbsDiff{fg.test_per_sample.vid4.extrap.plain.rife_4_26.psnr}{fg.test_per_sample.vid4.extrap.plain.repeat.psnr} dB above repetition, on Vid4, and it falls below repetition on both Vimeo-1080p suites, by \ResAbsDiff{fg.test_per_sample.vimeo1080p.extrap.plain.rife_4_26.psnr}{fg.test_per_sample.vimeo1080p.extrap.plain.repeat.psnr} dB at 544 lines.
+
+\Observation{} RIFE 4.26 is an interpolation network \cite{huang2022rife}, so at $\tau=1.5$ its blend lies outside the range it was built for, and its output tends to stay near the newest frame. The one network that the run trained for extrapolation as well is the \tier{high} tier. This is a mechanism we infer from the design, and the run did not isolate it.
+
+\subsubsection{Engine data}\label{sec:fgr-extrap-engine}
+
+
+\Preliminary{} With engine data the \tier{high} tier is the best tier on the synthetic suite and on both Vimeo-1080p suites, although on native Vimeo-1080p its lead over the \tier{mid} tier is only \ResAbsDiff{fg.test_per_sample.vimeo1080p_native.extrap.engine.high.psnr}{fg.test_per_sample.vimeo1080p_native.extrap.engine.mid.psnr} dB. On TartanAir, where the motion vectors are exact, motion-vector reprojection is still better by \ResAbsDiff{fg.test_per_sample.tartanair.extrap.engine.mv_reprojection.psnr}{fg.test_per_sample.tartanair.extrap.engine.high.psnr} dB, and on Sintel and Vid4 the two are within 0.1 dB of each other. Reprojection is therefore a strong baseline for extrapolation when its input is exact, and a learned network does not clearly beat it on every suite.
+
+\subsection{Engine hints against none}\label{sec:fgr-engine-hints}
+
+The engine hints are the motion vectors, the depth, the camera prior and the availability flags of the engine. The network receives them through zero-initialised channels (\cref{sec:fgm}), so a network trained with hints can be run without them. \Cref{tab:fgr-engine-hints} compares the \tier{high} tier with and without hints on the same samples, using all samples so that the two modes share the sample set.
+
+\begin{table}[!htbp]
+\caption{Engine hints against none for the \tier{high} tier, PSNR (dB) over all samples, so both input modes share the same samples. The difference is engine minus plain}\label{tab:fgr-engine-hints}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{Interpolation} & \multicolumn{3}{c}{Extrapolation} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Suite & Plain & Engine & Diff. & Plain & Engine & Diff. \\
+\midrule
+Synthetic & \Res{fg.test_results.synthetic.interp.plain.high.psnr} & \Res{fg.test_results.synthetic.interp.engine.high.psnr} & \ResDiff{fg.test_results.synthetic.interp.engine.high.psnr}{fg.test_results.synthetic.interp.plain.high.psnr} & \Res{fg.test_results.synthetic.extrap.plain.high.psnr} & \Res{fg.test_results.synthetic.extrap.engine.high.psnr} & \ResDiff{fg.test_results.synthetic.extrap.engine.high.psnr}{fg.test_results.synthetic.extrap.plain.high.psnr} \\
+Vimeo-90K triplet & \Res{fg.test_results.vimeo_triplet.interp.plain.high.psnr} & \Res{fg.test_results.vimeo_triplet.interp.engine.high.psnr} & \ResDiff{fg.test_results.vimeo_triplet.interp.engine.high.psnr}{fg.test_results.vimeo_triplet.interp.plain.high.psnr} & n/a & n/a & n/a \\
+Vimeo-1080p, 544 lines & \Res{fg.test_results.vimeo1080p.interp.plain.high.psnr} & \Res{fg.test_results.vimeo1080p.interp.engine.high.psnr} & \ResDiff{fg.test_results.vimeo1080p.interp.engine.high.psnr}{fg.test_results.vimeo1080p.interp.plain.high.psnr} & \Res{fg.test_results.vimeo1080p.extrap.plain.high.psnr} & \Res{fg.test_results.vimeo1080p.extrap.engine.high.psnr} & \ResDiff{fg.test_results.vimeo1080p.extrap.engine.high.psnr}{fg.test_results.vimeo1080p.extrap.plain.high.psnr} \\
+Vimeo-1080p, native & \Res{fg.test_results.vimeo1080p_native.interp.plain.high.psnr} & \Res{fg.test_results.vimeo1080p_native.interp.engine.high.psnr} & \ResDiff{fg.test_results.vimeo1080p_native.interp.engine.high.psnr}{fg.test_results.vimeo1080p_native.interp.plain.high.psnr} & \Res{fg.test_results.vimeo1080p_native.extrap.plain.high.psnr} & \Res{fg.test_results.vimeo1080p_native.extrap.engine.high.psnr} & \ResDiff{fg.test_results.vimeo1080p_native.extrap.engine.high.psnr}{fg.test_results.vimeo1080p_native.extrap.plain.high.psnr} \\
+Vid4 & \Res{fg.test_results.vid4.interp.plain.high.psnr} & \Res{fg.test_results.vid4.interp.engine.high.psnr} & \ResDiff{fg.test_results.vid4.interp.engine.high.psnr}{fg.test_results.vid4.interp.plain.high.psnr} & \Res{fg.test_results.vid4.extrap.plain.high.psnr} & \Res{fg.test_results.vid4.extrap.engine.high.psnr} & \ResDiff{fg.test_results.vid4.extrap.engine.high.psnr}{fg.test_results.vid4.extrap.plain.high.psnr} \\
+TartanAir & \Res{fg.test_results.tartanair.interp.plain.high.psnr} & \Res{fg.test_results.tartanair.interp.engine.high.psnr} & \ResDiff{fg.test_results.tartanair.interp.engine.high.psnr}{fg.test_results.tartanair.interp.plain.high.psnr} & \Res{fg.test_results.tartanair.extrap.plain.high.psnr} & \Res{fg.test_results.tartanair.extrap.engine.high.psnr} & \ResDiff{fg.test_results.tartanair.extrap.engine.high.psnr}{fg.test_results.tartanair.extrap.plain.high.psnr} \\
+Sintel & \Res{fg.test_results.sintel.interp.plain.high.psnr} & \Res{fg.test_results.sintel.interp.engine.high.psnr} & \ResDiff{fg.test_results.sintel.interp.engine.high.psnr}{fg.test_results.sintel.interp.plain.high.psnr} & \Res{fg.test_results.sintel.extrap.plain.high.psnr} & \Res{fg.test_results.sintel.extrap.engine.high.psnr} & \ResDiff{fg.test_results.sintel.extrap.engine.high.psnr}{fg.test_results.sintel.extrap.plain.high.psnr} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} For extrapolation the hints never lower the score on any suite. They raise it by between \ResAbsDiff{fg.test_results.sintel.extrap.engine.high.psnr}{fg.test_results.sintel.extrap.plain.high.psnr} dB on Sintel and \ResAbsDiff{fg.test_results.tartanair.extrap.engine.high.psnr}{fg.test_results.tartanair.extrap.plain.high.psnr} dB on TartanAir, where the vectors are exact. For interpolation the effect is mixed. The hints raise the score on five of the seven suites, from \ResAbsDiff{fg.test_results.vimeo1080p_native.interp.engine.high.psnr}{fg.test_results.vimeo1080p_native.interp.plain.high.psnr} dB on native Vimeo-1080p to \ResAbsDiff{fg.test_results.tartanair.interp.engine.high.psnr}{fg.test_results.tartanair.interp.plain.high.psnr} dB on TartanAir, and they lower it on Vid4 and Sintel, by \ResAbsDiff{fg.test_results.vid4.interp.engine.high.psnr}{fg.test_results.vid4.interp.plain.high.psnr} and \ResAbsDiff{fg.test_results.sintel.interp.engine.high.psnr}{fg.test_results.sintel.interp.plain.high.psnr} dB.
+
+\Observation{} The gain from hints on interpolation is largest on TartanAir, where the vectors are exact, and close to zero on the native Vimeo-1080p clips. The hints are not a uniform improvement on interpolation, and a single number for their effect would hide this. On the synthetic suite RIFE 4.26 stays ahead of the \tier{high} tier in both modes, by \ResAbsDiff{fg.test_results.synthetic.interp.engine.high.psnr}{fg.test_results.synthetic.interp.engine.rife_4_26.psnr} dB with engine data.
+
+\subsection{User interface}\label{sec:fgr-ui}
+
+The synthetic HUD suite draws HUD tiles, a crosshair and a subtitle that changes between the real frames. Its target keeps the UI of the newest real frame, so a method that copies that UI is correct there. \Cref{tab:fgr-ui} gives the UI measures, which are the PSNR over the whole frame, the PSNR inside the UI pixels and the UI ghosting rate. The rate is the share of UI pixels that are more than 10 percent wrong in at least one colour channel, so it counts the UI pixels that a blend has visibly corrupted.
+
+{\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{longtable}{lrrr}
+\caption{Synthetic HUD and subtitle suite (48 samples per mode, all samples): PSNR over the frame, PSNR inside UI pixels and the UI ghosting rate (share of UI pixels off by more than 10 percent), per mode and input mode}\label{tab:fgr-ui}\\
+\toprule
+Method & PSNR & UI PSNR & UI ghosting rate \\
+\midrule
+\endfirsthead
+\toprule
+Method & PSNR & UI PSNR & UI ghosting rate \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\itshape continued on next page}\\
+\endfoot
+\botrule
+\endlastfoot
+\multicolumn{4}{l}{\itshape Interpolation, engine data} \\
+Repeat & \Res{fg.ui_results.interp.engine.repeat.psnr} & \Res{fg.ui_results.interp.engine.repeat.psnr_ui} & \Res{fg.ui_results.interp.engine.repeat.ui_ghost_rate} \\
+Average & \Res{fg.ui_results.interp.engine.average.psnr} & \Res{fg.ui_results.interp.engine.average.psnr_ui} & \Res{fg.ui_results.interp.engine.average.ui_ghost_rate} \\
+RIFE 4.26 & \Res{fg.ui_results.interp.engine.rife_4_26.psnr} & \Res{fg.ui_results.interp.engine.rife_4_26.psnr_ui} & \Res{fg.ui_results.interp.engine.rife_4_26.ui_ghost_rate} \\
+MV reprojection & \Res{fg.ui_results.interp.engine.mv_reprojection.psnr} & \Res{fg.ui_results.interp.engine.mv_reprojection.psnr_ui} & \Res{fg.ui_results.interp.engine.mv_reprojection.ui_ghost_rate} \\
+\tier{igpu} & \Res{fg.ui_results.interp.engine.igpu.psnr} & \Res{fg.ui_results.interp.engine.igpu.psnr_ui} & \Res{fg.ui_results.interp.engine.igpu.ui_ghost_rate} \\
+\tier{low} & \Res{fg.ui_results.interp.engine.student.psnr} & \Res{fg.ui_results.interp.engine.student.psnr_ui} & \Res{fg.ui_results.interp.engine.student.ui_ghost_rate} \\
+\tier{mid} & \Res{fg.ui_results.interp.engine.mid.psnr} & \Res{fg.ui_results.interp.engine.mid.psnr_ui} & \Res{fg.ui_results.interp.engine.mid.ui_ghost_rate} \\
+\tier{high} & \Res{fg.ui_results.interp.engine.high.psnr} & \Res{fg.ui_results.interp.engine.high.psnr_ui} & \Res{fg.ui_results.interp.engine.high.ui_ghost_rate} \\
+\tier{igpu} + UI layer & \Res{fg.ui_results.interp.engine.igpu_ui_layer.psnr} & \Res{fg.ui_results.interp.engine.igpu_ui_layer.psnr_ui} & \Res{fg.ui_results.interp.engine.igpu_ui_layer.ui_ghost_rate} \\
+\tier{low} + UI layer & \Res{fg.ui_results.interp.engine.student_ui_layer.psnr} & \Res{fg.ui_results.interp.engine.student_ui_layer.psnr_ui} & \Res{fg.ui_results.interp.engine.student_ui_layer.ui_ghost_rate} \\
+Ablation, no UI training & \Res{fg.ui_results.interp.engine.abl_no_ui_training.psnr} & \Res{fg.ui_results.interp.engine.abl_no_ui_training.psnr_ui} & \Res{fg.ui_results.interp.engine.abl_no_ui_training.ui_ghost_rate} \\
+\midrule
+\multicolumn{4}{l}{\itshape Interpolation, plain} \\
+Repeat & \Res{fg.ui_results.interp.plain.repeat.psnr} & \Res{fg.ui_results.interp.plain.repeat.psnr_ui} & \Res{fg.ui_results.interp.plain.repeat.ui_ghost_rate} \\
+Average & \Res{fg.ui_results.interp.plain.average.psnr} & \Res{fg.ui_results.interp.plain.average.psnr_ui} & \Res{fg.ui_results.interp.plain.average.ui_ghost_rate} \\
+RIFE 4.26 & \Res{fg.ui_results.interp.plain.rife_4_26.psnr} & \Res{fg.ui_results.interp.plain.rife_4_26.psnr_ui} & \Res{fg.ui_results.interp.plain.rife_4_26.ui_ghost_rate} \\
+\tier{igpu} & \Res{fg.ui_results.interp.plain.igpu.psnr} & \Res{fg.ui_results.interp.plain.igpu.psnr_ui} & \Res{fg.ui_results.interp.plain.igpu.ui_ghost_rate} \\
+\tier{low} & \Res{fg.ui_results.interp.plain.student.psnr} & \Res{fg.ui_results.interp.plain.student.psnr_ui} & \Res{fg.ui_results.interp.plain.student.ui_ghost_rate} \\
+\tier{mid} & \Res{fg.ui_results.interp.plain.mid.psnr} & \Res{fg.ui_results.interp.plain.mid.psnr_ui} & \Res{fg.ui_results.interp.plain.mid.ui_ghost_rate} \\
+\tier{high} & \Res{fg.ui_results.interp.plain.high.psnr} & \Res{fg.ui_results.interp.plain.high.psnr_ui} & \Res{fg.ui_results.interp.plain.high.ui_ghost_rate} \\
+Ablation, no UI training & \Res{fg.ui_results.interp.plain.abl_no_ui_training.psnr} & \Res{fg.ui_results.interp.plain.abl_no_ui_training.psnr_ui} & \Res{fg.ui_results.interp.plain.abl_no_ui_training.ui_ghost_rate} \\
+\midrule
+\multicolumn{4}{l}{\itshape Extrapolation, engine data} \\
+Repeat & \Res{fg.ui_results.extrap.engine.repeat.psnr} & \Res{fg.ui_results.extrap.engine.repeat.psnr_ui} & \Res{fg.ui_results.extrap.engine.repeat.ui_ghost_rate} \\
+Average & \Res{fg.ui_results.extrap.engine.average.psnr} & \Res{fg.ui_results.extrap.engine.average.psnr_ui} & \Res{fg.ui_results.extrap.engine.average.ui_ghost_rate} \\
+RIFE 4.26 & \Res{fg.ui_results.extrap.engine.rife_4_26.psnr} & \Res{fg.ui_results.extrap.engine.rife_4_26.psnr_ui} & \Res{fg.ui_results.extrap.engine.rife_4_26.ui_ghost_rate} \\
+MV reprojection & \Res{fg.ui_results.extrap.engine.mv_reprojection.psnr} & \Res{fg.ui_results.extrap.engine.mv_reprojection.psnr_ui} & \Res{fg.ui_results.extrap.engine.mv_reprojection.ui_ghost_rate} \\
+\tier{igpu} & \Res{fg.ui_results.extrap.engine.igpu.psnr} & \Res{fg.ui_results.extrap.engine.igpu.psnr_ui} & \Res{fg.ui_results.extrap.engine.igpu.ui_ghost_rate} \\
+\tier{low} & \Res{fg.ui_results.extrap.engine.student.psnr} & \Res{fg.ui_results.extrap.engine.student.psnr_ui} & \Res{fg.ui_results.extrap.engine.student.ui_ghost_rate} \\
+\tier{mid} & \Res{fg.ui_results.extrap.engine.mid.psnr} & \Res{fg.ui_results.extrap.engine.mid.psnr_ui} & \Res{fg.ui_results.extrap.engine.mid.ui_ghost_rate} \\
+\tier{high} & \Res{fg.ui_results.extrap.engine.high.psnr} & \Res{fg.ui_results.extrap.engine.high.psnr_ui} & \Res{fg.ui_results.extrap.engine.high.ui_ghost_rate} \\
+\tier{igpu} + UI layer & \Res{fg.ui_results.extrap.engine.igpu_ui_layer.psnr} & \Res{fg.ui_results.extrap.engine.igpu_ui_layer.psnr_ui} & \Res{fg.ui_results.extrap.engine.igpu_ui_layer.ui_ghost_rate} \\
+\tier{low} + UI layer & \Res{fg.ui_results.extrap.engine.student_ui_layer.psnr} & \Res{fg.ui_results.extrap.engine.student_ui_layer.psnr_ui} & \Res{fg.ui_results.extrap.engine.student_ui_layer.ui_ghost_rate} \\
+Ablation, no UI training & \Res{fg.ui_results.extrap.engine.abl_no_ui_training.psnr} & \Res{fg.ui_results.extrap.engine.abl_no_ui_training.psnr_ui} & \Res{fg.ui_results.extrap.engine.abl_no_ui_training.ui_ghost_rate} \\
+\midrule
+\multicolumn{4}{l}{\itshape Extrapolation, plain} \\
+Repeat & \Res{fg.ui_results.extrap.plain.repeat.psnr} & \Res{fg.ui_results.extrap.plain.repeat.psnr_ui} & \Res{fg.ui_results.extrap.plain.repeat.ui_ghost_rate} \\
+Average & \Res{fg.ui_results.extrap.plain.average.psnr} & \Res{fg.ui_results.extrap.plain.average.psnr_ui} & \Res{fg.ui_results.extrap.plain.average.ui_ghost_rate} \\
+RIFE 4.26 & \Res{fg.ui_results.extrap.plain.rife_4_26.psnr} & \Res{fg.ui_results.extrap.plain.rife_4_26.psnr_ui} & \Res{fg.ui_results.extrap.plain.rife_4_26.ui_ghost_rate} \\
+\tier{igpu} & \Res{fg.ui_results.extrap.plain.igpu.psnr} & \Res{fg.ui_results.extrap.plain.igpu.psnr_ui} & \Res{fg.ui_results.extrap.plain.igpu.ui_ghost_rate} \\
+\tier{low} & \Res{fg.ui_results.extrap.plain.student.psnr} & \Res{fg.ui_results.extrap.plain.student.psnr_ui} & \Res{fg.ui_results.extrap.plain.student.ui_ghost_rate} \\
+\tier{mid} & \Res{fg.ui_results.extrap.plain.mid.psnr} & \Res{fg.ui_results.extrap.plain.mid.psnr_ui} & \Res{fg.ui_results.extrap.plain.mid.ui_ghost_rate} \\
+\tier{high} & \Res{fg.ui_results.extrap.plain.high.psnr} & \Res{fg.ui_results.extrap.plain.high.psnr_ui} & \Res{fg.ui_results.extrap.plain.high.ui_ghost_rate} \\
+Ablation, no UI training & \Res{fg.ui_results.extrap.plain.abl_no_ui_training.psnr} & \Res{fg.ui_results.extrap.plain.abl_no_ui_training.psnr_ui} & \Res{fg.ui_results.extrap.plain.abl_no_ui_training.ui_ghost_rate} \\
+\end{longtable}
+}
+
+
+\Preliminary{} With engine data the \tier{low} tier has a UI ghosting rate of \Res{fg.ui_results.interp.engine.student.ui_ghost_rate} for interpolation and the \tier{high} tier \Res{fg.ui_results.interp.engine.high.ui_ghost_rate}. RIFE 4.26 has \Res{fg.ui_results.interp.engine.rife_4_26.ui_ghost_rate} and motion-vector reprojection \Res{fg.ui_results.interp.engine.mv_reprojection.ui_ghost_rate}. The predicted UI mask gives the network a region to copy from the newest frame, and the learned tiers stay far below the blends. Without UI training the rate rises to \Res{fg.ui_results.interp.engine.abl_no_ui_training.ui_ghost_rate}, so the UI training is what keeps the UI region clean. With the engine's separate UI layer composited after generation, the rate falls to \Res{fg.ui_results.interp.engine.student_ui_layer.ui_ghost_rate} and the UI PSNR rises to \Res{fg.ui_results.interp.engine.student_ui_layer.psnr_ui} dB.
+
+\Observation{} Repetition has the lowest ghosting rate of all, at \Res{fg.ui_results.interp.engine.repeat.ui_ghost_rate}, because the target UI equals the newest frame's UI and repetition copies it exactly. Repetition is therefore the reference for the UI region on this suite, and a low ghosting rate does not by itself show that a network is better than repetition overall. The plain-input rates in \cref{tab:fgr-ui} show the same ordering: the \tier{low} tier has \Res{fg.ui_results.interp.plain.student.ui_ghost_rate} and RIFE 4.26 \Res{fg.ui_results.interp.plain.rife_4_26.ui_ghost_rate}.
+
+\Cref{fig:fgr-visual-ui} shows one HUD sample with every method, and \cref{fig:fgr-special} shows the four special-case measures together.
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{\FgOut/plots/visual_ui.png}
+\caption{HUD and subtitle sample from the test split: target, the baselines, RIFE 4.26, the \tier{low} tier with and without engine data, the \tier{low} tier with the UI layer, and the predicted UI mask, blend weight and flow}\label{fig:fgr-visual-ui}
+\end{figure*}
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{\FgOut/plots/special_cases.png}
+\caption{Special cases with engine data. Left: PSNR by motion class for interpolation (solid) and extrapolation (dashed). Second: UI ghosting rate for interpolation and extrapolation. Third: PSNR against the newest real frame on the menu and cut suites. Right: extrapolation on the reversal suite without and with the late-latched camera prior}\label{fig:fgr-special}
+\end{figure*}
+
+\subsubsection{Menus and scene cuts}\label{sec:fgr-menu}
+
+A menu is a full-screen panel that replaces the scene for a sample, and a scene cut is a sample whose second frame comes from a different scene. In both suites the correct output is the newest real frame, so the gate and the repetition baseline are the references. \Cref{tab:fgr-menu-cut} gives the results.
+
+\begin{table}[!htbp]
+\caption{Menus and scene cuts with engine data, PSNR (dB) against the correct output (the newest real frame), all samples. The gate repeats the newest real frame, so a gated sample scores the 100 dB cap of the metric}\label{tab:fgr-menu-cut}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrr}
+\toprule
+Method & Menu, interp. & Menu, extrap. & Cut, interp. & Cut, extrap. \\
+\midrule
+Repeat & \Res{fg.test_results.synthetic-menu.interp.engine.repeat.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.repeat.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.repeat.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.repeat.psnr} \\
+Average & \Res{fg.test_results.synthetic-menu.interp.engine.average.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.average.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.average.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.average.psnr} \\
+RIFE 4.26 & \Res{fg.test_results.synthetic-menu.interp.engine.rife_4_26.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.rife_4_26.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.rife_4_26.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.rife_4_26.psnr} \\
+MV reprojection & \Res{fg.test_results.synthetic-menu.interp.engine.mv_reprojection.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.mv_reprojection.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.mv_reprojection.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.mv_reprojection.psnr} \\
+\tier{igpu} & \Res{fg.test_results.synthetic-menu.interp.engine.igpu.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.igpu.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.igpu.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.igpu.psnr} \\
+\tier{low} & \Res{fg.test_results.synthetic-menu.interp.engine.student.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.student.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.student.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.student.psnr} \\
+\tier{mid} & \Res{fg.test_results.synthetic-menu.interp.engine.mid.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.mid.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.mid.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.mid.psnr} \\
+\tier{high} & \Res{fg.test_results.synthetic-menu.interp.engine.high.psnr} & \Res{fg.test_results.synthetic-menu.extrap.engine.high.psnr} & \Res{fg.test_results.synthetic-cut.interp.engine.high.psnr} & \Res{fg.test_results.synthetic-cut.extrap.engine.high.psnr} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} On menus the learned tiers are a little above repetition. With engine data the \tier{low} tier beats repetition by \ResAbsDiff{fg.test_results.synthetic-menu.interp.engine.student.psnr}{fg.test_results.synthetic-menu.interp.engine.repeat.psnr} dB on interpolation and the \tier{high} tier by \ResAbsDiff{fg.test_results.synthetic-menu.interp.engine.high.psnr}{fg.test_results.synthetic-menu.interp.engine.repeat.psnr} dB, and the \tier{mid} tier by \ResAbsDiff{fg.test_results.synthetic-menu.interp.engine.mid.psnr}{fg.test_results.synthetic-menu.interp.engine.repeat.psnr} dB. Motion-vector reprojection and frame averaging fall well below repetition, because they blend the menu with the scene.
+
+\Observation{} On the cut suite every method that the gate covers scores the 100 dB cap, because the gate outputs the newest real frame, which is the target. The averaging and reprojection baselines are not gated and score far lower. The 100 dB values therefore show that the gate fires on every cut and does not show that any network generates well across a cut. The cut suite contributes no evidence about generation quality.
+
+\subsection{Camera reversal and the late-latched prior}\label{sec:fgr-reversal}
+
+A camera reversal is a sample in which the camera turns sharply in the last real frame, so that the motion before the reversal says little about the motion after it. The late-latched prior is a camera-only flow, sampled from the newest camera input and given to the extrapolation network as an engine hint (\cref{sec:fgm}). The reversal suite has 48 samples, and each is run twice, once with the prior and once with the camera input switched off.
+
+\Preliminary{} Repetition, frame averaging and RIFE 4.26 do not use the camera, so their scores are the same in both settings. Repetition scores \Res{fg.test_results.synthetic-reversal.extrap.engine.repeat.psnr} dB in both. The right panel of \cref{fig:fgr-special} shows the networks and the ablations with and without the prior. \Observation{} For those networks the bars with the prior are higher than the bars without it, so the prior helps where the camera reverses. \Cref{fig:fgr-special} is the only result of this section for the reversal suite. The generated results average the two camera settings, so the size of the prior's effect is not quoted here.
+
+\subsection{Scene cuts and the cut gate}\label{sec:fgr-cut}
+
+The cut gate decides, for each sample, whether to generate or to repeat the newest real frame. It scores the two real frames with the distance between their 32-bin luma histograms, the half-L1 distance of the normalised histograms. When the motion vector of the newer frame is available, the score adds twice the mean difference between the newer frame and the older frame warped by that motion vector, so that fast motion is not read as a cut. Each score is compared with its own threshold, which was set on synthetic validation pairs to give at most one percent false alarms on continuous pairs. \Cref{fig:fgr-cut} shows the score distributions of those pairs and of the synthetic cut pairs, and \cref{tab:fgr-cut-thresholds} gives the thresholds.
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{\FgOut/plots/cut_detector.png}
+\caption{Scene-cut scores of the calibration pairs. Left: with motion vectors. Right: histogram distance alone. Continuous pairs in blue, cut pairs in orange, and the dashed line is the threshold of each score}\label{fig:fgr-cut}
+\end{figure*}
+
+\begin{table}[!htbp]
+\caption{Scene-cut detector thresholds calibrated on the synthetic validation pairs (one percent false alarms on continuous pairs) and the detection rate on the synthetic cut pairs}\label{tab:fgr-cut-thresholds}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrr}
+\toprule
+Score & Threshold & Cuts detected (of 48) & False-alarm target \\
+\midrule
+With motion vectors (motion-compensated) & \Res{fg.cut_detector.threshold} & \Res{fg.cut_detector.detection_rate} & \Res{fg.cut_detector.false_alarm_target} \\
+Without motion vectors (histogram only) & \Res{fg.cut_detector.threshold_plain} & \Res{fg.cut_detector.detection_rate_plain} & \Res{fg.cut_detector.false_alarm_target} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} Both gates detect every calibration cut, with detection rates of \Res{fg.cut_detector.detection_rate} with motion vectors and \Res{fg.cut_detector.detection_rate_plain} without them, and the synthetic cut suite confirms this on the test split, with \Res{fg.cut_gate_rates.synthetic-cut.interp.engine.gated} of \Res{fg.cut_gate_rates.synthetic-cut.interp.engine.samples} cuts gated with motion vectors and \Res{fg.cut_gate_rates.synthetic-cut.interp.plain.gated} of \Res{fg.cut_gate_rates.synthetic-cut.interp.plain.samples} without. \Observation{} The cut scores separate cleanly from continuous motion in \cref{fig:fgr-cut}, and the separation looks wider with motion vectors. The histogram-only threshold lies close to the continuous mass, which suggests that small changes in brightness or motion could cross it. We did not test this.
+
+The real test clips contain no cuts, so every gated real sample is a false alarm. \Cref{tab:fgr-cut-rates} lists the gate by suite, mode and input. \UnderRevision{} With motion vectors the gate fired on \Res{fg.cut_gate_rates.sintel.interp.engine.gated} of \Res{fg.cut_gate_rates.sintel.interp.engine.samples} Sintel samples and on \Res{fg.cut_gate_rates.vimeo1080p.interp.engine.gated} of \Res{fg.cut_gate_rates.vimeo1080p.interp.engine.samples} Vimeo-1080p samples, and on none of the TartanAir and Vimeo-90K triplet samples. Without motion vectors the gate fired on \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.gated} of \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.samples} triplets, on \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.gated} of \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.samples} Vimeo-1080p samples and on \Res{fg.cut_gate_rates.sintel.interp.plain.gated} of \Res{fg.cut_gate_rates.sintel.interp.plain.samples} Sintel samples. On the synthetic plain suite the share is \Res{fg.cut_gate_rates.synthetic.interp.plain.gated_share} against a target of \Res{fg.cut_detector.false_alarm_target}. A threshold calibrated on adjacent synthetic pairs therefore does not transfer to real content, and to wider frame gaps, without recalibration.
+
+{\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{longtable}{lllrrrr}
+\caption{Cut gate by suite, mode and input mode: samples the gate replaced by the newest real frame, out of all samples, the true cuts in the suite and the gated share. On the real suites every gated sample is a false alarm}\label{tab:fgr-cut-rates}\\
+\toprule
+Suite & Mode & Input & Gated & Samples & True cuts & Gated share \\
+\midrule
+\endfirsthead
+\toprule
+Suite & Mode & Input & Gated & Samples & True cuts & Gated share \\
+\midrule
+\endhead
+\midrule
+\multicolumn{7}{r}{\itshape continued on next page}\\
+\endfoot
+\botrule
+\endlastfoot
+sintel & extrap & engine & \Res{fg.cut_gate_rates.sintel.extrap.engine.gated} & \Res{fg.cut_gate_rates.sintel.extrap.engine.samples} & \Res{fg.cut_gate_rates.sintel.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.sintel.extrap.engine.gated_share} \\
+sintel & extrap & plain & \Res{fg.cut_gate_rates.sintel.extrap.plain.gated} & \Res{fg.cut_gate_rates.sintel.extrap.plain.samples} & \Res{fg.cut_gate_rates.sintel.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.sintel.extrap.plain.gated_share} \\
+sintel & interp & engine & \Res{fg.cut_gate_rates.sintel.interp.engine.gated} & \Res{fg.cut_gate_rates.sintel.interp.engine.samples} & \Res{fg.cut_gate_rates.sintel.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.sintel.interp.engine.gated_share} \\
+sintel & interp & plain & \Res{fg.cut_gate_rates.sintel.interp.plain.gated} & \Res{fg.cut_gate_rates.sintel.interp.plain.samples} & \Res{fg.cut_gate_rates.sintel.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.sintel.interp.plain.gated_share} \\
+sintel & mfg3x & plain & \Res{fg.cut_gate_rates.sintel.mfg3x.plain.gated} & \Res{fg.cut_gate_rates.sintel.mfg3x.plain.samples} & \Res{fg.cut_gate_rates.sintel.mfg3x.plain.true_cuts} & \Res{fg.cut_gate_rates.sintel.mfg3x.plain.gated_share} \\
+synthetic & extrap & engine & \Res{fg.cut_gate_rates.synthetic.extrap.engine.gated} & \Res{fg.cut_gate_rates.synthetic.extrap.engine.samples} & \Res{fg.cut_gate_rates.synthetic.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic.extrap.engine.gated_share} \\
+synthetic & extrap & plain & \Res{fg.cut_gate_rates.synthetic.extrap.plain.gated} & \Res{fg.cut_gate_rates.synthetic.extrap.plain.samples} & \Res{fg.cut_gate_rates.synthetic.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic.extrap.plain.gated_share} \\
+synthetic & interp & engine & \Res{fg.cut_gate_rates.synthetic.interp.engine.gated} & \Res{fg.cut_gate_rates.synthetic.interp.engine.samples} & \Res{fg.cut_gate_rates.synthetic.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic.interp.engine.gated_share} \\
+synthetic & interp & plain & \Res{fg.cut_gate_rates.synthetic.interp.plain.gated} & \Res{fg.cut_gate_rates.synthetic.interp.plain.samples} & \Res{fg.cut_gate_rates.synthetic.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic.interp.plain.gated_share} \\
+synthetic-cut & extrap & engine & \Res{fg.cut_gate_rates.synthetic-cut.extrap.engine.gated} & \Res{fg.cut_gate_rates.synthetic-cut.extrap.engine.samples} & \Res{fg.cut_gate_rates.synthetic-cut.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-cut.extrap.engine.gated_share} \\
+synthetic-cut & extrap & plain & \Res{fg.cut_gate_rates.synthetic-cut.extrap.plain.gated} & \Res{fg.cut_gate_rates.synthetic-cut.extrap.plain.samples} & \Res{fg.cut_gate_rates.synthetic-cut.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic-cut.extrap.plain.gated_share} \\
+synthetic-cut & interp & engine & \Res{fg.cut_gate_rates.synthetic-cut.interp.engine.gated} & \Res{fg.cut_gate_rates.synthetic-cut.interp.engine.samples} & \Res{fg.cut_gate_rates.synthetic-cut.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-cut.interp.engine.gated_share} \\
+synthetic-cut & interp & plain & \Res{fg.cut_gate_rates.synthetic-cut.interp.plain.gated} & \Res{fg.cut_gate_rates.synthetic-cut.interp.plain.samples} & \Res{fg.cut_gate_rates.synthetic-cut.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic-cut.interp.plain.gated_share} \\
+synthetic-menu & extrap & engine & \Res{fg.cut_gate_rates.synthetic-menu.extrap.engine.gated} & \Res{fg.cut_gate_rates.synthetic-menu.extrap.engine.samples} & \Res{fg.cut_gate_rates.synthetic-menu.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-menu.extrap.engine.gated_share} \\
+synthetic-menu & extrap & plain & \Res{fg.cut_gate_rates.synthetic-menu.extrap.plain.gated} & \Res{fg.cut_gate_rates.synthetic-menu.extrap.plain.samples} & \Res{fg.cut_gate_rates.synthetic-menu.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic-menu.extrap.plain.gated_share} \\
+synthetic-menu & interp & engine & \Res{fg.cut_gate_rates.synthetic-menu.interp.engine.gated} & \Res{fg.cut_gate_rates.synthetic-menu.interp.engine.samples} & \Res{fg.cut_gate_rates.synthetic-menu.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-menu.interp.engine.gated_share} \\
+synthetic-menu & interp & plain & \Res{fg.cut_gate_rates.synthetic-menu.interp.plain.gated} & \Res{fg.cut_gate_rates.synthetic-menu.interp.plain.samples} & \Res{fg.cut_gate_rates.synthetic-menu.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic-menu.interp.plain.gated_share} \\
+synthetic-reversal & extrap & engine & \Res{fg.cut_gate_rates.synthetic-reversal.extrap.engine.gated} & \Res{fg.cut_gate_rates.synthetic-reversal.extrap.engine.samples} & \Res{fg.cut_gate_rates.synthetic-reversal.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-reversal.extrap.engine.gated_share} \\
+synthetic-ui & extrap & engine & \Res{fg.cut_gate_rates.synthetic-ui.extrap.engine.gated} & \Res{fg.cut_gate_rates.synthetic-ui.extrap.engine.samples} & \Res{fg.cut_gate_rates.synthetic-ui.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-ui.extrap.engine.gated_share} \\
+synthetic-ui & extrap & plain & \Res{fg.cut_gate_rates.synthetic-ui.extrap.plain.gated} & \Res{fg.cut_gate_rates.synthetic-ui.extrap.plain.samples} & \Res{fg.cut_gate_rates.synthetic-ui.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic-ui.extrap.plain.gated_share} \\
+synthetic-ui & interp & engine & \Res{fg.cut_gate_rates.synthetic-ui.interp.engine.gated} & \Res{fg.cut_gate_rates.synthetic-ui.interp.engine.samples} & \Res{fg.cut_gate_rates.synthetic-ui.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.synthetic-ui.interp.engine.gated_share} \\
+synthetic-ui & interp & plain & \Res{fg.cut_gate_rates.synthetic-ui.interp.plain.gated} & \Res{fg.cut_gate_rates.synthetic-ui.interp.plain.samples} & \Res{fg.cut_gate_rates.synthetic-ui.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.synthetic-ui.interp.plain.gated_share} \\
+tartanair & extrap & engine & \Res{fg.cut_gate_rates.tartanair.extrap.engine.gated} & \Res{fg.cut_gate_rates.tartanair.extrap.engine.samples} & \Res{fg.cut_gate_rates.tartanair.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.tartanair.extrap.engine.gated_share} \\
+tartanair & extrap & plain & \Res{fg.cut_gate_rates.tartanair.extrap.plain.gated} & \Res{fg.cut_gate_rates.tartanair.extrap.plain.samples} & \Res{fg.cut_gate_rates.tartanair.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.tartanair.extrap.plain.gated_share} \\
+tartanair & interp & engine & \Res{fg.cut_gate_rates.tartanair.interp.engine.gated} & \Res{fg.cut_gate_rates.tartanair.interp.engine.samples} & \Res{fg.cut_gate_rates.tartanair.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.tartanair.interp.engine.gated_share} \\
+tartanair & interp & plain & \Res{fg.cut_gate_rates.tartanair.interp.plain.gated} & \Res{fg.cut_gate_rates.tartanair.interp.plain.samples} & \Res{fg.cut_gate_rates.tartanair.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.tartanair.interp.plain.gated_share} \\
+tartanair & mfg3x & plain & \Res{fg.cut_gate_rates.tartanair.mfg3x.plain.gated} & \Res{fg.cut_gate_rates.tartanair.mfg3x.plain.samples} & \Res{fg.cut_gate_rates.tartanair.mfg3x.plain.true_cuts} & \Res{fg.cut_gate_rates.tartanair.mfg3x.plain.gated_share} \\
+vid4 & extrap & engine & \Res{fg.cut_gate_rates.vid4.extrap.engine.gated} & \Res{fg.cut_gate_rates.vid4.extrap.engine.samples} & \Res{fg.cut_gate_rates.vid4.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.vid4.extrap.engine.gated_share} \\
+vid4 & extrap & plain & \Res{fg.cut_gate_rates.vid4.extrap.plain.gated} & \Res{fg.cut_gate_rates.vid4.extrap.plain.samples} & \Res{fg.cut_gate_rates.vid4.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.vid4.extrap.plain.gated_share} \\
+vid4 & interp & engine & \Res{fg.cut_gate_rates.vid4.interp.engine.gated} & \Res{fg.cut_gate_rates.vid4.interp.engine.samples} & \Res{fg.cut_gate_rates.vid4.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.vid4.interp.engine.gated_share} \\
+vid4 & interp & plain & \Res{fg.cut_gate_rates.vid4.interp.plain.gated} & \Res{fg.cut_gate_rates.vid4.interp.plain.samples} & \Res{fg.cut_gate_rates.vid4.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.vid4.interp.plain.gated_share} \\
+vid4 & mfg3x & plain & \Res{fg.cut_gate_rates.vid4.mfg3x.plain.gated} & \Res{fg.cut_gate_rates.vid4.mfg3x.plain.samples} & \Res{fg.cut_gate_rates.vid4.mfg3x.plain.true_cuts} & \Res{fg.cut_gate_rates.vid4.mfg3x.plain.gated_share} \\
+vimeo1080p & extrap & engine & \Res{fg.cut_gate_rates.vimeo1080p.extrap.engine.gated} & \Res{fg.cut_gate_rates.vimeo1080p.extrap.engine.samples} & \Res{fg.cut_gate_rates.vimeo1080p.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p.extrap.engine.gated_share} \\
+vimeo1080p & extrap & plain & \Res{fg.cut_gate_rates.vimeo1080p.extrap.plain.gated} & \Res{fg.cut_gate_rates.vimeo1080p.extrap.plain.samples} & \Res{fg.cut_gate_rates.vimeo1080p.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p.extrap.plain.gated_share} \\
+vimeo1080p & interp & engine & \Res{fg.cut_gate_rates.vimeo1080p.interp.engine.gated} & \Res{fg.cut_gate_rates.vimeo1080p.interp.engine.samples} & \Res{fg.cut_gate_rates.vimeo1080p.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p.interp.engine.gated_share} \\
+vimeo1080p & interp & plain & \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.gated} & \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.samples} & \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p.interp.plain.gated_share} \\
+vimeo1080p & mfg3x & plain & \Res{fg.cut_gate_rates.vimeo1080p.mfg3x.plain.gated} & \Res{fg.cut_gate_rates.vimeo1080p.mfg3x.plain.samples} & \Res{fg.cut_gate_rates.vimeo1080p.mfg3x.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p.mfg3x.plain.gated_share} \\
+vimeo1080p\_native & extrap & engine & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.engine.gated} & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.engine.samples} & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.engine.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.engine.gated_share} \\
+vimeo1080p\_native & extrap & plain & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.plain.gated} & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.plain.samples} & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p_native.extrap.plain.gated_share} \\
+vimeo1080p\_native & interp & engine & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.engine.gated} & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.engine.samples} & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.engine.gated_share} \\
+vimeo1080p\_native & interp & plain & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.plain.gated} & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.plain.samples} & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p_native.interp.plain.gated_share} \\
+vimeo1080p\_native & mfg3x & plain & \Res{fg.cut_gate_rates.vimeo1080p_native.mfg3x.plain.gated} & \Res{fg.cut_gate_rates.vimeo1080p_native.mfg3x.plain.samples} & \Res{fg.cut_gate_rates.vimeo1080p_native.mfg3x.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo1080p_native.mfg3x.plain.gated_share} \\
+vimeo\_triplet & interp & engine & \Res{fg.cut_gate_rates.vimeo_triplet.interp.engine.gated} & \Res{fg.cut_gate_rates.vimeo_triplet.interp.engine.samples} & \Res{fg.cut_gate_rates.vimeo_triplet.interp.engine.true_cuts} & \Res{fg.cut_gate_rates.vimeo_triplet.interp.engine.gated_share} \\
+vimeo\_triplet & interp & plain & \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.gated} & \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.samples} & \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.true_cuts} & \Res{fg.cut_gate_rates.vimeo_triplet.interp.plain.gated_share} \\
+\end{longtable}
+}
+
+
+\subsection{Temporal consistency}\label{sec:fgr-temporal}
+
+Generated frames sit between real frames in the displayed sequence, so the motion has to stay smooth across the real, generated and real frames. The temporal measure tOF compares the optical flow of the displayed sequence with the flow of the true sequence, in pixels, and lower is better. It is computed for interpolation on plain input, because the displayed sequence is then the ordinary-video case. \Cref{tab:fgr-temporal} gives the mean and maximum over clips of each suite, since a suite mean can be set by a few clips with large motion.
+
+\begin{table}[!htbp]
+\caption{Temporal consistency of the displayed sequence (tOF, pixels, lower is better) without engine data: mean and maximum over the clips of each suite (12 triplets, 10 1080p clips and 10 TartanAir clips, all real clips that passed the clip checks)}\label{tab:fgr-temporal}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrrr}
+\toprule
+Method & Triplet mean & Triplet max & 1080p mean & 1080p max & TartanAir mean & TartanAir max \\
+\midrule
+Average & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.average.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.average.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.average.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.average.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.average.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.average.tof.max} \\
+MV reprojection & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.mv_reprojection.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.mv_reprojection.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.mv_reprojection.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.mv_reprojection.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.mv_reprojection.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.mv_reprojection.tof.max} \\
+RIFE 4.26 & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.rife_4_26.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.rife_4_26.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.rife_4_26.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.rife_4_26.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.rife_4_26.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.rife_4_26.tof.max} \\
+\tier{igpu} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.igpu.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.igpu.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.igpu.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.igpu.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.igpu.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.igpu.tof.max} \\
+\tier{low} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.student.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.student.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.student.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.student.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.student.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.student.tof.max} \\
+\tier{mid} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.mid.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.mid.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.mid.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.mid.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.mid.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.mid.tof.max} \\
+\tier{high} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.high.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo_triplet.high.tof.max} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.high.tof.mean} & \Res{fg.temporal_consistency_per_clip.vimeo1080p.high.tof.max} & \Res{fg.temporal_consistency_per_clip.tartanair.high.tof.mean} & \Res{fg.temporal_consistency_per_clip.tartanair.high.tof.max} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Preliminary{} On the Vimeo-90K triplets the \tier{high} tier scores \Res{fg.temporal_consistency.vimeo_triplet.high} against \Res{fg.temporal_consistency.vimeo_triplet.rife_4_26} for RIFE 4.26, and the \tier{low} tier scores \Res{fg.temporal_consistency.vimeo_triplet.student}. On TartanAir the \tier{low} tier scores \Res{fg.temporal_consistency.tartanair.student} against \Res{fg.temporal_consistency.tartanair.high} for the \tier{high} tier. Frame averaging on the triplets has a mean of \Res{fg.temporal_consistency.vimeo_triplet.average} and a maximum over clips of \Res{fg.temporal_consistency_per_clip.vimeo_triplet.average.tof.max}, so one clip dominates the suite mean.
+
+\UnderRevision{} The measure does not rank the methods consistently across suites. On the Vimeo-1080p clips frame averaging has the lowest mean, \Res{fg.temporal_consistency.vimeo1080p.average}, below the \Res{fg.temporal_consistency.vimeo1080p.rife_4_26} of RIFE 4.26, although a frame average is a blend of two real frames. A flow measure may reward an output whose motion is near the mean of its neighbours, and a frame average is such an output. This is a plausible mechanism that the run did not test. We do not use tOF to rank the methods in this section.
+
+\subsection{Real clips overview}\label{sec:fgr-real}
+
+\Cref{fig:fgr-real} summarises the real suites in one chart per mode and input. It shows the mean PSNR of each method on each real suite, and it is the figure behind the tables above.
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{\FgOut/plots/real_results.png}
+\caption{Mean PSNR (dB) of every method on the real suites, for interpolation, extrapolation and three-frame generation with plain input, and for interpolation and extrapolation with engine data. The three-frame panel has no engine variant}\label{fig:fgr-real}
+\end{figure*}
+
+\Observation{} In plain interpolation the \tier{high} tier and RIFE 4.26 are the two tallest bars on most suites, and repetition and averaging are the shortest. In plain extrapolation the learned tiers rise above repetition on every suite, and RIFE 4.26 falls below it on the Vimeo-1080p suites. With engine data, reprojection is tall on TartanAir and short on the Vimeo-90K triplets, which matches the table in \cref{sec:fgr-interp-engine}. The chart shows the ordering but not the margins, so the tables carry the numbers.
+
+\subsection{Ablations}\label{sec:fgr-abl}
+
+\FloatBarrier
+
+Each ablation changes one part of the \tier{low} recipe and trains it for 30 minutes. \Cref{tab:fgr-ablations} gives the six runs on six real and synthetic columns, with the difference to the reference in brackets, and \cref{fig:fgr-ablation} plots the same differences. The ablations use all samples, which keeps their means comparable with the tables of the reference run.
+
+\begin{table}[!htbp]
+\caption{The six 30-minute ablations of the \tier{low} recipe, PSNR (dB) over all samples. Each run after the reference shows its difference to the reference in brackets below its value. The last column is the UI ghosting rate on the synthetic HUD suite}\label{tab:fgr-ablations}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lp{1.85cm}p{1.85cm}p{1.85cm}p{1.85cm}p{1.85cm}}
+\toprule
+Run & Triplet, interp., plain & Triplet, interp., engine & TartanAir, extrap., engine & Synthetic, interp., engine & UI ghosting, interp., engine \\
+\midrule
+Reference & \Res{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr} & \Res{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr} & \Res{fg.test_results.tartanair.extrap.engine.abl_reference.psnr} & \Res{fg.test_results.synthetic.interp.engine.abl_reference.psnr} & \Res{fg.ui_results.interp.engine.abl_reference.ui_ghost_rate} \\
+No UI training & \Res{fg.test_results.vimeo_triplet.interp.plain.abl_no_ui_training.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.plain.abl_no_ui_training.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr}) & \Res{fg.test_results.vimeo_triplet.interp.engine.abl_no_ui_training.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.engine.abl_no_ui_training.psnr}{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr}) & \Res{fg.test_results.tartanair.extrap.engine.abl_no_ui_training.psnr} \newline (\ResDiff{fg.test_results.tartanair.extrap.engine.abl_no_ui_training.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr}) & \Res{fg.test_results.synthetic.interp.engine.abl_no_ui_training.psnr} \newline (\ResDiff{fg.test_results.synthetic.interp.engine.abl_no_ui_training.psnr}{fg.test_results.synthetic.interp.engine.abl_reference.psnr}) & \Res{fg.ui_results.interp.engine.abl_no_ui_training.ui_ghost_rate} \\
+No motion prior & \Res{fg.test_results.vimeo_triplet.interp.plain.abl_no_motion_prior.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.plain.abl_no_motion_prior.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr}) & \Res{fg.test_results.vimeo_triplet.interp.engine.abl_no_motion_prior.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.engine.abl_no_motion_prior.psnr}{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr}) & \Res{fg.test_results.tartanair.extrap.engine.abl_no_motion_prior.psnr} \newline (\ResDiff{fg.test_results.tartanair.extrap.engine.abl_no_motion_prior.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr}) & \Res{fg.test_results.synthetic.interp.engine.abl_no_motion_prior.psnr} \newline (\ResDiff{fg.test_results.synthetic.interp.engine.abl_no_motion_prior.psnr}{fg.test_results.synthetic.interp.engine.abl_reference.psnr}) & \Res{fg.ui_results.interp.engine.abl_no_motion_prior.ui_ghost_rate} \\
+Extrapolation only & \Res{fg.test_results.vimeo_triplet.interp.plain.abl_extrap_only.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.plain.abl_extrap_only.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr}) & \Res{fg.test_results.vimeo_triplet.interp.engine.abl_extrap_only.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.engine.abl_extrap_only.psnr}{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr}) & \Res{fg.test_results.tartanair.extrap.engine.abl_extrap_only.psnr} \newline (\ResDiff{fg.test_results.tartanair.extrap.engine.abl_extrap_only.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr}) & \Res{fg.test_results.synthetic.interp.engine.abl_extrap_only.psnr} \newline (\ResDiff{fg.test_results.synthetic.interp.engine.abl_extrap_only.psnr}{fg.test_results.synthetic.interp.engine.abl_reference.psnr}) & \Res{fg.ui_results.interp.engine.abl_extrap_only.ui_ghost_rate} \\
+No distillation & \Res{fg.test_results.vimeo_triplet.interp.plain.abl_no_distillation.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.plain.abl_no_distillation.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr}) & \Res{fg.test_results.vimeo_triplet.interp.engine.abl_no_distillation.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.engine.abl_no_distillation.psnr}{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr}) & \Res{fg.test_results.tartanair.extrap.engine.abl_no_distillation.psnr} \newline (\ResDiff{fg.test_results.tartanair.extrap.engine.abl_no_distillation.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr}) & \Res{fg.test_results.synthetic.interp.engine.abl_no_distillation.psnr} \newline (\ResDiff{fg.test_results.synthetic.interp.engine.abl_no_distillation.psnr}{fg.test_results.synthetic.interp.engine.abl_reference.psnr}) & \Res{fg.ui_results.interp.engine.abl_no_distillation.ui_ghost_rate} \\
+No RIFE inheritance & \Res{fg.test_results.vimeo_triplet.interp.plain.abl_no_inheritance.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.plain.abl_no_inheritance.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr}) & \Res{fg.test_results.vimeo_triplet.interp.engine.abl_no_inheritance.psnr} \newline (\ResDiff{fg.test_results.vimeo_triplet.interp.engine.abl_no_inheritance.psnr}{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr}) & \Res{fg.test_results.tartanair.extrap.engine.abl_no_inheritance.psnr} \newline (\ResDiff{fg.test_results.tartanair.extrap.engine.abl_no_inheritance.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr}) & \Res{fg.test_results.synthetic.interp.engine.abl_no_inheritance.psnr} \newline (\ResDiff{fg.test_results.synthetic.interp.engine.abl_no_inheritance.psnr}{fg.test_results.synthetic.interp.engine.abl_reference.psnr}) & \Res{fg.ui_results.interp.engine.abl_no_inheritance.ui_ghost_rate} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\textwidth,height=0.55\textheight,keepaspectratio]{\FgOut/plots/ablations.png}
+\caption{PSNR change (dB) of each ablation against the reference, for five groups of suites and modes. The reference is zero and is not drawn}\label{fig:fgr-ablation}
+\end{figure}
+
+\Preliminary{} Removing RIFE inheritance lowers plain interpolation on the Vimeo-90K triplets by \ResAbsDiff{fg.test_results.vimeo_triplet.interp.plain.abl_no_inheritance.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr} dB, from \Res{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr} to \Res{fg.test_results.vimeo_triplet.interp.plain.abl_no_inheritance.psnr} dB. Removing the motion prior lowers TartanAir with engine data by \ResAbsDiff{fg.test_results.tartanair.extrap.engine.abl_no_motion_prior.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr} dB, the largest drop of any ablation on that column. On plain triplets the same ablation scores \ResAbsDiff{fg.test_results.vimeo_triplet.interp.plain.abl_no_motion_prior.psnr}{fg.test_results.vimeo_triplet.interp.plain.abl_reference.psnr} dB above the reference. The extrapolation-only run fails at interpolation, scoring \Res{fg.test_results.vimeo_triplet.interp.engine.abl_extrap_only.psnr} dB on the triplets with engine data against \Res{fg.test_results.vimeo_triplet.interp.engine.abl_reference.psnr} dB for the reference.
+
+\Preliminary{} Distillation from the \tier{high} tier adds between \ResAbsDiff{fg.test_results.synthetic.extrap.engine.abl_no_distillation.psnr}{fg.test_results.synthetic.extrap.engine.abl_reference.psnr} and \ResAbsDiff{fg.test_results.tartanair.extrap.engine.abl_no_distillation.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr} dB across the columns of the table, with the smallest gain on the synthetic extrapolation suite and the largest on TartanAir.
+
+\Observation{} Removing UI training raises PSNR in every column of the table, by between \ResAbsDiff{fg.test_results.tartanair.extrap.engine.abl_no_ui_training.psnr}{fg.test_results.tartanair.extrap.engine.abl_reference.psnr} dB on TartanAir with engine data and \ResAbsDiff{fg.test_results.synthetic.interp.engine.abl_no_ui_training.psnr}{fg.test_results.synthetic.interp.engine.abl_reference.psnr} dB on the synthetic interpolation suite. It also raises the UI ghosting rate in interpolation with engine data from \Res{fg.ui_results.interp.engine.abl_reference.ui_ghost_rate} to \Res{fg.ui_results.interp.engine.abl_no_ui_training.ui_ghost_rate}. The triplets, the real clips and the synthetic suite of \cref{tab:fgr-ablations} contain no HUD overlay, so their PSNR does not measure UI handling. The trade-off between PSNR and the UI rate is therefore visible at this budget, and we did not test whether a longer run changes it.
+
+Each ablation is one 30-minute run and the reference is one run as well, so every difference in this section is a measured result for this budget and not an established effect. Differences of a few tenths of a decibel may lie within run-to-run variation, which this configuration has not measured, so the distillation effect is given as a range across the columns.
+
+\subsection{Model tiers and latency}\label{sec:fgr-latency}
+
+\Cref{tab:fgr-tiers} lists the four tiers that the run trained, with their parameters and their cost per generated 1080p frame. The flow scale is the factor applied to a 1080p frame before flow estimation, which follows from each tier's flow limit. The tier \tier{igpu} and \tier{low} estimate flow at half resolution on a 1080p frame, and \tier{mid} and \tier{high} at full resolution. The feature encoder runs once per real frame in a running pipeline, so its share of the cost is reported separately. \Confirmed{} The fused network reproduces the unfused network exactly on the random input used for the check, so fusion is a copy of the weights.
+
+\begin{table}[!htbp]
+\caption{Frame-generation tiers: parameters, the flow scale applied to a 1080p frame, multiply-accumulates per generated 1080p frame (GMAC) and the largest difference between the training and the fused network on a random input}\label{tab:fgr-tiers}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrr}
+\toprule
+Tier & Parameters & Flow scale at 1080p & GMAC per 1080p frame & of which feature encoder & Fusion error \\
+\midrule
+\tier{igpu} & \Res{fg.model_tiers.igpu.params} & \Res{fg.model_tiers.igpu.flow_scale_1080p} & \Res{fg.model_tiers.igpu.gmac_per_1080p_frame} & \Res{fg.model_tiers.igpu.gmac_per_frame_encoder} & \Res{fg.model_tiers.igpu.parity_max_abs} \\
+\tier{low} & \Res{fg.model_tiers.low.params} & \Res{fg.model_tiers.low.flow_scale_1080p} & \Res{fg.model_tiers.low.gmac_per_1080p_frame} & \Res{fg.model_tiers.low.gmac_per_frame_encoder} & \Res{fg.model_tiers.low.parity_max_abs} \\
+\tier{mid} & \Res{fg.model_tiers.mid.params} & \Res{fg.model_tiers.mid.flow_scale_1080p} & \Res{fg.model_tiers.mid.gmac_per_1080p_frame} & \Res{fg.model_tiers.mid.gmac_per_frame_encoder} & \Res{fg.model_tiers.mid.parity_max_abs} \\
+\tier{high} & \Res{fg.model_tiers.high.params} & \Res{fg.model_tiers.high.flow_scale_1080p} & \Res{fg.model_tiers.high.gmac_per_1080p_frame} & \Res{fg.model_tiers.high.gmac_per_frame_encoder} & \Res{fg.model_tiers.high.parity_max_abs} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+\FloatBarrier
+
+
+\Preliminary{} Cost in multiply-accumulates does not predict measured time on the T4. \Cref{tab:fgr-latency} gives the latency of each tier at 1080p and 1440p, with the arithmetic estimate that the notebook derives at an assumed 4 TFLOPS of sustained integrated-GPU throughput. The \tier{igpu} tier at 1080p is \Res{fg.latency.igpu.1920x1080.t4_mean_ms} ms on the T4, which is \ResRatio{fg.latency.igpu.1920x1080.t4_mean_ms}{fg.latency.igpu.1920x1080.est_ms_igpu_4tflops} times its arithmetic estimate. The notebook counts only multiply-accumulates, so the gap is most likely the overhead of eager execution and the memory traffic of the feature maps. We have not profiled it, and the gap is a property of the eager runtime that the run used.
+
+\begin{table}[!htbp]
+\caption{Measured latency of the fused FP16 generators on one Tesla T4 in eager PyTorch with cuDNN autotuning (100 timed passes at batch 1 after 10 warm-up passes) and the arithmetic estimate used by the notebook}\label{tab:fgr-latency}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrr}
+\toprule
+Tier and output & Mean (ms) & 95th percentile (ms) & GMAC & Arithmetic estimate at 4 TFLOPS (ms) \\
+\midrule
+\tier{igpu}, 1080p & \Res{fg.latency.igpu.1920x1080.t4_mean_ms} & \Res{fg.latency.igpu.1920x1080.t4_p95_ms} & \Res{fg.latency.igpu.1920x1080.gmac} & \Res{fg.latency.igpu.1920x1080.est_ms_igpu_4tflops} \\
+\tier{igpu}, 1440p & \Res{fg.latency.igpu.2560x1440.t4_mean_ms} & \Res{fg.latency.igpu.2560x1440.t4_p95_ms} & \Res{fg.latency.igpu.2560x1440.gmac} & \Res{fg.latency.igpu.2560x1440.est_ms_igpu_4tflops} \\
+\tier{low}, 1080p & \Res{fg.latency.student.1920x1080.t4_mean_ms} & \Res{fg.latency.student.1920x1080.t4_p95_ms} & \Res{fg.latency.student.1920x1080.gmac} & \Res{fg.latency.student.1920x1080.est_ms_igpu_4tflops} \\
+\tier{low}, 1440p & \Res{fg.latency.student.2560x1440.t4_mean_ms} & \Res{fg.latency.student.2560x1440.t4_p95_ms} & \Res{fg.latency.student.2560x1440.gmac} & \Res{fg.latency.student.2560x1440.est_ms_igpu_4tflops} \\
+\tier{mid}, 1080p & \Res{fg.latency.mid.1920x1080.t4_mean_ms} & \Res{fg.latency.mid.1920x1080.t4_p95_ms} & \Res{fg.latency.mid.1920x1080.gmac} & \Res{fg.latency.mid.1920x1080.est_ms_igpu_4tflops} \\
+\tier{mid}, 1440p & \Res{fg.latency.mid.2560x1440.t4_mean_ms} & \Res{fg.latency.mid.2560x1440.t4_p95_ms} & \Res{fg.latency.mid.2560x1440.gmac} & \Res{fg.latency.mid.2560x1440.est_ms_igpu_4tflops} \\
+\tier{high}, 1080p & \Res{fg.latency.high.1920x1080.t4_mean_ms} & \Res{fg.latency.high.1920x1080.t4_p95_ms} & \Res{fg.latency.high.1920x1080.gmac} & \Res{fg.latency.high.1920x1080.est_ms_igpu_4tflops} \\
+\tier{high}, 1440p & \Res{fg.latency.high.2560x1440.t4_mean_ms} & \Res{fg.latency.high.2560x1440.t4_p95_ms} & \Res{fg.latency.high.2560x1440.gmac} & \Res{fg.latency.high.2560x1440.est_ms_igpu_4tflops} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\UnderRevision{} The measured times are from eager PyTorch with cuDNN autotuning on one Tesla T4, which is a data-centre card and not the integrated GPU the tiers are designed for. Every tier exceeds the 16.7 ms budget of a 60 frames per second display, and the smallest tier, \tier{igpu}, takes \Res{fg.latency.igpu.1920x1080.t4_mean_ms} ms at 1080p. The \tier{mid} and \tier{high} tiers take less time at 1440p than at 1080p, at \Res{fg.latency.mid.2560x1440.t4_mean_ms} and \Res{fg.latency.high.2560x1440.t4_mean_ms} ms against \Res{fg.latency.mid.1920x1080.t4_mean_ms} and \Res{fg.latency.high.1920x1080.t4_mean_ms} ms. \Observation{} Their operations per frame rise with the pixel count, but their flow limit is 1152 lines, so the 1440p frame has its flow halved and the flow cost falls by about four times. The rest of the network still grows with the pixel count, so the total time falls only because the flow is the dominant cost at 1080p. This is an explanation from the design, and the run did not separate the two costs.
+
+\subsection{Input-to-photon pacing model}\label{sec:fgr-pacing}
+
+Measured times do not show what a player sees, so the run also simulated a game loop with the measured generation time. The model runs 2000 frames of a GPU-bound loop. Each render takes its base time with a multiplicative log-normal jitter of 0.08, each frame needs 4 ms of CPU work that starts just in time so the GPU never queues frames, and each frame is presented 1 ms after it is ready. The generation time is the measured \tier{low} time at 1080p, \Res{fg.latency.student.1920x1080.t4_mean_ms} ms, applied at every render rate, and the texture super-resolution time is zero, so the model covers frame generation alone. It separates three quantities. Game input latency is the time from an input to the first real frame that shows it. Camera latency is the time from an input to the first displayed frame, real or generated, whose camera reflects it. Content age is the time since the newest real input in each displayed frame. \Cref{tab:fgr-pacing} gives the four modes at three base render rates, and \cref{fig:fgr-pacing} plots the displayed rate against the two latencies.
+
+\begin{table}[!htbp]
+\caption{Input-to-photon pacing model with the measured \tier{low} time of 1080p generation (\Res{fg.latency.student.1920x1080.t4_mean_ms} ms, \cref{tab:fgr-latency}) for every mode: displayed frame rate, game input latency, camera latency and content age, means and 95th percentiles}\label{tab:fgr-pacing}
+\scriptsize\setlength{\tabcolsep}{2pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lp{1.3cm}p{1.3cm}p{1.3cm}p{1.3cm}p{1.3cm}p{1.3cm}p{1.3cm}}
+\toprule
+Mode & Base (fps) & Shown (fps) & Game (ms) & Game p95 (ms) & Camera (ms) & Camera p95 (ms) & Age (ms) \\
+\midrule
+Native & 30 & \Res{fg.pacing_model.native.33_3.displayed_fps} & \Res{fg.pacing_model.native.33_3.game_latency_ms} & \Res{fg.pacing_model.native.33_3.game_latency_p95_ms} & \Res{fg.pacing_model.native.33_3.camera_latency_ms} & \Res{fg.pacing_model.native.33_3.camera_latency_p95_ms} & \Res{fg.pacing_model.native.33_3.content_age_ms} \\
+ & 40 & \Res{fg.pacing_model.native.25_0.displayed_fps} & \Res{fg.pacing_model.native.25_0.game_latency_ms} & \Res{fg.pacing_model.native.25_0.game_latency_p95_ms} & \Res{fg.pacing_model.native.25_0.camera_latency_ms} & \Res{fg.pacing_model.native.25_0.camera_latency_p95_ms} & \Res{fg.pacing_model.native.25_0.content_age_ms} \\
+ & 60 & \Res{fg.pacing_model.native.16_7.displayed_fps} & \Res{fg.pacing_model.native.16_7.game_latency_ms} & \Res{fg.pacing_model.native.16_7.game_latency_p95_ms} & \Res{fg.pacing_model.native.16_7.camera_latency_ms} & \Res{fg.pacing_model.native.16_7.camera_latency_p95_ms} & \Res{fg.pacing_model.native.16_7.content_age_ms} \\
+\midrule
+Interpolation & 30 & \Res{fg.pacing_model.interp.33_3.displayed_fps} & \Res{fg.pacing_model.interp.33_3.game_latency_ms} & \Res{fg.pacing_model.interp.33_3.game_latency_p95_ms} & \Res{fg.pacing_model.interp.33_3.camera_latency_ms} & \Res{fg.pacing_model.interp.33_3.camera_latency_p95_ms} & \Res{fg.pacing_model.interp.33_3.content_age_ms} \\
+ & 40 & \Res{fg.pacing_model.interp.25_0.displayed_fps} & \Res{fg.pacing_model.interp.25_0.game_latency_ms} & \Res{fg.pacing_model.interp.25_0.game_latency_p95_ms} & \Res{fg.pacing_model.interp.25_0.camera_latency_ms} & \Res{fg.pacing_model.interp.25_0.camera_latency_p95_ms} & \Res{fg.pacing_model.interp.25_0.content_age_ms} \\
+ & 60 & \Res{fg.pacing_model.interp.16_7.displayed_fps} & \Res{fg.pacing_model.interp.16_7.game_latency_ms} & \Res{fg.pacing_model.interp.16_7.game_latency_p95_ms} & \Res{fg.pacing_model.interp.16_7.camera_latency_ms} & \Res{fg.pacing_model.interp.16_7.camera_latency_p95_ms} & \Res{fg.pacing_model.interp.16_7.content_age_ms} \\
+\midrule
+Extrapolation & 30 & \Res{fg.pacing_model.extrap.33_3.displayed_fps} & \Res{fg.pacing_model.extrap.33_3.game_latency_ms} & \Res{fg.pacing_model.extrap.33_3.game_latency_p95_ms} & \Res{fg.pacing_model.extrap.33_3.camera_latency_ms} & \Res{fg.pacing_model.extrap.33_3.camera_latency_p95_ms} & \Res{fg.pacing_model.extrap.33_3.content_age_ms} \\
+ & 40 & \Res{fg.pacing_model.extrap.25_0.displayed_fps} & \Res{fg.pacing_model.extrap.25_0.game_latency_ms} & \Res{fg.pacing_model.extrap.25_0.game_latency_p95_ms} & \Res{fg.pacing_model.extrap.25_0.camera_latency_ms} & \Res{fg.pacing_model.extrap.25_0.camera_latency_p95_ms} & \Res{fg.pacing_model.extrap.25_0.content_age_ms} \\
+ & 60 & \Res{fg.pacing_model.extrap.16_7.displayed_fps} & \Res{fg.pacing_model.extrap.16_7.game_latency_ms} & \Res{fg.pacing_model.extrap.16_7.game_latency_p95_ms} & \Res{fg.pacing_model.extrap.16_7.camera_latency_ms} & \Res{fg.pacing_model.extrap.16_7.camera_latency_p95_ms} & \Res{fg.pacing_model.extrap.16_7.content_age_ms} \\
+\midrule
+Late-latched & 30 & \Res{fg.pacing_model.extrap_late.33_3.displayed_fps} & \Res{fg.pacing_model.extrap_late.33_3.game_latency_ms} & \Res{fg.pacing_model.extrap_late.33_3.game_latency_p95_ms} & \Res{fg.pacing_model.extrap_late.33_3.camera_latency_ms} & \Res{fg.pacing_model.extrap_late.33_3.camera_latency_p95_ms} & \Res{fg.pacing_model.extrap_late.33_3.content_age_ms} \\
+ & 40 & \Res{fg.pacing_model.extrap_late.25_0.displayed_fps} & \Res{fg.pacing_model.extrap_late.25_0.game_latency_ms} & \Res{fg.pacing_model.extrap_late.25_0.game_latency_p95_ms} & \Res{fg.pacing_model.extrap_late.25_0.camera_latency_ms} & \Res{fg.pacing_model.extrap_late.25_0.camera_latency_p95_ms} & \Res{fg.pacing_model.extrap_late.25_0.content_age_ms} \\
+ & 60 & \Res{fg.pacing_model.extrap_late.16_7.displayed_fps} & \Res{fg.pacing_model.extrap_late.16_7.game_latency_ms} & \Res{fg.pacing_model.extrap_late.16_7.game_latency_p95_ms} & \Res{fg.pacing_model.extrap_late.16_7.camera_latency_ms} & \Res{fg.pacing_model.extrap_late.16_7.camera_latency_p95_ms} & \Res{fg.pacing_model.extrap_late.16_7.content_age_ms} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\columnwidth]{\FgOut/plots/pacing_model.png}
+\caption{Pacing model for the four modes at the three base render rates: game input latency (left) and camera latency (right) against the displayed frame rate}\label{fig:fgr-pacing}
+\end{figure}
+
+\UnderRevision{} At a base render of 30 frames per second the native loop displays \Res{fg.pacing_model.native.33_3.displayed_fps} fps with a game latency of \Res{fg.pacing_model.native.33_3.game_latency_ms} ms. Interpolation displays \Res{fg.pacing_model.interp.33_3.displayed_fps} fps, and its game latency rises to \Res{fg.pacing_model.interp.33_3.game_latency_ms} ms, because a real frame is held until after the generated one. Extrapolation keeps the game latency at \Res{fg.pacing_model.extrap.33_3.game_latency_ms} ms but its camera latency is \Res{fg.pacing_model.extrap.33_3.camera_latency_ms} ms. Late-latching the camera before generation brings the camera latency to \Res{fg.pacing_model.extrap_late.33_3.camera_latency_ms} ms. The same pattern holds at the other base rates, and interpolation displays \Res{fg.pacing_model.interp.25_0.displayed_fps} fps at a base of 40 frames per second and \Res{fg.pacing_model.interp.16_7.displayed_fps} fps at 60.
+
+\Preliminary{} In this model, frame generation at the measured cost lowers the displayed rate in every mode. The displayed rate of the interpolation and extrapolation modes is below that of the native loop at the same base render rate, because the generation time is longer than the render time it saves, and each period then shows two frames but lasts longer. The model therefore says that this network cannot raise the frame rate of a game at these base rates on this runtime. A runtime that brings the generation time below the render time would change that result, and the model reports the threshold without measuring such a runtime.
+
+\clearpage
+\subsection{Visual comparisons}\label{sec:fgr-visual}
+
+The notebook drew a preview of the synthetic training samples for every special case (\cref{fig:fgr-synthetic}). Each row is one case, and the columns show the first real frame, the second real frame, the target, the predicted UI mask and the exact flow from the target to the second frame, coloured by direction with brightness giving the magnitude. \Observation{} The interpolation row has a smooth flow field and an empty UI mask. The extrapolation row with a camera reversal has a flow field that differs on the moving object and on the background. The HUD row has its UI mask on the crosshair and the subtitle text. The menu row has a uniform grey UI mask over the whole frame, with the menu text in it, and the scene-cut row has a second frame from a different scene, with the target equal to that frame.
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{\FgOut/plots/synthetic_preview.png}
+\caption{Synthetic training samples for five special cases, one per row (interpolation, extrapolation with a camera reversal, HUD with a subtitle change, menu, scene cut). Columns: first frame, second frame, target, UI mask and the exact flow from target to second frame, coloured by direction}\label{fig:fgr-synthetic}
+\end{figure*}
+
+\cref{fig:fgr-visual-ui} shows one HUD and subtitle sample from the test split, with every method and the predicted UI mask, blend weight and flow. \Observation{} The target shows the bars and the crosshair without subtitle text. Repetition and the learned networks, with and without the UI layer, show the bars without ghost text. Frame averaging and RIFE 4.26 show the subtitle as a blend over the upper bar, which is the ghosting that \cref{tab:fgr-ui} counts. The predicted UI mask is bright on the two bars and on the crosshair, so those pixels are taken from the newest real frame instead of being blended.
+
+\Cref{fig:fgr-ui-grid} shows the same eight panels at their saved resolution, with the target first. \Observation{} At this size the panels differ mainly in the subtitle: frame averaging and RIFE 4.26 show it blended, and the other panels show the bars alone.
+
+\begin{figure}[!htbp]
+\centering
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_target.png}
+\caption{Target}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_repeat.png}
+\caption{Repeat}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_average.png}
+\caption{Average}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_rife_4.26.png}
+\caption{RIFE 4.26}
+\end{subfigure}
+
+\medskip
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_mv_reprojection.png}
+\caption{MV reprojection}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_student.png}
+\caption{\tier{low}, engine}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_student_no_engine_data.png}
+\caption{\tier{low}, no engine}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_ui_student_ui_layer.png}
+\caption{\tier{low} with UI layer}
+\end{subfigure}
+\caption{Panels of the HUD sample in \cref{fig:fgr-visual-ui} as saved, one image per method, interpolation at 256 by 256 pixels}\label{fig:fgr-ui-grid}
+\end{figure}
+
+\FloatBarrier
+
+\Cref{fig:fgr-visual-extrap} shows one fast-motion extrapolation sample, an olive ellipse that moves across a dark, curved background. \Observation{} At this scale the target, repetition, RIFE 4.26 and the \tier{low} tier without engine data place the ellipse in similar positions. Frame averaging shows two overlapping copies of the ellipse. Motion-vector reprojection draws a light outline along the top of the ellipse, and the \tier{low} tier with engine data has a fainter version of that edge. The differences between the network panels are small at this resolution, and the PSNR and LPIPS tables carry the quantitative comparison.
+
+\begin{figure*}[!htbp]
+\centering
+\includegraphics[width=\textwidth,height=0.5\textheight,keepaspectratio]{\FgOut/plots/visual_extrap.png}
+\caption{Fast-motion extrapolation sample from the test split: target, the baselines, RIFE 4.26, the \tier{low} tier with and without engine data, and the predicted UI mask, blend weight and flow}\label{fig:fgr-visual-extrap}
+\end{figure*}
+
+\Cref{fig:fgr-extrap-grid} gives the seven panels of the same sample at their saved resolution.
+
+\begin{figure}[!htbp]
+\centering
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_target.png}
+\caption{Target}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_repeat.png}
+\caption{Repeat}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_average.png}
+\caption{Average}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_mv_reprojection.png}
+\caption{MV reprojection}
+\end{subfigure}
+
+\medskip
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_rife_4.26.png}
+\caption{RIFE 4.26}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_student.png}
+\caption{\tier{low}, engine}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.24\columnwidth}
+\includegraphics[width=\linewidth]{\FgOut/predictions/visual_extrap_student_no_engine_data.png}
+\caption{\tier{low}, no engine}
+\end{subfigure}
+\caption{Panels of the fast-motion sample in \cref{fig:fgr-visual-extrap} as saved, extrapolation at 256 by 256 pixels}\label{fig:fgr-extrap-grid}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{ONNX export}\label{sec:fgr-onnx}
+
+The notebook exported the \tier{low} and \tier{igpu} tiers to ONNX, using opset 17 and example inputs of 128 by 128 pixels, and compared ONNX Runtime on the CPU with PyTorch on the same inputs. \Cref{tab:fgr-onnx} gives the files and the largest differences.
+
+\begin{table}[!htbp]
+\caption{ONNX export of the fused frame generators (opset 17, exported at 128 by 128 pixels) and the largest difference to PyTorch on the same inputs, run with ONNX Runtime on the CPU}\label{tab:fgr-onnx}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrr}
+\toprule
+Tier & File size (MB) & Largest difference, ONNX Runtime against PyTorch \\
+\midrule
+\tier{low} & \Res{fg.onnx_export.0.onnx_mb} & \Res{fg.onnx_export.0.ort_max_abs} \\
+\tier{igpu} & \Res{fg.onnx_export.1.onnx_mb} & \Res{fg.onnx_export.1.ort_max_abs} \\
+\botrule
+\end{tabular*}
+\end{table}
+
+
+\Confirmed{} The \tier{low} graph agrees with PyTorch to within \Res{fg.onnx_export.0.ort_max_abs}, and the \tier{igpu} graph to within \Res{fg.onnx_export.1.ort_max_abs}, values far below the step of one 8-bit grey level in an output frame. The export was not timed, so the ONNX graphs carry no latency result in this section.
+
+\subsection{Open items of this section}\label{sec:fgr-open}
+
+\UnderRevision{} Three comparisons quoted in the article are not part of the generated results of this run, and this section does not quote them. They are the split of the reversal suite by camera setting, the PSNR by motion class of the synthetic suite, and the timings of the earlier run. Each needs its own generated values before it can be stated here with a status.

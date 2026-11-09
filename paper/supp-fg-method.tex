@@ -1,0 +1,586 @@
+\section{Frame generation: method}\label{sec:fgm}
+
+This section specifies the frame generator completely enough to re-implement it. It defines the task and the time parameter, then the network block by block, the engine hints and their zero initialisation, the output and UI compositing, the scene-cut gate, the latency model, the training samples, losses and schedule, the ablations, the export, and the test protocol. Measured results are in \cref{sec:fgr}. Every symbol is defined where it is first used and collected in \cref{tab:fgm-notation}. Where a design element is a known weakness of the current pipeline, it carries the \UnderRevision{} tag.
+
+\subsection{Problem statement}\label{sec:fgm-problem}
+
+A frame generator produces an image between or after real frames that a renderer or a video decoder has already produced. The main article (\cref{M-sec:fg}) gives the aim: one compact network that serves engine renders with motion vectors and ordinary video without them, at a cost that fits integrated and entry GPUs. Its inputs are the two most recent real colour frames, a target time, and optional engine data. Its output is one generated colour frame, or the newest real frame when the scene-cut gate of \cref{sec:fgm-cut} fires:
+\begin{equation}
+\hat I_\tau = G_\theta\!\left(I_0,\,I_1,\,\tau,\,\mathbf h\right),\label{eq:fgm-task}
+\end{equation}
+where $\theta$ are the network weights and $\mathbf h$ is the stack of engine hints of \cref{sec:fgm-hints}, which is empty for plain video.
+
+Video frame interpolation networks such as RIFE \cite{huang2022rife}, IFRNet \cite{kong2022ifrnet}, FILM \cite{reda2022film} and EMA-VFI \cite{zhang2023emavfi} estimate intermediate motion from the frames alone, and logos and UI break them \cite{lee2023discontinuity}. For rendered content, interpolation holds a frame back \cite{briedis2021rendered}, whereas extrapolation avoids that delay \cite{guo2021extranet,wu2023extrass,he2024stss,wu2024gffe}.
+
+The mode matters for latency. In interpolation the target lies between $I_0$ and $I_1$, so the generated frame needs the newest real frame $I_1$, and $I_1$ is held back until the generated frame has been shown. In extrapolation the target lies after $I_1$, so nothing is held back, but the generator must predict motion that no real frame shows yet. \Cref{sec:fgm-pacing} turns this into a latency model.
+
+\subsection{Time parameter and generation modes}\label{sec:fgm-time}
+
+The time parameter $\tau$ measures the target position in units of the interval between the two real frames. Frame $I_0$ is at $\tau=0$ and $I_1$ at $\tau=1$, so the target is shown at $t_0+\tau\,\Delta t$, where $t_0$ is the time of $I_0$ and $\Delta t$ is the frame interval between $I_0$ and $I_1$. The generator receives $\tau$ as a scalar for each sample, and the first block sees it as a constant input plane (\cref{sec:fgm-ifnet}).
+
+\emph{Interpolation} uses $0<\tau<1$. Two-times generation uses $\tau=1/2$, and three-times multi-frame generation (3x) uses $\tau\in\{1/3,2/3\}$. Training draws $\tau$ uniformly from $[0.15,0.85]$ for a share of the synthetic interpolation samples, so that one model covers the in-between times of 2x to 6x sequences.
+
+\emph{Extrapolation} uses $\tau=1.5$. The target lies half an interval beyond $I_1$, so the frame is extrapolated from the motion between $I_0$ and $I_1$ and is shown after $I_1$. Extrapolation is the only mode in which no real frame is held back.
+
+\emph{Multi-frame generation} produces two frames between a real pair, both from the same two real frames. The training quads realise the three modes with frame indices $k$ to $k+3$, as given in \cref{sec:fgm-samples}.
+
+\subsection{Notation}\label{sec:fgm-notation}
+
+\begin{table}[!htbp]
+\caption{Symbols of the frame generator. Images are $3\times H\times W$ with values in $[0,1]$ unless stated, and flows are in pixels of the full-resolution grid}\label{tab:fgm-notation}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}llp{0.50\textwidth}}
+\toprule
+Symbol & Shape & Meaning \\
+\midrule
+$I_0,I_1$ & $3\times H\times W$ & real frames at $\tau=0$ and $\tau=1$, with $I_1$ the newest real frame \\
+$I_\tau$, $\hat I_\tau$ & $3\times H\times W$ & ground-truth and generated target frame \\
+$\tau$ & scalar & target time \\
+$\mathbf h$ & $10\times H\times W$ & engine hint stack (\cref{tab:fgm-hints}) \\
+$M_1$ & $2\times H\times W$ & engine motion vector of $I_1$, the displacement from $I_1$ to $I_0$ \\
+$C$ & $2\times H\times W$ & camera-only flow from the target grid to $I_1$ \\
+$F_{\tau\to0}$, $F_{\tau\to1}$ & $2\times H\times W$ & flows from target pixels to $I_0$ and to $I_1$ \\
+$\mathcal W(I,F)$ & $\cdot\times H\times W$ & backward warp of $I$ by $F$ (\cref{eq:fgm-warp}) \\
+$a_{\rm mv}$, $a_{\rm cam}$, $a_{\rm dep}$ & $\{0,1\}$ & availability of motion vectors, camera prior and depth \\
+$f_0,f_1$ & $4\times H\times W$ & per-frame encoder features of $I_0$ and $I_1$ \\
+$s_k$, $c_k$ & scalars & scale and width of IFNet block $k=0,\dots,4$ \\
+$\Delta_k$, $\mu_k$, $\varphi_k$ & 4, 1, 8 channels & flow update, mask logit and features of block $k$ \\
+$F_k=[F_k^0,F_k^1]$ & $4\times H\times W$ & accumulated flows after block $k$, to $I_0$ and to $I_1$ \\
+$m$, $B$ & $1\times H\times W$, $3\times H\times W$ & blend weight $\sigma(\mu_4)$ and blend (\cref{eq:fgm-blend}) \\
+$X$, $r$, $\ell$, $u$ & 21, 3, 1, 1 channels & head input, residual colour, UI logit and UI weight $u=\sigma(\ell)$ \\
+$\sigma$ & function & logistic function $\sigma(x)=1/(1+e^{-x})$ \\
+$s$, $L$ & scalar, lines & flow scale of a frame and the flow line limit of a tier \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\begin{table}[!htbp]
+\caption{Engine hint channels $\mathbf h$ (10 channels). The first six are flows in pixels, divided by the block scale like the flow input (\cref{eq:fgm-blockk}). The availability flags $a_{\rm mv}$, $a_{\rm cam}$ and $a_{\rm dep}$ are scalars per sample, and channels 7, 9 and 10 are constant planes of the flags}\label{tab:fgm-hints}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}clll}
+\toprule
+Channels & Content & Definition & Source in training \\
+\midrule
+1--2 & motion prior $\tau M_1$ & $\tau\,a_{\rm mv}M_1$ & exact (synthetic), RAFT (real) \\
+3--4 & motion prior $(\tau-1)M_1$ & $(\tau-1)\,a_{\rm mv}M_1$ & as channels 1--2 \\
+5--6 & camera-only flow $C$ & $a_{\rm cam}C$ & synthetic extrapolation only \\
+7 & motion availability & $a_{\rm mv}$ (constant plane) & all samples \\
+8 & depth of $I_1$ & $a_{\rm dep}\,d_1$ & synthetic only \\
+9 & depth availability & $a_{\rm dep}$ (constant plane) & all samples \\
+10 & camera availability & $a_{\rm cam}$ (constant plane) & all samples \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\subsection{IFNet: motion from colour}\label{sec:fgm-ifnet}
+
+The motion estimator is an intermediate-flow network (IFNet) with the design of RIFE 4.26 \cite{huang2022rife}. It is a coarse-to-fine estimator of intermediate flows (\cref{sec:bg-interp}) that works on the colour frames alone. It estimates the two flows of the target grid, $F_{\tau\to0}$ and $F_{\tau\to1}$, and it also produces a blend weight and features for the head. The backward warp $\mathcal W$ of \cref{sec:bg-warp} is written here for the code convention:
+\begin{equation}
+\mathcal W(I,F)(x)=I\big(x+F(x)\big),\label{eq:fgm-warp}
+\end{equation}
+where $I(\cdot)$ is evaluated by bilinear interpolation, coordinates outside the image are clamped to the border, and the sampling grid is normalised so that the first and last pixel centres sit at $-1$ and $+1$ (the align-corners convention). The warp is the same for every tier, and the flows are in pixels, so $F(x)$ is a displacement of the sampling position.
+
+\emph{Encoder.} A per-frame convolutional encoder (\cref{sec:bg-cnn}) maps each frame to four feature channels at full resolution:
+\begin{equation}
+f_i=E(I_i),\qquad i\in\{0,1\},\label{eq:fgm-enc}
+\end{equation}
+where $E$ applies a $3\times3$ convolution with stride 2 (3 to 16 channels) and LeakyReLU with slope 0.2, two more $3\times3$ convolutions (16 to 16 channels, each followed by LeakyReLU), and a $4\times4$ transposed convolution with stride 2 and padding 1 (16 to 4 channels). $E$ depends on its frame only, which is what allows the features to be reused (\cref{sec:fgm-encoder}).
+
+\emph{Blocks.} IFNet has five blocks $k=0,\dots,4$ with scales $(s_0,\dots,s_4)=(16,8,4,2,1)$. Block $k$ works on the frames downsampled by $s_k$, and its width is $c_k$. The \tier{high} tier has $(c_0,\dots,c_4)=(192,128,96,64,32)$. The first block receives the frames, the features and the target time:
+\begin{equation}
+x_0=\big[I_0,\,I_1,\,f_0,\,f_1,\,\tau\mathbf 1\big]\qquad(3+3+4+4+1=15\text{ channels}),\label{eq:fgm-block0}
+\end{equation}
+where $\mathbf 1$ is a constant plane of ones, so $\tau\mathbf 1$ is a plane with value $\tau$. Every later block receives the previous mask and features, the previous flow, and the warped inputs under the current flow:
+\begin{equation}
+x_k=\big[\mathcal W(I_0,F_{k-1}^0),\,\mathcal W(I_1,F_{k-1}^1),\,\mathcal W(f_0,F_{k-1}^0),\,\mathcal W(f_1,F_{k-1}^1),\,\tau\mathbf 1,\,\mu_{k-1},\,\varphi_{k-1},\,F_{k-1}\big],\label{eq:fgm-blockk}
+\end{equation}
+which has $3+3+4+4+1+1+8+4=28$ channels. Here $F_{k-1}^0$ are the first two channels of $F_{k-1}$, the flow to $I_0$, and $F_{k-1}^1$ are the last two, the flow to $I_1$. Each block outputs
+\begin{equation}
+\big(\Delta_k,\,\mu_k,\,\varphi_k\big)=B_k(x_k,\mathbf h),\label{eq:fgm-blockout}
+\end{equation}
+with a four-channel flow update $\Delta_k$, a one-channel mask logit $\mu_k$ and an eight-channel feature map $\varphi_k$. The flow accumulates, with $F_0=\Delta_0$ and $F_k=F_{k-1}+\Delta_k$ for $k\geq1$.
+
+Inside a block, RIFE's layout is kept (\cref{fig:fgm-ifnet}). The block input is bilinearly downsampled to $H/s_k$, and its flow channels, and the flow hints, are divided by $s_k$, because a displacement in pixels shrinks with the grid. Two stride-2 $3\times3$ convolutions with LeakyReLU bring the input to a quarter of the block resolution in each direction, with $c_k/2$ and then $c_k$ channels. Then $n$ residual blocks follow, each computing $\mathrm{LeakyReLU}(\beta\odot\mathrm{conv}_{3\times3}(x)+x)$ with a learned per-channel scale $\beta$ that starts at one. A $4\times4$ transposed convolution with stride 2 (to 52 channels) and a pixel shuffle with factor 2 \cite{shi2016espcn} restore the block resolution $H/s_k$ and give 13 output channels. These are upsampled by $s_k$ to the full frame, and the flow is multiplied by $s_k$ to return to pixel units:
+\begin{equation}
+\Delta_k=s_k\,\mathrm{up}_{s_k}\!\big(\mathrm{out}_{0:4}\big),\qquad \mu_k=\mathrm{up}_{s_k}\!\big(\mathrm{out}_{4}\big),\qquad \varphi_k=\mathrm{up}_{s_k}\!\big(\mathrm{out}_{5:13}\big),\label{eq:fgm-upflow}
+\end{equation}
+where $\mathrm{up}_{s}$ is bilinear upsampling by $s$ and $\mathrm{out}$ is the 13-channel output of the block. The convolutions of block $k$ therefore run at $H/(4s_k)$, which is $H/64$ for block 0 and $H/4$ for block 4.
+
+\emph{Warps and blend.} After block $k$ the frames are warped by the accumulated flow, $\mathcal W(I_0,F_k^0)$ and $\mathcal W(I_1,F_k^1)$, and these warps are the inputs of block $k+1$. After block 4 the blend weight and the blend are
+\begin{equation}
+m=\sigma(\mu_4),\qquad B=m\odot\mathcal W(I_0,F_4^0)+(1-m)\odot\mathcal W(I_1,F_4^1).\label{eq:fgm-blend}
+\end{equation}
+The blend $B$ is the output of RIFE 4.26, and the head of \cref{sec:fgm-output} adds the generative part.
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}[font=\scriptsize, box/.style={draw, rounded corners=2pt, align=center, minimum height=9mm, minimum width=19mm, inner sep=2pt},
+  dashbox/.style={box, dashed}, arr/.style={-{Stealth[length=1.8mm]}}]
+\node[box, minimum width=24mm] (in) at (0,0) {$I_0,I_1$\\colour, 3 channels};
+\node[box, minimum width=24mm] (enc) at (3.4,0) {Encoder $E$\\one frame at a time};
+\node[box, minimum width=24mm] (feat) at (6.8,0) {$f_0,f_1$\\4 channels};
+\node[box] (b0) at (0,-2.5) {Block 0\\$s_0{=}16$, $c_0$};
+\node[box] (b1) at (2.3,-2.5) {Block 1\\$s_1{=}8$, $c_1$};
+\node[box] (b2) at (4.6,-2.5) {Block 2\\$s_2{=}4$, $c_2$};
+\node[box] (b3) at (6.9,-2.5) {Block 3\\$s_3{=}2$, $c_3$};
+\node[box] (b4) at (9.2,-2.5) {Block 4\\$s_4{=}1$, $c_4$};
+\node[dashbox, minimum width=24mm] (hint) at (4.6,-5.0) {engine hints $\mathbf h$, 10 channels\\zero weights at start};
+\node[box, minimum width=24mm] (blend) at (9.2,-5.4) {blend $B$, $m=\sigma(\mu_4)$\\Eq.~\eqref{eq:fgm-blend}};
+\node[box, minimum width=24mm] (head) at (9.2,-7.8) {head $H$: $X\mapsto(r,\ell)$\\Eq.~\eqref{eq:fgm-head-in}};
+\node[box, minimum width=34mm] (out) at (4.6,-7.8) {output $\hat I_\tau$\\Eq.~\eqref{eq:fgm-out}};
+\draw[arr] (in.east) -- (enc.west);
+\draw[arr] (enc.east) -- (feat.west);
+\draw[arr] (in.south) -- (b0.north);
+\draw[arr] (feat.south west) -- (b0.north east);
+\draw[arr] (b0.east) -- (b1.west);
+\draw[arr] (b1.east) -- (b2.west);
+\draw[arr] (b2.east) -- (b3.west);
+\draw[arr] (b3.east) -- (b4.west);
+\draw[arr, dashed] (hint.north) -- (b2.south);
+\draw[arr] (b4.south) -- (blend.north);
+\draw[arr] (blend.south) -- (head.north);
+\draw[arr] (head.west) -- (out.east);
+\draw[arr, dashed] (blend.west) -- (out.north east);
+\end{tikzpicture}
+\caption{IFNet with the head. The encoder runs once per frame. Block $k$ takes the warped frames and features under the current flow, the previous mask and features, and $\tau$ (Eqs.~\eqref{eq:fgm-block0} and \eqref{eq:fgm-blockk}), and it outputs $\Delta_k$, $\mu_k$ and $\varphi_k$ (Eq.~\eqref{eq:fgm-blockout}). Engine hints enter every block through zero-initialised weights (\cref{sec:fgm-hints}). Block 4 gives the blend $B$, and the half-resolution head gives the residual $r$ and the UI logit, which form the output (Eqs.~\eqref{eq:fgm-head-in} and \eqref{eq:fgm-out}). The block scales and widths shown are those of the \tier{high} tier}\label{fig:fgm-ifnet}
+\end{figure}
+
+\subsection{RIFE 4.26 weights and the reproduction check}\label{sec:fgm-weights}
+
+The weights are RIFE 4.26's archive, published in the author's Hugging Face repository. The downloader checks the SHA-256 hash of the archive and then of the \texttt{flownet.pkl} file inside it, and it loads the state dictionary with \texttt{weights\_only=True}, so the file cannot run code. The parameter names and shapes of the \tier{high} tier equal RIFE's, so every tensor is loaded by name. Where a tensor of a tier is smaller than its RIFE counterpart, the loader copies the leading slice along every dimension, the minimum of the two sizes. Where RIFE has more residual blocks than the tier, the first $n$ blocks are copied and the rest are ignored. Tensors that have no RIFE counterpart keep their initialisation, and the hint input columns keep their zero weights (\cref{sec:fgm-hints}). For the \tier{high} tier the loader reports 153 tensors copied exactly and 5 copied with a slice. The five sliced tensors are the first convolutions of the blocks, which are widened by the 10 hint channels, and no tensor is missing.
+
+\emph{Reproduction check.} The check compares the \tier{high} tier with RIFE 4.26's own network code, the \texttt{IFNet\_HDv3} module of the archive, on the same inputs and with no engine data. RIFE's warp function is not in the archive, so the check recreates it with the grid convention of \cref{eq:fgm-warp}. The inputs are a random $8\times12$ image upsampled bicubically to $128\times192$ as $I_0$, and $I_0$ rolled by $(2,5)$ pixels as $I_1$, at $\tau=1/2$. The repository's check accepts a difference below $10^{-4}$ between the blend $B$ and RIFE's merged output in float32 on the CPU, and the agreement it measures is below $10^{-5}$. It also checks that the residual head and the hints add nothing at initialisation (\cref{sec:fgm-hints,sec:fgm-output}). The check tests the network code against RIFE's network code. It does not test the warp against RIFE's own kernel, and it does not test the delivered output of the generator, which differs from the blend (\cref{sec:fgm-output}).
+
+\subsection{Tiers and channel-slice inheritance}\label{sec:fgm-tiers}
+
+\Cref{tab:fgm-tiers} lists the four tiers. The \tier{high} tier has RIFE's widths, residual depth and block layout, and it is the one that starts from RIFE 4.26's network. The smaller tiers are narrower, with fewer residual blocks per block and a narrower head. Each tier is the generator of \cref{eq:fgm-task} with its own widths, residual depth, head width and flow line limit.
+
+\begin{table}[!htbp]
+\caption{Frame-generation tiers. Widths are the channel counts of blocks 0 to 4, $n$ the residual blocks per block, $c_h$ the head width, $L$ the flow line limit of \cref{eq:fgm-scale}, and GMAC the multiply-accumulates per 1080p output frame (every convolution, warps excluded), with flow at the scale the tier uses at 1080p}\label{tab:fgm-tiers}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lllrrrr}
+\toprule
+Tier & Widths $c_0,\dots,c_4$ & $n$ & $c_h$ & $L$ & Params & GMAC \\
+\midrule
+\tier{igpu} & 64, 48, 32, 24, 16 & 3 & 12 & 576 & \Res{fg.model_tiers.igpu.params} & \Res{fg.model_tiers.igpu.gmac_per_1080p_frame} \\
+\tier{low} & 96, 64, 48, 32, 16 & 4 & 16 & 576 & \Res{fg.model_tiers.low.params} & \Res{fg.model_tiers.low.gmac_per_1080p_frame} \\
+\tier{mid} & 128, 96, 64, 48, 24 & 6 & 24 & 1152 & \Res{fg.model_tiers.mid.params} & \Res{fg.model_tiers.mid.gmac_per_1080p_frame} \\
+\tier{high} & 192, 128, 96, 64, 32 & 8 & 32 & 1152 & \Res{fg.model_tiers.high.params} & \Res{fg.model_tiers.high.gmac_per_1080p_frame} \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\emph{Channel-slice inheritance.} A smaller tier starts from RIFE's weights through the copy rule of \cref{sec:fgm-weights}. The narrower tensors take the leading channels of RIFE's tensor along each channel dimension, so the output channels of a block and the input channels of the next layer keep the same ordering. For the \tier{igpu} tier the loader reports 13 tensors with exact shapes and 70 sliced, for the \tier{low} tier 13 and 85, and for the \tier{mid} tier 13 and 115, with no missing tensor. The head has no RIFE counterpart, so it starts from its initialisation in every tier. The inheritance is a heuristic. Nothing forces RIFE's leading channels to be the best subset for a narrower network, and the ablation without inheritance (\cref{sec:fgm-ablate}) is the test of how much it matters.
+
+\subsection{Flow-resolution caps and their cost}\label{sec:fgm-caps}
+
+Estimating flow at full resolution is the most expensive part of the network, so every tier caps the number of image lines at which it estimates flow. A frame of height $H$ lines is halved until it fits under the tier's limit $L$, as RIFE's own scale argument allows:
+\begin{equation}
+s(H)=2^{-j^\ast},\qquad j^\ast=\min\big\{\,j\in\mathbb N_0:\,H\,2^{-j}\le L\,\big\},\label{eq:fgm-scale}
+\end{equation}
+with $L=576$ lines for the \tier{igpu} and \tier{low} tiers and $L=1152$ lines for the \tier{mid} and \tier{high} tiers. At 1080 lines the \tier{igpu} and \tier{low} tiers therefore estimate flow at $s=1/2$ (540 lines), and the \tier{mid} and \tier{high} tiers at $s=1$. The 256-pixel training crops and video up to 576 lines keep full-resolution flow in every tier. The frames are downsampled by $s$ before the encoder and the blocks, the flow hints are multiplied by $s$, and the flows that come out are upsampled and multiplied by $1/s$ to return to pixels. The head, the warps and the output stay at full resolution.
+
+The convolution cost of the encoder and the blocks scales with the pixel count of the frames they see, so it scales with $s^2$. The head does not change. \Cref{tab:fgm-cap} gives the consequence at 1080p, counted with the same hooks as \cref{tab:fgm-tiers}. The cap removes more than half of the flow-path cost of the \tier{igpu} and \tier{low} tiers. For the \tier{low} tier the head is about a third of the capped cost, so the head matters most for the smallest tiers.
+
+\begin{table}[!htbp]
+\caption{Cost per 1080p generated frame of the tiers with the flow cap of \cref{eq:fgm-scale} and with full-resolution flow (GMAC, warps excluded). The encoder column counts both real frames, as the repository's tier table does, so one encoder pass is half of it. The head is the residual head of \cref{sec:fgm-output}}\label{tab:fgm-cap}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrrrrr}
+\toprule
+Tier & Flow scale & Capped total & Full-flow total & Encoder (two frames) & Head \\
+\midrule
+\tier{igpu} & \Res{fg.model_tiers.igpu.flow_scale_1080p} & \Res{fg.model_tiers.igpu.gmac_per_1080p_frame} & 20.4 & \Res{fg.model_tiers.igpu.gmac_per_frame_encoder} & 2.9 \\
+\tier{low} & \Res{fg.model_tiers.low.flow_scale_1080p} & \Res{fg.model_tiers.low.gmac_per_1080p_frame} & 25.5 & \Res{fg.model_tiers.low.gmac_per_frame_encoder} & 4.5 \\
+\tier{mid} & \Res{fg.model_tiers.mid.flow_scale_1080p} & \Res{fg.model_tiers.mid.gmac_per_1080p_frame} & 44.3 & \Res{fg.model_tiers.mid.gmac_per_frame_encoder} & 8.5 \\
+\tier{high} & \Res{fg.model_tiers.high.flow_scale_1080p} & \Res{fg.model_tiers.high.gmac_per_1080p_frame} & 76.7 & \Res{fg.model_tiers.high.gmac_per_frame_encoder} & 13.8 \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\subsection{Engine hints and their zero initialisation}\label{sec:fgm-hints}
+
+When an engine provides data, the generator receives them as extra input channels of every IFNet block. \Cref{tab:fgm-hints} lists the ten channels in the order of the code. The signal channels are multiplied by their availability, so an absent signal contributes zero, and the flags tell the network which case it is in.
+
+\emph{Motion priors.} If a point moves with constant velocity between $I_0$ and $I_1$, its displacement from $I_1$ to $I_0$ is $M_1$, and at time $\tau$ its displacement to $I_0$ is $\tau M_1$ and to $I_1$ is $(\tau-1)M_1$. The priors are exact only for linear motion, so the network has to learn when to trust them. The zero initialisation below lets it start from a working point.
+
+\emph{Camera-only flow and late latching.} The camera flow $C$ is the displacement that the camera motion alone induces on the static background, from the target pixel to $I_1$. Let $A_t$ be the background affine map from screen to texture at time $t$ (\cref{sec:data-synth}), with normalised coordinates $x\in[-1,1]^2$. Then
+\begin{equation}
+C(x)=\tfrac{P}{2}\big(A_1^{-1}(A_\tau(x))-x\big),
+\end{equation}
+where $P$ is the frame size in pixels, so that $P/2$ converts normalised displacements to pixels for a $P\times P$ frame. Object motion is absent from $C$. At display time an engine knows the camera pose of the frame it is about to show, so the pose can be latched just before generation and supplied as this prior. In the synthetic training the prior uses the exact background trajectory at $\tau$. For real video the camera availability is zero, so the prior is never present.
+
+\emph{Depth.} The depth channel is the inverse depth of $I_1$ normalised by its median, $d_1=1/(1+d/\operatorname{median}(d))$, so that a pixel at the median depth has the value one half. It is defined only for the synthetic renderer, where the depth is exact.
+
+\emph{Availability.} Each availability flag is set per sample, and the signal channels are multiplied by the flags. Withholding a signal in training is therefore the same as an engine that does not provide it. The withholding rates are in \cref{tab:fgm-probs}.
+
+\begin{table}[!htbp]
+\caption{Sampling probabilities of the frame-generation training data, with the configuration names used in the saved files, or the constant in the code where no configuration name exists}\label{tab:fgm-probs}
+{\footnotesize\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lrl}
+\toprule
+Quantity & Value & Configuration or constant \\
+\midrule
+Real share of each GPU batch & \Res{fg.config.cfg.p_real} (19 of 48) & \texttt{p\_real} \\
+Extrapolation, both sample kinds & \Res{fg.config.cfg.p_extrap} & \texttt{p\_extrap} \\
+Random $\tau$ for synthetic interpolation & \Res{fg.config.cfg.p_tau} & \texttt{p\_tau}, $\tau\sim U[0.15,0.85]$ \\
+Multi-frame share of real interpolation & \Res{fg.config.cfg.p_mfg} & \texttt{p\_mfg} \\
+Camera reversal & \Res{fg.config.cfg.p_flip} & \texttt{p\_flip} \\
+Scene cut & \Res{fg.config.cfg.p_cut} & \texttt{p\_cut} \\
+UI overlay & \Res{fg.config.cfg.p_ui} & \texttt{p\_ui} \\
+Menu, given a UI overlay & \Res{fg.config.cfg.p_menu} & \texttt{p\_menu} \\
+Withhold motion vector (synthetic) & \Res{fg.config.cfg.p_drop_mv} & \texttt{p\_drop\_mv} \\
+Withhold motion vector (real) & \Res{fg.config.cfg.p_drop_mv_real} & \texttt{p\_drop\_mv\_real} \\
+Withhold depth (synthetic) & 0.30 & default argument in \texttt{set\_availability} \\
+Withhold camera prior (extrapolation) & 0.20 & constant in \texttt{set\_availability} \\
+UI slot filled / tile changed at $t=1$ & 0.70 / 0.30 & \texttt{ui\_layer} \\
+\bottomrule
+\end{tabular*}}
+\end{table}
+
+\paragraph{Zero-initialisation argument.} Let $W^{\mathbf h}_k$ be the weights of the first convolution of block $k$ that multiply the hint channels, and let every other weight of the \tier{high} tier equal RIFE's. The claim is that with $W^{\mathbf h}_k=0$ for every $k$, the blend $B$ does not depend on $\mathbf h$ and equals RIFE 4.26's blend. The argument is by induction over the blocks. Block 0 receives the same input as in RIFE, so its first convolution computes $z=W_x*x+W^{\mathbf h}_0*\mathbf h+b$ with $W^{\mathbf h}_0=0$, which equals RIFE's pre-activation $W_x*x+b$. The later layers of the block see only $z$, so the block outputs $(\Delta_0,\mu_0,\varphi_0)$ equal RIFE's. The induction step is the same for block $k$, because the warps and features that enter block $k$ are functions of the earlier outputs only. The blend of \cref{eq:fgm-blend} is then RIFE's blend. The head adds nothing at initialisation, because its last layer has zero weights and bias $(0,0,0,-4)$ (\cref{sec:fgm-output}). The gradient with respect to the hint columns is $\partial L/\partial W^{\mathbf h}_k=\sum_p \delta_k(p)\,\mathbf h(p)^{\top}$, summed over the sampled positions $p$, where $\delta_k$ is the gradient at the first-layer output. This is not zero when the hints are non-zero and the loss is sensitive to block $k$, so the hint columns leave zero at the first update. The fresh model therefore reproduces RIFE's blend, and then learns from the engine data.
+
+\subsection{Head, UI weight and output}\label{sec:fgm-output}
+
+The head turns the warped frames into a residual colour and a UI logit. Its input is the full-resolution stack of the two real frames, the two warps under the final flow, the blend weight and the last features:
+\begin{equation}
+X=\big[I_0,\,I_1,\,\mathcal W(I_0,F_4^0),\,\mathcal W(I_1,F_4^1),\,m,\,\varphi_4\big]\qquad(21\text{ channels}).\label{eq:fgm-head-in}
+\end{equation}
+A stride-2 $3\times3$ convolution with $c_h$ channels and LeakyReLU, two residual blocks at half resolution with the design of \cref{sec:fgm-ifnet}, and a $4\times4$ transposed convolution with stride 2 give four output channels, $(r,\ell)=H(X)$. Here $r$ is the residual colour and $\ell$ the UI logit. The head starts with a zero transposed-convolution weight and bias $(0,0,0,-4)$, so $r=0$ and $\ell=-4$ at initialisation, and the UI weight $u=\sigma(\ell)$ is about $0.018$. The output is
+\begin{equation}
+\hat I_\tau=u\odot I_1+(1-u)\odot\big(B+r\big),\qquad u=\sigma(\ell),\label{eq:fgm-out}
+\end{equation}
+with the blend $B$ of \cref{eq:fgm-blend}. This is \cref{M-eq:fg} of the article.
+
+The UI weight is a soft mask in $[0,1]$, not a hard classification. Training pushes $u$ towards one on HUD, subtitle and menu pixels, where the UI mask of \cref{eq:fgm-ui-bce} is one, and towards zero elsewhere, so that those pixels come from the newest real frame $I_1$. The starting value means that a fresh model already mixes a small fraction of $I_1$ into every pixel. The delivered output of a fresh model therefore differs from the blend by $u\odot(I_1-B)$, which is small but not zero. This is why the reproduction check of \cref{sec:fgm-weights} compares the blend and not the output.
+
+Evaluation clamps the output to $[0,1]$ before computing metrics. Training does not clamp, so the loss sees the unclamped output.
+
+\emph{UI layer compositing.} When an engine renders the HUD separately from the scene, it can supply HUD-less real frames and the UI layer for the newest state, as premultiplied colour $c$ and alpha $\alpha$. The generator then runs on the HUD-less frames, and the displayed frame is $\hat I_\tau(1-\alpha)+c$. In the design this is applied to every displayed frame of the layer's sequence. The evaluation applies it to the generated frame only (\cref{sec:fgm-test}).
+
+\subsection{Per-frame encoder reuse}\label{sec:fgm-encoder}
+
+The encoder of \cref{eq:fgm-enc} depends on one frame, so a running sequence can encode each real frame once and reuse its features. The IFNet forward pass takes optional precomputed features for this, but no caller in the repository passes them. Training, evaluation and the exported graph all encode both frames (\cref{sec:fgm-export}).
+
+The cost accounting follows from this. The encoder column of \cref{tab:fgm-cap} counts two frames, so one pass per real frame is half the column. With one generated frame per real frame, reuse replaces two encoder passes per generated frame by one.
+
+\subsection{Scene-cut gate}\label{sec:fgm-cut}
+
+\UnderRevision{} The gate decides when the generator should not generate. When two real frames look as if a scene cut lies between them, it outputs the newest real frame $I_1$ instead of $\hat I_\tau$. The repository marks this stage as a known weakness. Its thresholds are calibrated on synthetic adjacent pairs only, so the calibration does not cover real content or wider frame gaps.
+
+The score combines a colour-distribution distance, which needs no motion, with a motion-compensated difference, which is used when $M_1$ is available. Let $Y(x)=(16+65.481R(x)+128.553G(x)+24.966B(x))/255$ be the limited-range luma of an RGB pixel with values in $[0,1]$, and let $h(I)\in\mathbb R^{32}$ be the fraction of pixels whose luma falls in each of 32 equal bins of $[0,1]$. The histogram distance and the motion-compensated difference are
+\begin{align}
+d_{\rm h}(I_0,I_1)&=\tfrac12\big\|h(I_0)-h(I_1)\big\|_1\in[0,1],\label{eq:fgm-hist}\\
+d_{\rm m}(I_0,I_1,M_1)&=\frac{1}{3HW}\sum_{x,c}\big|I_1(x,c)-\mathcal W(I_0,M_1)(x,c)\big|.\label{eq:fgm-hist-m}
+\end{align}
+The two scores are
+\begin{equation}
+S_{\rm mv}=d_{\rm h}+2\,d_{\rm m},\qquad S_0=d_{\rm h},\label{eq:fgm-score}
+\end{equation}
+and the gate is
+\begin{equation}
+g=\begin{cases}\mathbf 1[S_{\rm mv}>\theta_{\rm mv}] & \text{if }a_{\rm mv}=1,\\ \mathbf 1[S_0>\theta_0] & \text{otherwise,}\end{cases}\label{eq:fgm-gate}
+\end{equation}
+where $\mathbf 1[\cdot]$ is one when its condition holds and zero otherwise. Without motion vectors the histogram distance alone is used, because a raw frame difference would read ordinary fast motion as a cut. The gate lives in the evaluation code, and it is not part of the exported graph.
+
+\emph{Calibration.} Each threshold is set separately on synthetic pairs, so that continuous motion is a false alarm on about one pair in a hundred.
+\begin{enumerate}
+\item Draw four batches of up to 64 validation stills. For each batch, generate interpolation pairs at $\tau=1/2$ with motion from all four speed classes, no camera reversal and no UI, and with a cut probability of one half. Each pair is labelled cut or continuous. This gives 256 pairs, about half of them cuts.
+\item Compute $S_{\rm mv}$ with the exact motion vector and $S_0$ for every pair.
+\item For each score, sort the scores of the continuous pairs in ascending order and take the element at 0-based index $\lfloor0.99(n-1)\rfloor$, where $n$ is the number of continuous pairs. This element is the threshold $\theta$.
+\item Report the detection rate, which is the share of cut pairs whose score exceeds $\theta$.
+\end{enumerate}
+The calibrated values are part of the results (\cref{sec:fgr}). When the gate fires, the output is the newest real frame,
+\begin{equation}
+\hat I_\tau\quad\leftarrow\quad I_1\qquad\text{if } g=1.\label{eq:fgm-gated}
+\end{equation}
+
+\subsection{Latency model and pacing}\label{sec:fgm-pacing}
+
+\UnderRevision{} The latency numbers are timed on one data-centre GPU in eager PyTorch, and the pacing model is a simulation with assumed scheduling. The latency terms are those of \cref{sec:bg-latency}. The repository marks in-engine latency on target hardware as not measured. The model therefore answers what frame generation does to the displayed rate and to two latencies, under the stated assumptions.
+
+The model is a discrete-event simulation of a GPU-bound loop with just-in-time CPU scheduling, in which the CPU starts each frame's work so that the GPU never queues frames, on a variable-refresh display. Its parameters are in \cref{tab:fgm-pacing}. The modes are \emph{native} (no generation), \emph{interpolation} (a generated frame between two real frames, with the newer real frame held), \emph{extrapolation} (a generated frame after the newest real frame, with nothing held) and \emph{extrapolation with late latching} (extrapolation whose camera is sampled just before generation).
+
+\begin{table}[!htbp]
+\caption{Parameters of the pacing model, as set in the simulation code and the notebook. The generation time $T_{\rm gen}$ is the measured one-generated-frame time of the \tier{low} tier at 1080p (\cref{sec:fgr}). The temporal super-resolution time $T_{\rm sr}$ is zero, because this pacing run has no such stage}\label{tab:fgm-pacing}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lll}
+\toprule
+Symbol & Value & Meaning \\
+\midrule
+$R_0$ & 33.3, 25.0, 16.7\,ms & base render time per real frame (30, 40 and 60 fps renders) \\
+$C_{\rm cpu}$ & 4.0\,ms & CPU time per frame before rendering starts \\
+$c_v$ & 0.08 & log-normal spread of the render time \\
+$T_{\rm pres}$ & 1.0\,ms & present time \\
+$T_{\rm sr}$ & 0 & temporal super-resolution time \\
+$T_{\rm gen}$ & measured & frame generation time per generated frame \\
+$N$ & 2000 & simulated real frames per run \\
+seed & 0 & random seed of the render times \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+The simulation runs as follows.
+\begin{enumerate}
+\item For each real frame $j=1,\dots,N$, draw the render time $R_j=R_0\exp(c_v z_j)$, where $z_j$ is standard normal.
+\item Set the GPU time $g_j=R_j+T_{\rm sr}+T_{\rm gen}\,\mathbf 1[\text{mode}\neq\text{native}]$ and the frame period $\pi_j=\max(C_{\rm cpu},g_j)$.
+\item Let $t_j$ be the time of the input sample, which is the current simulation time.
+\item Set the time at which the rendered real frame is ready, $a_j=t_j+C_{\rm cpu}+R_j+T_{\rm sr}$.
+\item In the \emph{native} mode, display the real frame at $p^{\rm r}_j=a_j+T_{\rm pres}$.
+\item In the \emph{interpolation} mode, display the generated frame at $p^{\rm g}_j=a_j+T_{\rm gen}+T_{\rm pres}$, and hold the real frame until $p^{\rm r}_j=p^{\rm g}_j+\pi_j/2$.
+\item In the \emph{extrapolation} mode, display the real frame at $p^{\rm r}_j=a_j+T_{\rm pres}$, and the generated frame at $p^{\rm g}_j=p^{\rm r}_j+\pi_j/2$.
+\item In the \emph{extrapolation with late latching} mode, proceed as in step 7, and sample the camera of the generated frame at $t^{\rm cam}_j=p^{\rm g}_j-T_{\rm gen}-T_{\rm pres}$, the moment generation starts.
+\item Record the displayed frames and the latency samples below, and advance the simulation time by $t\leftarrow t+\pi_j$.
+\end{enumerate}
+The rates are computed on the displayed times after the first tenth of the displayed sequence, so that start-up does not count. With $\Delta_i$ the gaps between consecutive displayed times, the displayed frame rate and the gap variation are $\mathrm{fps}=1000/\overline\Delta$ and $\mathrm{CV}=\operatorname{sd}(\Delta)/\overline\Delta$, in milliseconds for $\Delta$.
+
+Three latencies are reported. The game input latency is the time from an input sample to the display of the real frame that reflects it, averaged over the real frames of the run,
+\begin{equation}
+L_{\rm game}=\operatorname{mean}_j\big(p^{\rm r}_j-t_j\big).\label{eq:fgm-lat-game}
+\end{equation}
+The camera latency is the same kind of time, measured to each displayed frame that counts as reflecting the camera. In the code a native frame counts with its real display. An interpolated frame counts with its generated display only, on the assumption that the generated frame already moves half way toward the camera of the newer frame. An extrapolated frame counts with both its real and its generated display, and with late latching the generated display is measured from $t^{\rm cam}_j$:
+\begin{equation}
+L_{\rm cam}=\begin{cases}\operatorname{mean}_j\big(p^{\rm r}_j-t_j\big) & \text{native},\\[2pt] \operatorname{mean}_j\big(p^{\rm g}_j-t_j\big) & \text{interpolation},\\[2pt] \tfrac12\Big(\operatorname{mean}_j\big(p^{\rm r}_j-t_j\big)+\operatorname{mean}_j\big(p^{\rm g}_j-t_j\big)\Big) & \text{extrapolation},\\[2pt] \tfrac12\Big(\operatorname{mean}_j\big(p^{\rm r}_j-t_j\big)+\operatorname{mean}_j\big(p^{\rm g}_j-t^{\rm cam}_j\big)\Big) & \text{late latching.}\end{cases}\label{eq:fgm-lat-cam}
+\end{equation}
+The content age averages the time from the input sample to every displayed frame, real or generated,
+\begin{equation}
+A=\operatorname{mean}_p\big(p-t\big)\quad\text{over all displayed frames }p.\label{eq:fgm-lat-age}
+\end{equation}
+Each latency is also reported at its 95th percentile over the samples.
+
+The arithmetic estimate of a network's time at a sustained throughput $F$ in TFLOPS, is $T_{\rm est}=2G/F$ milliseconds, for a frame that costs $G$ GMAC, because one multiply-accumulate is two floating-point operations. The repository uses $F=4$ TFLOPS for an assumed integrated GPU. The estimate scales the GMAC with pixel count, so at 1440p it ignores the flow cap of \cref{eq:fgm-scale}.
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}[font=\scriptsize, x=1cm, y=1cm,
+  tick/.style={thick},
+  lab/.style={font=\scriptsize, align=center},
+  bar/.style={draw, minimum height=6mm, inner sep=1pt}]
+\node[anchor=east, lab] at (-0.3,1.9) {Interpolation};
+\draw[thick] (0,1.9) -- (9.6,1.9);
+\node[bar, fill=black!10, minimum width=2.4cm] at (1.4,2.5) {$C_{\rm cpu}+R$};
+\node[bar, fill=black!30, minimum width=2.0cm] at (3.6,2.5) {generate $T_{\rm gen}$};
+\draw[tick] (0,1.8) -- (0,2.0);
+\node[lab, below] at (0,1.8) {input $t$};
+\draw[tick] (4.9,1.8) -- (4.9,2.0);
+\node[lab, below] at (4.9,1.8) {generated $p^{\rm g}$};
+\draw[tick] (8.3,1.8) -- (8.3,2.0);
+\node[lab, below] at (8.3,1.8) {real $p^{\rm r}$};
+\draw[{Stealth[length=1.4mm]}-{Stealth[length=1.4mm]}, thick] (4.9,2.95) -- (8.3,2.95) node[above, lab] {hold $\pi/2$};
+\node[anchor=east, lab] at (-0.3,0.0) {Extrapolation};
+\draw[thick] (0,0.0) -- (9.6,0.0);
+\node[bar, fill=black!10, minimum width=2.4cm] at (1.4,0.55) {$C_{\rm cpu}+R$};
+\fill[black!25] (2.6,0.25) rectangle (3.0,0.85);
+\draw[tick] (0,-0.1) -- (0,0.1);
+\node[lab, below] at (0,-0.1) {input $t$};
+\draw[tick] (3.0,-0.1) -- (3.0,0.1);
+\node[lab, below] at (3.0,-0.1) {real $p^{\rm r}$};
+\draw[tick] (6.4,-0.1) -- (6.4,0.1);
+\node[lab, below] at (6.4,-0.1) {generated $p^{\rm g}$};
+\draw[{Stealth[length=1.4mm]}-{Stealth[length=1.4mm]}, thick] (3.0,1.05) -- (6.4,1.05) node[above, lab] {$\pi/2$};
+\end{tikzpicture}
+\caption{Timeline of one input sample in the two generation modes, schematic and not to scale. In interpolation the generated frame needs the newest real frame, and the real frame is held for half a period, so it is shown after the generated frame. In extrapolation the real frame is shown as soon as it is rendered, and the generated frame follows half a period later, with the generation time $T_{\rm gen}$ inside that period. The grey bar at $T_{\rm pres}$ in the extrapolation row is the present time. The labels are the symbols of \cref{tab:fgm-pacing}}\label{fig:fgm-timeline}
+\end{figure}
+
+\cref{fig:fgm-timeline} shows the two modes. Interpolation adds $T_{\rm gen}$ to the time of the generated frame and delays the real frame by half a period. Extrapolation adds no delay to the real frame and adds half a period to the generated frame, which is shown after the real frame.
+
+\subsection{Training samples}\label{sec:fgm-samples}
+
+In the main stages each of the two GPUs takes its own batch of 48 samples per step, under distributed data parallel training. A batch holds 19 real quads and 29 synthetic samples, since the real share \Res{fg.config.cfg.p_real} of 48 rounds to 19, drawn at random without replacement from the caches. Still crops are $512\times512$ pixels cut from the textures of \cref{sec:data-synth}, and quads are four frames of $256\times256$ pixels from the sequence sources of \cref{sec:data}, both after the random downscale of \cref{sec:data}. The cache sizes are in \cref{sec:fgr}.
+
+\paragraph{Synthetic samples.} Each synthetic sample is one scene of the renderer of \cref{sec:data-synth}, rendered at $256\times256$ pixels with four anti-aliasing samples per pixel for $I_0$, $I_1$ and the target. The background is one still. The foreground is the still of the neighbouring sample in the batch, visible through a procedural alpha mask in 85 percent of samples, and a flat colour in 25 percent of samples. The construction of one sample is as follows.
+\begin{enumerate}
+\item Draw the camera reversal with probability \Res{fg.config.cfg.p_flip}. A reversal reverses the camera velocity after $t=1$.
+\item Draw extrapolation with probability \Res{fg.config.cfg.p_extrap}. If it is extrapolation, set $\tau=1.5$. Otherwise set $\tau=1/2$, or with probability \Res{fg.config.cfg.p_tau} draw $\tau$ uniformly from $[0.15,0.85]$.
+\item Render $I_0$ at $t=0$, $I_1$ at $t=1$ and the target at $t=\tau$.
+\item Compute the exact motion vector $M_1$, which is the flow from $I_1$ to $I_0$, the exact flows $F_{\tau\to0}$ and $F_{\tau\to1}$ with their validity masks (visible and inside the view), the camera flow $C$ and the inverse depth $d_1$.
+\item Draw a scene cut with probability \Res{fg.config.cfg.p_cut}. A cut replaces $I_1$, $M_1$ and $d_1$ by those of the neighbouring sample, sets the target to the replaced $I_1$, and sets the validity masks to zero.
+\item Draw UI overlays with probability \Res{fg.config.cfg.p_ui}. Four UI slots are each filled with probability 0.7 by a tile from a bank of 256 text, bar and crosshair tiles of $160\times28$ pixels, and 30 percent of the filled slots change their tile at $t=1$. A full-screen menu panel of alpha 0.6 and colour 0.05 is drawn with probability \Res{fg.config.cfg.p_menu} given a UI overlay, which is 1.5 percent of all samples. The tiles are alpha-composited into $I_0$ with the state at $t=0$, into $I_1$ with the state at $t=1$, and into the target with the state at $t=1$. The UI mask is the maximum of the two alphas.
+\item Withhold the signals according to \cref{tab:fgm-probs}, and set the camera availability to zero for every interpolation sample.
+\end{enumerate}
+
+\paragraph{Real quads.} Each real sample is a window of four consecutive frames from one of the sequence sources of \cref{sec:data}, decoded and cut to $256\times256$ pixels. The window is flipped horizontally and vertically with probability one half each, and its flow fields are flipped with it, with the vector components negated along each flipped axis. The sample then takes one of three forms.
+\begin{enumerate}
+\item With probability \Res{fg.config.cfg.p_extrap}, extrapolation: $I_0=k$, $I_1=k+2$ and target $k+3$, at $\tau=1.5$.
+\item Otherwise, with probability \Res{fg.config.cfg.p_mfg}, multi-frame generation: $I_0=k$, $I_1=k+3$, and the target is $k+1$ or $k+2$ with equal probability, at $\tau=1/3$ or $2/3$.
+\item Otherwise interpolation: $I_0=k$, $I_1=k+2$ and target $k+1$, at $\tau=1/2$.
+\end{enumerate}
+The flows come from the RAFT optical-flow network \cite{teed2020raft}, in the small variant that torchvision ships with its weights. The cache computes four flows per quad, $k+2\to k$, $k+1\to k$, $k+1\to k+2$ and $k+3\to k+2$, at the $256\times256$ crop size, and stores them at half resolution, in pixels of the full grid, by two-by-two average pooling. Every quad carries these four flows, including the TartanAir and Sintel quads that have exact flows in the frame decoder, because the quad cache does not use those flows. The motion vector $M_1$ is the flow $k+2\to k$. The flows $F_{\tau\to0}$ and $F_{\tau\to1}$ are $k+1\to k$ and $k+1\to k+2$ for interpolation, and $k+3\to k+2$ for extrapolation. An extrapolated sample has no label from the target to $I_0$, so its $F_{\tau\to0}$ validity is zero. A multi-frame sample has no flow label, so its $M_1$ and both flow validities are zero. A real sample has no depth and no camera prior, so its depth and camera availabilities are zero. Every pixel of a real flow is valid, because the cache computes no validity mask.
+
+\paragraph{Availability and the plain-video case.} \Cref{tab:fgm-probs} gives the withholding rates. Synthetic samples withhold the motion vector with probability \Res{fg.config.cfg.p_drop_mv} and the depth with probability 0.3, and they keep the camera prior with probability 0.8 on extrapolation samples only. Real samples withhold the motion vector with probability \Res{fg.config.cfg.p_drop_mv_real} when a flow label exists, and they never have depth or a camera prior. The validation batches are fixed, with \Res{fg.config.cfg.val_bs} stills and \Res{fg.config.cfg.val_bs} quads in each of \Res{fg.config.cfg.val_batches} batches, drawn with a seed of 54321. Each is evaluated twice, once with its availabilities and once with all of them set to zero, which is plain video.
+
+\subsection{Training objective}\label{sec:fgm-loss}
+
+The objective is a weighted sum of six terms, with a unit weight on the first,
+\begin{equation}
+\mathcal L=\mathcal L_{\rm pix}+0.5\,\mathcal L_{\rm cen}+0.1\,\mathcal L_{\rm lp}+0.01\,\mathcal L_{\rm flow}+0.2\,\mathcal L_{\rm ui}+0.5\,\mathcal L_{\rm kd},\label{eq:fgm-total}
+\end{equation}
+where each term is a mean over the batch. \Cref{tab:fgm-loss} gives the definitions, and the paragraphs below give the formulas.
+
+\begin{table}[!htbp]
+\caption{Training losses of the frame generator, with weights and the samples to which each term applies}\label{tab:fgm-loss}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lp{0.42\textwidth}rp{0.30\textwidth}}
+\toprule
+Term & Quantity & Weight & Applies to \\
+\midrule
+$\mathcal L_{\rm pix}$ & Charbonnier penalty, $\varepsilon=10^{-3}$ & 1 & every sample \\
+$\mathcal L_{\rm cen}$ & soft census distance, $7\times7$ window & \Res{fg.config.cfg.w_census} & every sample \\
+$\mathcal L_{\rm lp}$ & LPIPS with AlexNet, on the clipped output & \Res{fg.config.cfg.w_lpips} & every sample, when the package loads \\
+$\mathcal L_{\rm flow}$ & flow L1 on valid pixels, weight 1 (synthetic) or 1/4 (real) & \Res{fg.config.cfg.w_flow} & every sample with flow labels \\
+$\mathcal L_{\rm ui}$ & binary cross-entropy on the UI mask, positive weight 4 & \Res{fg.config.cfg.w_ui} & every sample \\
+$\mathcal L_{\rm kd}$ & distillation from the \tier{high} teacher & \Res{fg.config.cfg.w_distill} & students only \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\emph{Charbonnier.} With the target $I_\tau$ and the output $\hat I_\tau$, $\mathcal L_{\rm pix}=\operatorname{mean}\sqrt{(\hat I_\tau-I_\tau)^2+\varepsilon^2}$, where the mean runs over every colour value. This is a smooth form of the L1 penalty. It is a smooth edge-preserving potential of the Charbonnier family \cite{charbonnier1997deterministic}.
+
+\emph{Census.} For a grey image $g=0.299R+0.587G+0.114B$, the census vector at pixel $x$ has one soft-ternary entry per offset $\delta$ in the $7\times7$ window $D$, which has 49 offsets including zero,
+\begin{equation}
+c(x,\delta)=\frac{g(x+\delta)-g(x)}{\sqrt{0.81+\big(g(x+\delta)-g(x)\big)^2}}.\label{eq:fgm-census}
+\end{equation}
+The census distance at a pixel is $\rho(x)=\operatorname{mean}_{\delta\in D}\,d/(0.1+d)$, with $d=\big(c_{\hat I}(x,\delta)-c_{I}(x,\delta)\big)^2$. The loss $\mathcal L_{\rm cen}$ is the mean of $\rho$ over the image with a border of three pixels removed on each side. Census distances are insensitive to brightness offsets, the property for which the census loss was introduced for unsupervised flow \cite{meister2018unflow}. The soft-ternary normalisation and the robust distance are the repository's own choices.
+
+\emph{LPIPS.} $\mathcal L_{\rm lp}$ is the LPIPS distance with the AlexNet network and version 0.1 of its calibration weights \cite{zhang2018lpips}, applied to the output clipped to $[0,1]$ and to the target, and averaged over the batch. The weight is zero when the package does not load, and the saved configuration records that.
+
+\emph{Flow.} The flow term is the weighted L1 error of both flows over the valid pixels,
+\begin{align}
+\mathcal L_{\rm flow}&=\frac{\sum_x\sum_{c}\big|\hat F_{0,c}(x)-F_{0,c}(x)\big|\,v_0(x)}{2\sum_x v_0(x)+1}\nonumber\\
+&\quad+\frac{\sum_x\sum_{c}\big|\hat F_{1,c}(x)-F_{1,c}(x)\big|\,v_1(x)}{2\sum_x v_1(x)+1},\label{eq:fgm-flow}
+\end{align}
+where $c\in\{x,y\}$ runs over the two flow components.
+where $v_i=w\,\mathrm{valid}_i$ with $w=1$ for synthetic samples and $w=1/4$ for real samples. The denominator counts the valid pixels and not their weights, so a real sample contributes a quarter of the error of a synthetic one at the same pixel error.
+
+\emph{UI.} With $y(x)=\mathbf 1[\mathrm{ui}(x)>0.5]$ for the UI mask $\mathrm{ui}=\max(\alpha_0,\alpha_1)$ of \cref{sec:fgm-samples},
+\begin{equation}
+\mathcal L_{\rm ui}=-\operatorname{mean}\Big[4\,y\log\sigma(\ell)+(1-y)\log\big(1-\sigma(\ell)\big)\Big],\label{eq:fgm-ui-bce}
+\end{equation}
+which is the binary cross-entropy on the UI logit $\ell$, with the positive term weighted by four to up-weight the rarer UI pixels.
+
+\emph{Distillation.} When a teacher checkpoint is given, the teacher is the \tier{high} tier with the same inputs and availabilities, run without gradients. With $\hat I^{\rm T}$ and $\hat F^{\rm T}_i$ the teacher output and flows,
+\begin{equation}
+\mathcal L_{\rm kd}=\operatorname{mean}\big|\hat I_\tau-\hat I^{\rm T}\big|+0.01\Big(\operatorname{mean}\big|\hat F_0-\hat F^{\rm T}_0\big|+\operatorname{mean}\big|\hat F_1-\hat F^{\rm T}_1\big|\Big).\label{eq:fgm-kd}
+\end{equation}
+Training a student to match a teacher's outputs in this way is distillation \cite{gou2021knowledge}. The 0.01 weight on the flows is a constant of the code, not a configuration value.
+
+\subsection{Optimisation and schedule}\label{sec:fgm-schedule}
+
+The optimiser is AdamW \cite{loshchilov2019adamw} with betas $(0.9,0.99)$ and weight decay \Res{fg.config.cfg.weight_decay} on all parameters. The gradient norm is clipped to \Res{fg.config.cfg.grad_clip} after unscaling. The forward pass runs under fp16 autocast with dynamic loss scaling, and the losses are computed in float32 \cite{micikevicius2018mixed}. The learning rate follows the fraction $p=t/T$ of the wall-clock budget $T$ already used. It rises linearly over the first \Res{fg.config.cfg.warmup_frac} of the budget and then decays with a cosine to a floor of $\mathrm{lr}_{\min}=10^{-6}$:
+\begin{equation}
+\mathrm{lr}(p)=\begin{cases}\mathrm{lr}_0\,\max(p/0.03,\,0.01) & p<0.03,\\ \mathrm{lr}_{\min}+\tfrac12(\mathrm{lr}_0-\mathrm{lr}_{\min})\big(1+\cos\pi q\big) & p\geq0.03,\end{cases}\qquad q=\frac{p-0.03}{0.97}.\label{eq:fgm-lr}
+\end{equation}
+A moving average of the weights, the exponential moving average (EMA), is updated after every step on the rank-0 model with decay $d_s=\min(0.999,(1+s)/(10+s))$ at step $s$, so the decay starts near zero and reaches \Res{fg.config.cfg.ema_decay}. Validation runs every $\min(8\,\mathrm{min},\max(T/6,60\,\mathrm{s}))$ and at the end of the budget. Each validation saves the latest weights, and the best weights by the selection metric, which is the mean of the PSNR with and without engine data (\cref{sec:fgm-test}). The run stops with an error after 200 consecutive steps with a non-finite loss. If a run exhausts GPU memory, it is retried once with half the batch for the rest of its budget.
+
+Training follows two stages, listed in \cref{tab:fgm-runs}. First the \tier{high} tier is fine-tuned from RIFE 4.26 on both GPUs at a learning rate of \Res{fg.config.cfg.lr_teacher} and with no teacher, since it is the tier that starts from RIFE's network. Then the smaller tiers start from RIFE's leading slices and are trained with the full objective, including distillation from the EMA weights of the fine-tuned \tier{high} run, at a learning rate of \Res{fg.config.cfg.lr}. The \tier{low} tier, the main student, uses both GPUs. The \tier{igpu} and \tier{mid} tiers train side by side, one GPU each. The nominal budgets are those of the table, and the run scales them by one common factor below one, so that the whole pipeline fits the session. The saved configurations show the scaled budgets.
+
+\begin{table}[!htbp]
+\caption{Training runs of the frame generator, in stage order. Budgets are the nominal wall-clock times, and batches are per GPU}\label{tab:fgm-runs}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}llllrrr}
+\toprule
+Run & Tier & Initialisation & Distillation & Learning rate & Budget (min) & Batch \\
+\midrule
+\texttt{fg\_teacher} & \tier{high} & RIFE 4.26 & none & \Res{fg.config.cfg.lr_teacher} & \Res{fg.config.cfg.minutes.teacher} & 48 \\
+\texttt{fg\_low} & \tier{low} & RIFE slices & \tier{high} & \Res{fg.config.cfg.lr} & \Res{fg.config.cfg.minutes.student} & 48 \\
+\texttt{fg\_igpu} & \tier{igpu} & RIFE slices & \tier{high} & \Res{fg.config.cfg.lr} & \Res{fg.config.cfg.minutes.pair} & 48 \\
+\texttt{fg\_mid} & \tier{mid} & RIFE slices & \tier{high} & \Res{fg.config.cfg.lr} & \Res{fg.config.cfg.minutes.pair} & 24 \\
+six ablations & \tier{low} & see \cref{tab:fgm-abl} & see \cref{tab:fgm-abl} & \Res{fg.config.cfg.lr} & \Res{fg.config.cfg.minutes.ablation} & 48 \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\subsection{Ablations}\label{sec:fgm-ablate}
+
+Each ablation is a \tier{low} run with the same \Res{fg.config.cfg.minutes.ablation}-minute budget as the reference. Each changes one setting of the configuration (\cref{tab:fgm-abl}), and the ablation runs go in pairs, one run per GPU. All of them use the same wall-clock budget, so the run without distillation takes more steps, because it skips the teacher's forward pass.
+
+\begin{table}[!htbp]
+\caption{Ablations of the \tier{low} tier, with the configuration change of each relative to the reference (the saved \texttt{cfg\_abl\_*.json} files)}\label{tab:fgm-abl}
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}lp{0.70\textwidth}}
+\toprule
+Run & Change from the reference \\
+\midrule
+\texttt{abl\_reference} & none, so distillation from the \tier{high} run and UI training are on \\
+\texttt{abl\_no\_ui\_training} & no HUD, subtitle or menu overlays in training, and UI loss weight zero \\
+\texttt{abl\_no\_motion\_prior} & motion vector and camera availability forced to zero in training (depth kept) \\
+\texttt{abl\_extrap\_only} & every training sample is an extrapolation ($p_{\rm extrap}=1$) \\
+\texttt{abl\_no\_distillation} & no teacher, so $\mathcal L_{\rm kd}$ is absent \\
+\texttt{abl\_no\_inheritance} & no RIFE weights, so the IFNet starts from the default initialisation \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+The \texttt{abl\_no\_motion\_prior} model is evaluated without any engine data in both modes, because its training never supplied the motion vector or the camera prior. Validation scores are not compared across ablations, which share only the test suites (\cref{sec:fgm-test}).
+
+\subsection{Fusion and ONNX export}\label{sec:fgm-export}
+
+The re-parameterisation fusion of the temporal super-resolution network does not apply to the generator, since it has no such blocks. Fusion here is a copy in evaluation mode, and the check that fused and unfused outputs agree holds by construction. The fused weights are stored, and their fp16 copies are used for timing.
+
+The export wrapper takes the two real frames, the motion vector, the depth, the camera prior, the time and the three availability flags, and returns the output frame,
+\begin{equation}
+\hat I_\tau=\mathrm{FG}\big(I_0,I_1,M_1,d_1,C,\tau,a_{\rm mv},a_{\rm cam},a_{\rm dep}\big).\label{eq:fgm-export}
+\end{equation}
+The exporter is TorchScript based, with opset 17, and the graph is static. The example input is $128\times128$ pixels for both exported models, the \tier{low} and \tier{igpu} tiers. The check runs ONNX Runtime on the CPU and compares it with PyTorch in float32 on the same example, and the difference is below $10^{-5}$ for both models. Two limits follow from the export. First, the flow scale of \cref{eq:fgm-scale} is decided from the frame height when the graph is traced, and a $128$-line example has $s=1$ for every tier. The exported graph therefore computes full-resolution flow, and a graph for a $1080$-line output must be exported at that size. Second, the exported graph encodes both real frames, so the reuse of \cref{sec:fgm-encoder} is not in it.
+
+\subsection{Test protocol}\label{sec:fgm-test}
+
+All evaluation uses the test split only. Every suite is evaluated in an \emph{engine} mode, where the batch carries the engine data that the suite has, and in a \emph{plain} mode, where the batch carries none, so that the generator sees ordinary video. The 3x multi-frame suites are plain only. \Cref{tab:fgm-suites} lists the suites. The synthetic suites use \Res{fg.config.cfg.eval.synthetic_per_suite} textures of $512\times512$ pixels from held-out game frames and DIV2K validation images, each rendered at $256\times256$ pixels. The real suites take up to \Res{fg.config.cfg.eval.real_clips} clips each, four times that for the Vimeo-90K triplets, and \Res{fg.config.cfg.eval.native_clips} at native resolution.
+
+\begin{table}[!htbp]
+\caption{Test suites of the frame generator. Modes are interpolation at $\tau=1/2$ (interp), extrapolation at $\tau=1.5$ (extrap) and 3x multi-frame generation (mfg3x, plain input only). The engine motion vector of real suites is exact for TartanAir and Sintel and estimated by RAFT otherwise}\label{tab:fgm-suites}
+{\footnotesize\setlength{\tabcolsep}{3pt}\raggedright\begin{tabular*}{\textwidth}{@{\extracolsep\fill}p{0.23\textwidth}p{0.14\textwidth}p{0.14\textwidth}p{0.18\textwidth}p{0.22\textwidth}}
+\toprule
+Suite & Source & Crop (lines $\times$ width) & Modes & Notes \\
+\midrule
+\texttt{synthetic} & held-out textures & $256\times256$ & interp, extrap & the four speed classes, separately \\
+\texttt{synthetic-ui} & held-out textures & $256\times256$ & interp, extrap & HUD and subtitle changes on every sample \\
+\texttt{synthetic-menu} & held-out textures & $256\times256$ & interp, extrap & menu on every sample \\
+\texttt{synthetic-cut} & held-out textures & $256\times256$ & interp, extrap & every sample is a cut \\
+\texttt{synthetic-reversal} & held-out textures & $256\times256$ & extrap & every camera reverses, in engine mode with and without the camera prior \\
+\texttt{vimeo\_triplet} & Vimeo-90K & $256\times448$ & interp & three frames per clip \\
+\texttt{tartanair} & TartanAir & $480\times640$ & interp, extrap, mfg3x & exact motion vectors \\
+\texttt{sintel} & MPI Sintel & $432\times1024$ & interp, extrap, mfg3x & exact motion vectors \\
+\texttt{vid4} & Vid4 & $480\times704$ & interp, extrap, mfg3x & RAFT motion \\
+\texttt{vimeo1080p} & Vimeo 1080p & $544\times960$ & interp, extrap, mfg3x & frames scaled to 544 lines \\
+\texttt{vimeo1080p\_native} & Vimeo 1080p & $1072\times1904$ & interp, extrap, mfg3x & native resolution \\
+\bottomrule
+\end{tabular*}}
+\end{table}
+
+\emph{Clip selection.} A real clip is the first four frames of a candidate item (three for triplets), centre-cropped to the size of \cref{tab:fgm-suites}, after the downscale of the 544-line suite. Candidates are read in order, and a candidate is skipped when it cannot be decoded or when it has a defect. The defects are a blank frame, with a luma standard deviation below 2 on the 0 to 255 scale, a frozen pair, with a mean absolute luma difference below 0.1 on the same scale, and a cut, with half the L1 distance between the normalised 32-bin luma histograms of consecutive frames above 0.5. By this rule the test clips contain no cuts, which makes the gated share of \cref{sec:fgm-cut} a false-alarm rate. The sequences of TartanAir and Sintel are played backwards, so that their exact forward flow becomes the motion from the newest frame to the older one. The engine motion vector of $I_1$ is composed from two consecutive exact motion vectors, $M_1=m_{21}+\mathcal W(m_{10},m_{21})$, where $m_{ij}$ is the exact motion from frame $i$ to frame $j$.
+
+On the other real suites the motion is RAFT-small from $I_1$ to $I_0$, estimated at full resolution up to a longer side of 1024 pixels. Beyond that the RAFT input is resized to a longer side of 1024 pixels, and its flow is scaled back, so the native suite's motion is estimated at reduced size. For real suites the occlusion mask of the target is estimated by RAFT with a forward-backward consistency test \cite{meister2018unflow}, and it is used by the metrics only. For synthetic suites the mask is exact.
+
+\emph{Methods.} \Cref{tab:fgm-methods} lists the methods, how each is gated and what inputs each receives.
+
+\begin{table}[!htbp]
+\caption{Methods of the frame-generation test protocol and their inputs. The gate of \cref{eq:fgm-gate} replaces the output of a gated method by $I_1$. Baselines are never gated, and the frame repeat is $I_1$ itself, so gating it changes nothing}\label{tab:fgm-methods}
+{\footnotesize\setlength{\tabcolsep}{3pt}\raggedright\begin{tabular*}{\textwidth}{@{\extracolsep\fill}p{0.22\textwidth}p{0.38\textwidth}p{0.14\textwidth}p{0.20\textwidth}}
+\toprule
+Method & Definition & Gated & Inputs \\
+\midrule
+frame repeat & $I_1$ & not applicable & both \\
+frame average & $\tfrac12(I_0+I_1)$ & no & both \\
+motion-vector reprojection & Eq.~\eqref{eq:fgm-analytic} with $\tau M_1$ and $(\tau-1)M_1$ & no & engine only \\
+RIFE 4.26 unchanged & blend $B$ of \cref{eq:fgm-blend} & yes & colour only in both modes \\
+\tier{high}, \tier{low}, \tier{igpu}, \tier{mid} & output $\hat I_\tau$ & yes & both \\
+ablations & output $\hat I_\tau$ of each run & yes & both \\
+UI layer (UI suites only) & $\hat I_\tau(1-\alpha)+c$ on HUD-less frames & yes & engine only \\
+\bottomrule
+\end{tabular*}}
+\end{table}
+
+The reprojection baseline is an analytic warp-and-blend that uses linear motion. The two frames are warped by the two priors, $W_0=\mathcal W(I_0,\tau M_1)$ and $W_1=\mathcal W(I_1,(\tau-1)M_1)$, and they are blended per pixel with a weight that prefers the warp agreeing with the other,
+\begin{align}
+\mathrm{Rep}(I_0,I_1,M_1)&=\mu\,\tfrac12(W_0+W_1)+(1-\mu)\,W_1,\label{eq:fgm-analytic}\\
+\mu&=\sigma\big(40\,(0.1-\bar\epsilon)\big),\qquad \bar\epsilon=\operatorname{mean}_c\big|W_0-W_1\big|.\nonumber
+\end{align}
+Where the two warps disagree by more than about 0.1, the weight $\mu$ falls to zero and the result is $W_1$. This treats disagreeing pixels as occluded and gives them the newer frame, which is a heuristic. The baseline needs motion vectors, so it is absent in the plain mode. The networks use no engine data in the plain mode, and the RIFE reference is colour only in both modes, as its design requires.
+
+\emph{Metrics.} Each sample gives the following values, which follow \cref{sec:bg-metrics}, with the generated frame clipped to $[0,1]$ before each metric.
+\begin{itemize}
+\item PSNR on RGB, $10\log_{10}(1/\mathrm{MSE})$, with the mean squared error over all colour values, and also over the UI pixels or over the occluded pixels when those exist. The occluded pixels are those not visible in $I_1$ by the target's occlusion mask, and a sample counts only if it has more than 50 of them.
+\item SSIM with an $11\times11$ Gaussian window of standard deviation 1.5, computed per colour channel with $C_1=0.01^2$ and $C_2=0.03^2$, and averaged \cite{wang2004ssim}.
+\item LPIPS with AlexNet \cite{zhang2018lpips}.
+\item Interpolation error, the root-mean-square difference on the 0 to 255 scale \cite{baker2011middlebury}.
+\item UI ghosting rate, the share of UI pixels whose largest colour error exceeds 0.1.
+\item Motion magnitude, the mean length of $M_1$ in pixels, recorded for each sample.
+\end{itemize}
+The temporal consistency of the displayed sequence is measured on the interpolation suites in the plain mode, with RAFT-small flows \cite{teed2020raft}. For each clip, the flow from $I_0$ to the output and the flow from the output to $I_1$ are compared with the flow from $I_0$ to the true target and from the target to $I_1$. The per-clip value is the mean of the two mean norms of the flow differences, in pixels. It is a sequence version of the tOF measure of TecoGAN \cite{chu2020tecogan}, not the function in the library, and it is reported per clip, because a few large-motion clips can dominate a suite mean.
+
+The Middlebury comparison uses the 12 sequences of the Middlebury ``other'' interpolation set \cite{baker2011middlebury}. It takes frames 10 and 11 as inputs and the middle frame 10i11 as the ground truth. It runs on the CPU with colour input only, after training, with the saved checkpoints. Frames of 380 to 480 lines are below the flow line limit of every tier, so this comparison estimates flow at full resolution for every tier.
+
+\emph{Gated samples and the reporting rule.} A gated output equals $I_1$ exactly, so a sample is gated when the gate of \cref{eq:fgm-gate} fires and the PSNR of the RIFE output equals that of the frame repeat. The notebook does not build these tables. They are made after the run from the per-sample file. The gate is shared by every method on the same batch. The as-saved table includes gated samples, and the not-gated table excludes them. The test clips contain no cuts by construction, so every gated real sample is a false alarm. Including those samples would measure the gate's false-alarm rate, not how well each generator interpolates, so the not-gated table is the one that compares generators. The gated share is reported for each suite, mode and input mode.
+
+\emph{Latency protocol.} The per-frame latency of each fused fp16 generator is the mean of 100 timed forward passes at batch size 1, after 10 warm-up passes, with CUDA events and the cuDNN autotuner on. The inputs contain every engine signal. The timing runs at $1920\times1080$ and at $2560\times1440$, and the $1920\times1080$ time of the \tier{low} tier feeds the pacing model of \cref{sec:fgm-pacing}.

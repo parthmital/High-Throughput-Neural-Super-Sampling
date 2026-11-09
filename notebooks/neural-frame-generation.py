@@ -6,13 +6,13 @@
 # **Approach.**
 #
 # 1. **Data.** The leakage-safe manifest from `neural-data-pipeline` (or an inline build). Synthetic layered scenes rendered on the GPU (exact intermediate flows at random in-between times, disocclusions, thin geometry, particles; HUD tiles and subtitles that change between frames, full-screen menus, scene cuts, rapid camera reversals) and real quads of consecutive video frames (Vimeo-90K, REDS, Vimeo-1080p, TartanAir, Sintel) with RAFT teacher flows, including 3x multi-frame samples (frames k and k+3, targets at 1/3 and 2/3).
-# 2. **Model.** An IFNet coarse-to-fine intermediate-flow estimator with the design of RIFE 4.26 (Practical-RIFE, MIT), which estimates motion from the two colour frames alone. The `high` tier is RIFE 4.26's network and starts from its pre-trained weights (downloaded from the author's Hugging Face repository and hash-checked); smaller tiers inherit leading channel slices. Engine data enter as extra input channels with zero initial weight (linear-motion priors from the motion vector of the newest frame, the camera-only flow of the latest input for late-latched extrapolation, depth, availability flags), so the fresh model reproduces RIFE exactly and fine-tuning learns how much to trust each signal. A half-resolution head adds a residual and the UI mask: output = UI-mask * newest real frame + (1 - UI-mask) * (blend of the two warped frames + residual). Tiers: `igpu`, `low`, `mid`, `high` (= `teacher`, which distils into the others). Each tier estimates flow at no more than a set number of image lines (576 for `igpu` and `low`, 1152 for `mid` and `high`), halving taller frames, the per-resolution scale choice RIFE recommends; in the run of 2 to 3 November 2026 `igpu` and `low` always halved, so they trained with flow at 128 pixels and ended no better than frame averaging on the Middlebury interpolation set (28.4 dB against 28.0, `mid` 33.7, `high` 34.3, RIFE 4.26 33.3, measured locally on CPU after the run).
+# 2. **Model.** An IFNet coarse-to-fine intermediate-flow estimator with the design of RIFE 4.26 (Practical-RIFE, MIT), which estimates motion from the two colour frames alone. The `high` tier is RIFE 4.26's network and starts from its pre-trained weights (downloaded from the author's Hugging Face repository and hash-checked); smaller tiers inherit leading channel slices. Engine data enter as extra input channels with zero initial weight (linear-motion priors from the motion vector of the newest frame, the camera-only flow of the latest input for late-latched extrapolation, depth, availability flags), so a fresh model outputs RIFE's blend mixed with I1 at weight sigmoid(-4), about 0.018, and fine-tuning learns how much to trust each signal. A half-resolution head adds a residual and the UI mask: output = UI-mask * newest real frame + (1 - UI-mask) * (blend of the two warped frames + residual). Tiers: `igpu`, `low`, `mid`, `high` (= `teacher`, which distils into the others). Each tier estimates flow at no more than a set number of image lines (576 for `igpu` and `low`, 1152 for `mid` and `high`), halving taller frames, the per-resolution scale choice RIFE recommends; earlier runs (2 to 3 November 2026) halved `igpu` and `low` always, so they trained with flow at 128 pixels and did no better than frame averaging on the Middlebury interpolation set; this rule replaced that fixed scale (saved Middlebury results are in the README).
 # 3. **Training.** DDP on both GPUs, FP16, EMA, wall-clock schedule; fine-tuning of the RIFE-initialised `high` tier first, then the smaller tiers with distillation from it. Loss: Charbonnier + census + LPIPS + flow supervision + UI-mask cross-entropy + distillation. Engine inputs are randomly withheld, on synthetic and on real video, so one model serves engine integrations and plain video.
 # 4. **Evaluation.** Every suite with engine data (**engine**) and without (**plain**: ordinary video). PSNR, SSIM, LPIPS, interpolation error, quality in occluded regions, UI-region PSNR and UI ghosting rate (with and without the engine's separate UI layer), scene-cut detection, menus, rapid camera reversals (with and without the camera prior), 3x multi-frame generation on real clips, temporal consistency of the displayed sequence (tOF), motion classes; against frame repeat, frame averaging, motion-vector reprojection and **pre-trained RIFE 4.26 unchanged** (the open state of the art this model starts from). Ablations: no UI training, no motion priors, extrapolation-only, no distillation, no weight inheritance. Latency of fused tiers at 1080p and 1440p, an input-to-photon pacing model for native, interpolation, extrapolation and late-latched extrapolation, ONNX export.
 #
 # **Required Kaggle settings.** Accelerator **GPU T4 x2**; **Internet on** (pip packages, RIFE 4.26 / RAFT / AlexNet weights, Hugging Face data in the fallback). Attach the `neural-data-pipeline` output and the Kaggle datasets it lists. Optional secret `HF_TOKEN`. If Kaggle reports `ERRORED_MOUNTING_DATASET` for one dataset, the session never starts and shows no logs: remove that dataset from the inputs (or re-add it) and save again. Section 5 leaves out sources that are not attached.
 #
-# **Budget.** The ceiling is Kaggle's 12-hour session limit minus a 72-minute margin (`RUN_BUDGET_H` 10.8). Caches at most 30 min, `high` tier (teacher) 150 min, main student 200 min, parallel `igpu` / `mid` students 120 min, three ablation pairs of 30 min, evaluation in both input modes plus the RIFE reference, multi-frame and native-1080p suites and export about 30 min: about 10.3 hours. The run of 2 to 3 November 2026 used 100 / 120 / 75 / 20 minutes and took 6.59 hours (7 minutes of test suites and evaluation); the extra time goes to longer training of every model and 50 percent longer ablations. Stage budgets shrink automatically when caches take longer. A full run uses about 10.3 hours of Kaggle's weekly GPU quota. `QUICK_RUN = True` gives a 40-minute smoke test.
+# **Budget.** The ceiling is Kaggle's 12-hour session limit minus a 72-minute margin (`RUN_BUDGET_H` 10.8). Caches at most 30 min, `high` tier (teacher) 150 min, main student 200 min, parallel `igpu` / `mid` students 120 min, three ablation pairs of 30 min, evaluation in both input modes plus the RIFE reference, multi-frame and native-1080p suites and export about 30 min: about 10.3 hours. Stage budgets shrink automatically when caches take longer, and the measured stage times of each saved run are in its `outputs/logs/notebook.log`. A full run uses about 10.3 hours of Kaggle's weekly GPU quota. `QUICK_RUN = True` gives a 40-minute smoke test.
 #
 # **Outputs** in `/kaggle/working/`: `code/`, `weights/` (checkpoints, fused models, ONNX), `plots/`, `metrics/`, `logs/`, `predictions/`, `outputs.zip` (training caches are deleted first).
 
@@ -222,17 +222,17 @@ CFG = {
         "eval_reserve_h": 1.0,
     },
     "pipeline": {
-        "list_cap_files": 3000 if QUICK_RUN else 20000,
+        "list_cap_files": 3000 if QUICK_RUN else 40000,
         "seed": 7,
         "workers": os.cpu_count(),
         "hf_caps": {
-            "game_stills": (120, 30) if QUICK_RUN else (600, 120),
-            "tartanair": 30 if QUICK_RUN else 80,
+            "game_stills": (120, 30) if QUICK_RUN else (1200, 250),
+            "tartanair": 30 if QUICK_RUN else 120,
             "tartanair_seq": 24,
             "gameir": (0, 0),
-            "vimeo1080p": (6, 3) if QUICK_RUN else (60, 16),
+            "vimeo1080p": (6, 3) if QUICK_RUN else (160, 40),
         },
-        "calibration_pairs": 300,
+        "calibration_pairs": 1500,
         "val_fraction": 0.05,
     },
 }
@@ -917,7 +917,7 @@ RUN.show(fig, "cut_detector")
 # %% [markdown]
 # ## 19. Test suites
 #
-# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (256x256 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p (scaled to 544 lines) and Vid4 (both modes, RAFT motion vectors), and the same Vimeo-1080p videos at full 1080p (`vimeo1080p_native`, 1072x1904 crops), where the `igpu` and `low` tiers estimate flow at half resolution as they would in a 1080p game; every other suite has at most 544 lines, so there all tiers estimate flow at full resolution. Clips that cannot be decoded are logged and skipped, and so are real clips that cannot test generation (`E.test_clips`): blank frames, frozen (duplicated) frames, where every method reaches the 100 dB PSNR cap, and scene cuts or flashes between the frames, which the synthetic cut suite covers. In the run of 20 to 21 October 2026, two blank Vimeo-1080p clips and one with a cut decided that suite's ranking. Expected output: suite sizes.
+# Test split only. Synthetic suites from held-out game frames and DIV2K validation images (256x256 crops of 512-px textures): interpolation and extrapolation per motion class, HUD / subtitles, menus, scene cuts and rapid camera reversals (extrapolation with and without the camera prior). Real suites at full clip resolution: the Vimeo-90K triplet test set (interpolation, the standard benchmark), held-out TartanAir and Sintel (exact flow available for the motion-vector input), held-out Vimeo-1080p (scaled to 544 lines) and Vid4 (both modes, RAFT motion vectors), and the same Vimeo-1080p videos at full 1080p (`vimeo1080p_native`, 1072x1904 crops), where the `igpu` and `low` tiers estimate flow at half resolution as they would in a 1080p game; every other suite has at most 544 lines, so there all tiers estimate flow at full resolution. RAFT motion of the native clips is estimated at most 1024 px on the longer side, and its flow is scaled back. Clips that cannot be decoded are logged and skipped, and so are real clips that cannot test generation (`E.test_clips`): blank frames, frozen (duplicated) frames, where every method reaches the 100 dB PSNR cap, and scene cuts or flashes between the frames, which the synthetic cut suite covers. In the run of 20 to 21 October 2026, two blank Vimeo-1080p clips and one with a cut decided that suite's ranking. Expected output: suite sizes.
 
 # %%
 ev = CFG["eval"]
@@ -1051,6 +1051,11 @@ def evaluate(
         )
 
 
+def training_flags(key):
+    """Training options of an ablation model (its ABLATIONS entry); {} for the main runs."""
+    return ABLATIONS.get(key[4:], {}) if key.startswith("abl_") else {}
+
+
 def evaluate_inputs(suite, b, extra, models, ui_engine):
     gate = E.cut_gate(b, CUT_THR, CUT_THR_PLAIN)
     GATES.append(
@@ -1077,7 +1082,14 @@ def evaluate_inputs(suite, b, extra, models, ui_engine):
         if key not in MODELS:
             continue
         net = MODELS[key]
-        f = E.without_engine(b) if key == "abl_no_motion_prior" else dict(b)
+        f = dict(b)
+        if training_flags(key).get(
+            "ablate_prior"
+        ):  # as in training: no motion vectors or camera prior, depth kept
+            f.update(
+                mv_avail=torch.zeros_like(b["mv_avail"]),
+                cam_avail=torch.zeros_like(b["cam_avail"]),
+            )
         try:  # one failing model (for example out of memory on a large clip) must not end the evaluation
             out, _ = E.run_fg(net, f)
             outs[key] = torch.where(gate, b["i1"], out)
@@ -1537,7 +1549,7 @@ RUN.show(fig, "pacing_model")
 # %% [markdown]
 # ## 27. ONNX export
 #
-# Exports the fused `low` and `igpu` generators (opset 17 with the TorchScript exporter on any PyTorch 2.x via `NM.export_onnx`, static shapes: one graph per output resolution) and compares ONNX Runtime CPU output with PyTorch FP32. Expected output: export status and maximum difference.
+# Exports the fused `low` and `igpu` generators (opset 17 with the TorchScript exporter on any PyTorch 2.x via `NM.export_onnx`, one static graph for the 128x128 example input, so another input size needs a new export) and compares ONNX Runtime CPU output with PyTorch FP32. Expected output: export status and maximum difference.
 
 # %%
 onnx_rows = []
